@@ -1,0 +1,35 @@
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[database]
+path = "aetherium.db"
+
+[model_aliases]
+gpt-4-fast = "gpt-4-turbo"
+claude-fast = "claude-3-haiku"
+azure-gpt-4-fast = "azure-gpt-4-turbo"
+
+[providers.openai]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+api_keys = ["your-openai-api-key-here"]
+load_balance_strategy = "round_robin"
+provider_type = "openai"
+timeout_seconds = 30
+
+[providers.anthropic]
+name = "anthropic"
+base_url = "https://api.anthropic.com/v1"
+api_keys = ["your-anthropic-api-key-here"]
+load_balance_strategy = "round_robin"
+provider_type = "anthropic"
+timeout_seconds = 30
+
+[providers.azure]
+name = "azure"
+base_url = "https://your-azure-endpoint.openai.azure.com/openai/deployments/your-deployment-name"
+api_keys = ["your-azure-api-key-here"]
+load_balance_strategy = "random"
+provider_type = "azure"
+timeout_seconds = 45
