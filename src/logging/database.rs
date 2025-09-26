@@ -1,8 +1,26 @@
 use rusqlite::{Connection, Result, OptionalExtension};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, FixedOffset, TimeZone};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use crate::providers::openai::Model;
+
+// 北京时间时区 (UTC+8)
+const BEIJING_OFFSET: FixedOffset = FixedOffset::east_opt(8 * 3600).unwrap();
+const DATETIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+
+/// 将 UTC 时间转换为北京时间的人类友好格式
+fn to_beijing_string(dt: &DateTime<Utc>) -> String {
+    dt.with_timezone(&BEIJING_OFFSET).format(DATETIME_FORMAT).to_string()
+}
+
+/// 从北京时间字符串解析为 UTC 时间
+fn parse_beijing_string(s: &str) -> Result<DateTime<Utc>, Box<dyn std::error::Error>> {
+    use chrono::NaiveDateTime;
+    let naive_dt = NaiveDateTime::parse_from_str(s, DATETIME_FORMAT)?;
+    let beijing_dt = BEIJING_OFFSET.from_local_datetime(&naive_dt).single()
+        .ok_or("Invalid local datetime")?;
+    Ok(beijing_dt.with_timezone(&Utc))
+}
 
 #[derive(Debug, Clone)]
 pub struct RequestLog {
@@ -99,7 +117,7 @@ impl DatabaseLogger {
                 completion_tokens, total_tokens
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             (
-                log.timestamp.to_rfc3339(),
+                to_beijing_string(&log.timestamp),
                 &log.method,
                 &log.path,
                 &log.model,
@@ -133,7 +151,7 @@ impl DatabaseLogger {
                     &model.object,
                     model.created,
                     &model.owned_by,
-                    now.to_rfc3339(),
+                    to_beijing_string(&now),
                 ),
             )?;
         }
@@ -159,9 +177,8 @@ impl DatabaseLogger {
                     object: row.get(2)?,
                     created: row.get(3)?,
                     owned_by: row.get(4)?,
-                    cached_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
-                        .unwrap()
-                        .with_timezone(&Utc),
+                    cached_at: parse_beijing_string(&row.get::<_, String>(5)?)
+                        .unwrap(),
                 })
             })?;
 
@@ -185,9 +202,8 @@ impl DatabaseLogger {
                     object: row.get(2)?,
                     created: row.get(3)?,
                     owned_by: row.get(4)?,
-                    cached_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
-                        .unwrap()
-                        .with_timezone(&Utc),
+                    cached_at: parse_beijing_string(&row.get::<_, String>(5)?)
+                        .unwrap(),
                 })
             })?;
 
@@ -212,9 +228,8 @@ impl DatabaseLogger {
         }).optional()?;
 
         if let Some(cached_at_str) = cache_time {
-            let cached_at = DateTime::parse_from_rfc3339(&cached_at_str)
-                .unwrap()
-                .with_timezone(&Utc);
+            let cached_at = parse_beijing_string(&cached_at_str)
+                .unwrap();
 
             let age = Utc::now() - cached_at;
             Ok(age.num_minutes() < max_age_minutes)
@@ -239,9 +254,8 @@ impl DatabaseLogger {
         let log_iter = stmt.query_map([limit], |row| {
             Ok(RequestLog {
                 id: Some(row.get(0)?),
-                timestamp: DateTime::parse_from_rfc3339(&row.get::<_, String>(1)?)
-                    .unwrap()
-                    .with_timezone(&Utc),
+                timestamp: parse_beijing_string(&row.get::<_, String>(1)?)
+                    .unwrap(),
                 method: row.get(2)?,
                 path: row.get(3)?,
                 model: row.get(4)?,

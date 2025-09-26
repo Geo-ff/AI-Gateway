@@ -1,6 +1,7 @@
 pub mod handlers;
 pub(crate) mod model_helpers;
 pub(crate) mod model_cache;
+pub(crate) mod model_parser;
 pub(crate) mod provider_dispatch;
 pub(crate) mod model_redirect;
 pub(crate) mod request_logging;

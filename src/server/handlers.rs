@@ -18,7 +18,7 @@ use crate::server::model_cache::{
     is_cache_fresh_for_provider,
     cache_models_for_provider,
 };
-use crate::server::provider_dispatch::{select_provider, call_provider};
+use crate::server::provider_dispatch::{select_provider_for_model, call_provider_with_parsed_model};
 use crate::server::model_redirect::apply_model_redirects;
 use crate::server::request_logging::log_chat_request;
 
@@ -37,11 +37,14 @@ async fn chat_completions(
 
     apply_model_redirects(&mut request);
 
-    let selected = select_provider(&app_state)
+    // 使用新的基于模型选择供应商的逻辑
+    let (selected, parsed_model) = select_provider_for_model(&app_state, &request.model)
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
-    let response = call_provider(&selected, &request).await;
+    // 使用解析后的模型信息调用供应商
+    let response = call_provider_with_parsed_model(&selected, &request, &parsed_model).await;
 
+    // 使用原始的模型名称（包含前缀）进行日志记录
     log_chat_request(&app_state, start_time, &request.model, &selected.provider.name, &response).await;
 
     response.map(Json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
