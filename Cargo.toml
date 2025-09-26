@@ -30,6 +30,7 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 # 中间件
 tower = "0.5.2"
 tower-http = { version = "0.6.6", features = ["cors", "trace"] }
+rand = "0.9.2"
 
 [dev-dependencies]
 tempfile = "3"
