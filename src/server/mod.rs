@@ -6,6 +6,7 @@ pub(crate) mod provider_dispatch;
 pub(crate) mod model_redirect;
 pub(crate) mod request_logging;
 pub(crate) mod storage_traits;
+pub(crate) mod streaming_handlers;
 
 use crate::config::Settings;
 use crate::logging::DatabaseLogger;

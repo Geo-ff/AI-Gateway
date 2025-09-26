@@ -3,6 +3,7 @@ mod server;
 mod routing;
 mod providers;
 mod logging;
+mod error;
 
 use tracing_subscriber::fmt;
 

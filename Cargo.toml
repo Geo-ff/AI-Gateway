@@ -13,8 +13,13 @@ serde_json = "1.0.145"
 toml = "0.9.7"
 
 # HTTP 客户端和服务器
-reqwest = { version = "0.12.23", features = ["json"] }
+reqwest = { version = "0.12.23", features = ["json", "stream"] }
 axum = { version = "0.8.4", features = ["json"] }
+
+# 流式处理
+tokio-stream = "0.1.17"
+futures-util = "0.3.31"
+thiserror = "2.0.16"
 
 # 数据库
 rusqlite = { version = "0.37.0", features = ["bundled"] }

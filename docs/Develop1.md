@@ -135,3 +135,66 @@ api_keys = ["claude-key1"]
 - 请求日志表 `request_logs` 的 `timestamp` 字段
 - 模型缓存表 `cached_models` 的 `cached_at` 字段
 - 所有相关的时间读取和写入操作
+
+## 2025-09-26 OpenAI响应结构体优化与流式传输功能实现
+
+### OpenAI响应结构体扩展
+根据完整的OpenAI API响应格式，扩展了响应数据结构：
+1. **Choice结构扩展**：添加了`refs`、`logprobs`、`service_tier`字段
+2. **Usage结构增强**：新增`prompt_tokens_details`和`completion_tokens_details`子结构
+3. **详细字段支持**：包含`cached_tokens`和`reasoning_tokens`等新字段
+
+### 流式传输功能完整实现
+成功实现了Server-Sent Events (SSE)流式传输支持：
+
+#### 核心功能
+- **统一处理器**：`chat_completions`处理器自动检测`stream`参数，支持流式和非流式请求
+- **SSE响应格式**：完整的Server-Sent Events格式支持，包括`data:`前缀解析
+- **实时数据传输**：通过`reqwest::Response::bytes_stream()`实现真正的流式数据传输
+- **错误处理机制**：完善的流式传输错误处理和日志记录
+
+#### 技术实现
+- **依赖管理**：添加`tokio-stream`、`futures-util`、`thiserror`等流式处理依赖
+- **模块架构**：创建`streaming_handlers.rs`专门处理流式传输逻辑
+- **数据结构**：设计`StreamMessage`、`StreamChoiceDelta`等流式传输专用数据类型
+- **生命周期优化**：通过直接在处理器中创建流来解决Rust异步生命周期问题
+
+#### 兼容性保证
+- **向后兼容**：非流式请求保持原有处理逻辑不变
+- **供应商支持**：当前支持OpenAI流式传输，为Anthropic预留扩展接口
+- **模型前缀**：完美支持已实现的模型前缀解析功能
+
+### 实现亮点
+- **零配置切换**：用户只需在请求中设置`"stream": true`即可启用流式传输
+- **错误恢复**：流式传输过程中的错误不会中断整个连接
+- **性能优化**：使用Axum原生SSE支持，避免手动HTTP响应构建
+- **调试友好**：详细的日志记录和错误信息，便于问题排查
+
+此实现遵循OpenAI标准的流式API格式，确保与现有客户端的完美兼容性。
+
+## 2025-09-26 代码精简与错误统一、SSE日志修复
+
+### 精简与清理
+- 移除未使用函数：`provider_dispatch::call_provider` 与 `ParsedModel::matches_provider`
+- 优化供应商前缀选择：无可用密钥时返回更精确的 `NoApiKeysAvailable`
+- 拆分超长文件：将 `logging/database.rs` 拆分为
+  - `logging/database.rs`（数据库初始化与请求日志）
+  - `logging/database_cache.rs`（模型缓存相关）
+  - `logging/types.rs`（数据类型：`RequestLog`、`CachedModel`）
+  - `logging/time.rs`（北京时间格式化/解析）
+
+### 统一错误类型（thiserror）
+- 新增 `error::GatewayError` 统一错误类型，覆盖 HTTP/JSON/DB/IO/负载均衡/时间解析等
+- 在 `server/model_helpers.rs` 与 `logging/time.rs` 中率先落地统一错误；其余模块保持兼容，后续可平滑迁移
+
+### 流式日志修复（SSE）
+- `streaming_handlers.rs` 中为流式路径添加日志记录：
+  - 请求开始记录 `start_time`
+  - 在接收到 `data: [DONE]` 时记录一条完整日志（包含响应耗时与可用的 tokens 使用量）
+  - 流式错误发生时同样记录失败日志，避免缺失
+  - 解析 SSE JSON 块中的 `usage` 字段并累积，尽可能与非流式保持一致
+
+### 原则与取舍
+- KISS/YAGNI：仅保留必要代码路径，避免过度设计
+- DRY：时间格式化/解析与类型定义统一抽离复用
+- SOLID：按职责拆分模块，降低耦合，便于后续扩展

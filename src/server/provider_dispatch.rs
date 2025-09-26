@@ -21,9 +21,11 @@ pub fn select_provider_for_model(
                     api_key: api_key.clone(),
                 };
                 return Ok((selected, parsed_model));
+            } else {
+                return Err(BalanceError::NoApiKeysAvailable);
             }
         }
-        // 如果指定的供应商不存在或没有可用的 API 密钥，返回错误
+        // 指定供应商不存在
         return Err(BalanceError::NoProvidersAvailable);
     }
 
@@ -56,15 +58,7 @@ pub async fn call_provider_with_parsed_model(
 }
 
 // 根据选中的供应商调用对应的聊天补全接口（保留原有逻辑）
-pub async fn call_provider(
-    selected: &SelectedProvider,
-    request: &ChatCompletionRequest,
-) -> Result<ChatCompletionResponse, reqwest::Error> {
-    match selected.provider.api_type {
-        ProviderType::OpenAI => call_openai_provider(selected, request).await,
-        ProviderType::Anthropic => call_anthropic_provider(selected, request).await,
-    }
-}
+// 旧的通用调用函数已移除（不再使用）
 
 async fn call_openai_provider(
     selected: &SelectedProvider,
@@ -93,4 +87,3 @@ async fn call_anthropic_provider(
 
     Ok(AnthropicProvider::convert_anthropic_to_openai(&anthropic_response))
 }
-

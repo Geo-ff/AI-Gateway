@@ -1,11 +1,12 @@
 use crate::config::ProviderType;
 use crate::providers::openai::{ModelListResponse, Model, OpenAIProvider};
+use crate::error::{GatewayError, Result as AppResult};
 
 // 获取指定 Provider 的模型列表，并在需要时通过自定义端点获取
 pub async fn fetch_provider_models(
     provider: &crate::config::Provider,
     api_key: &str,
-) -> Result<Vec<Model>, Box<dyn std::error::Error + Send + Sync>> {
+) -> AppResult<Vec<Model>> {
     if let Some(models_endpoint) = &provider.models_endpoint {
         let full_url = format!("{}{}", provider.base_url.trim_end_matches('/'), models_endpoint);
         let response = fetch_models_from_endpoint(&full_url, api_key).await?;
@@ -17,8 +18,7 @@ pub async fn fetch_provider_models(
                 Ok(response.data)
             }
             ProviderType::Anthropic => {
-                use std::io::{Error, ErrorKind};
-                Err(Error::new(ErrorKind::Other, "Anthropic models listing not implemented").into())
+                Err(GatewayError::Config("Anthropic models listing not implemented".into()))
             }
         }
     }
@@ -40,4 +40,3 @@ async fn fetch_models_from_endpoint(
 
     response.json::<ModelListResponse>().await
 }
-

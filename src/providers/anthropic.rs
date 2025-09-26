@@ -77,7 +77,10 @@ impl AnthropicProvider {
                 role: anthropic_resp.role.clone(),
                 content,
             },
+            refs: None,
+            logprobs: None,
             finish_reason: anthropic_resp.stop_reason.clone(),
+            service_tier: None,
         };
 
         ChatCompletionResponse {
@@ -90,6 +93,8 @@ impl AnthropicProvider {
                 prompt_tokens: anthropic_resp.usage.input_tokens,
                 completion_tokens: anthropic_resp.usage.output_tokens,
                 total_tokens: anthropic_resp.usage.input_tokens + anthropic_resp.usage.output_tokens,
+                prompt_tokens_details: None,
+                completion_tokens_details: None,
             },
         }
     }

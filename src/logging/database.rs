@@ -1,57 +1,14 @@
 use rusqlite::{Connection, Result, OptionalExtension};
-use chrono::{DateTime, Utc, FixedOffset, TimeZone};
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use crate::providers::openai::Model;
-
-// 北京时间时区 (UTC+8)
-const BEIJING_OFFSET: FixedOffset = FixedOffset::east_opt(8 * 3600).unwrap();
-const DATETIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
-
-/// 将 UTC 时间转换为北京时间的人类友好格式
-fn to_beijing_string(dt: &DateTime<Utc>) -> String {
-    dt.with_timezone(&BEIJING_OFFSET).format(DATETIME_FORMAT).to_string()
-}
-
-/// 从北京时间字符串解析为 UTC 时间
-fn parse_beijing_string(s: &str) -> Result<DateTime<Utc>, Box<dyn std::error::Error>> {
-    use chrono::NaiveDateTime;
-    let naive_dt = NaiveDateTime::parse_from_str(s, DATETIME_FORMAT)?;
-    let beijing_dt = BEIJING_OFFSET.from_local_datetime(&naive_dt).single()
-        .ok_or("Invalid local datetime")?;
-    Ok(beijing_dt.with_timezone(&Utc))
-}
-
-#[derive(Debug, Clone)]
-pub struct RequestLog {
-    #[allow(dead_code)]
-    pub id: Option<i64>,
-    pub timestamp: DateTime<Utc>,
-    pub method: String,
-    pub path: String,
-    pub model: Option<String>,
-    pub provider: Option<String>,
-    pub status_code: u16,
-    pub response_time_ms: i64,
-    pub prompt_tokens: Option<u32>,
-    pub completion_tokens: Option<u32>,
-    pub total_tokens: Option<u32>,
-}
-
-#[derive(Debug, Clone)]
-pub struct CachedModel {
-    pub id: String,
-    pub provider: String,
-    pub object: String,
-    pub created: u64,
-    pub owned_by: String,
-    #[allow(dead_code)]
-    pub cached_at: DateTime<Utc>,
-}
+use crate::logging::time::{to_beijing_string, parse_beijing_string};
+use crate::logging::types::{CachedModel, RequestLog};
 
 #[derive(Clone)]
 pub struct DatabaseLogger {
-    connection: Arc<Mutex<Connection>>,
+    pub(super) connection: Arc<Mutex<Connection>>,
 }
 
 impl DatabaseLogger {
@@ -133,110 +90,7 @@ impl DatabaseLogger {
         Ok(conn.last_insert_rowid())
     }
 
-    pub async fn cache_models(&self, provider: &str, models: &[Model]) -> Result<()> {
-        let conn = self.connection.lock().await;
-        let now = Utc::now();
-
-        // 清除该供应商的旧缓存
-        conn.execute("DELETE FROM cached_models WHERE provider = ?1", [provider])?;
-
-        // 插入新的模型数据
-        for model in models {
-            conn.execute(
-                "INSERT INTO cached_models (id, provider, object, created, owned_by, cached_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                (
-                    &model.id,
-                    provider,
-                    &model.object,
-                    model.created,
-                    &model.owned_by,
-                    to_beijing_string(&now),
-                ),
-            )?;
-        }
-
-        tracing::info!("Cached {} models for provider: {}", models.len(), provider);
-        Ok(())
-    }
-
-    pub async fn get_cached_models(&self, provider: Option<&str>) -> Result<Vec<CachedModel>> {
-        let conn = self.connection.lock().await;
-
-        if let Some(provider) = provider {
-            let mut stmt = conn.prepare(
-                "SELECT id, provider, object, created, owned_by, cached_at
-                 FROM cached_models WHERE provider = ?1
-                 ORDER BY id"
-            )?;
-
-            let model_iter = stmt.query_map([provider], |row| {
-                Ok(CachedModel {
-                    id: row.get(0)?,
-                    provider: row.get(1)?,
-                    object: row.get(2)?,
-                    created: row.get(3)?,
-                    owned_by: row.get(4)?,
-                    cached_at: parse_beijing_string(&row.get::<_, String>(5)?)
-                        .unwrap(),
-                })
-            })?;
-
-            let mut models = Vec::new();
-            for model in model_iter {
-                models.push(model?);
-            }
-
-            Ok(models)
-        } else {
-            let mut stmt = conn.prepare(
-                "SELECT id, provider, object, created, owned_by, cached_at
-                 FROM cached_models
-                 ORDER BY provider, id"
-            )?;
-
-            let model_iter = stmt.query_map([], |row| {
-                Ok(CachedModel {
-                    id: row.get(0)?,
-                    provider: row.get(1)?,
-                    object: row.get(2)?,
-                    created: row.get(3)?,
-                    owned_by: row.get(4)?,
-                    cached_at: parse_beijing_string(&row.get::<_, String>(5)?)
-                        .unwrap(),
-                })
-            })?;
-
-            let mut models = Vec::new();
-            for model in model_iter {
-                models.push(model?);
-            }
-
-            Ok(models)
-        }
-    }
-
-    pub async fn is_cache_fresh(&self, provider: &str, max_age_minutes: i64) -> Result<bool> {
-        let conn = self.connection.lock().await;
-
-        let mut stmt = conn.prepare(
-            "SELECT cached_at FROM cached_models WHERE provider = ?1 LIMIT 1"
-        )?;
-
-        let cache_time: Option<String> = stmt.query_row([provider], |row| {
-            Ok(row.get(0)?)
-        }).optional()?;
-
-        if let Some(cached_at_str) = cache_time {
-            let cached_at = parse_beijing_string(&cached_at_str)
-                .unwrap();
-
-            let age = Utc::now() - cached_at;
-            Ok(age.num_minutes() < max_age_minutes)
-        } else {
-            Ok(false)
-        }
-    }
+    // 模型缓存相关方法已拆分至 database_cache.rs
 
     #[allow(dead_code)]
     pub async fn get_recent_logs(&self, limit: i32) -> Result<Vec<RequestLog>> {

@@ -1,5 +1,3 @@
-use crate::config::settings::Provider;
-
 /// 解析模型名称，提取供应商前缀和实际模型名称
 #[derive(Debug, Clone)]
 pub struct ParsedModel {
@@ -26,14 +24,6 @@ impl ParsedModel {
                 provider_name: None,
                 model_name: model.to_string(),
             }
-        }
-    }
-
-    /// 验证解析的供应商名称是否与配置的供应商匹配
-    pub fn matches_provider(&self, provider: &Provider) -> bool {
-        match &self.provider_name {
-            Some(parsed_name) => parsed_name == &provider.name,
-            None => true, // 如果没有前缀，认为可以匹配任何供应商
         }
     }
 

@@ -1,14 +1,14 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::Json,
+    response::{Json, IntoResponse, Response},
     routing::{get, post},
     Router,
 };
 use std::sync::Arc;
 use chrono::Utc;
 
-use crate::providers::openai::{ChatCompletionRequest, ChatCompletionResponse, ModelListResponse, Model};
+use crate::providers::openai::{ChatCompletionRequest, ModelListResponse, Model};
 use crate::server::AppState;
 use crate::server::model_helpers::fetch_provider_models;
 use crate::server::model_cache::{
@@ -21,6 +21,7 @@ use crate::server::model_cache::{
 use crate::server::provider_dispatch::{select_provider_for_model, call_provider_with_parsed_model};
 use crate::server::model_redirect::apply_model_redirects;
 use crate::server::request_logging::log_chat_request;
+use crate::server::streaming_handlers::stream_chat_completions;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -31,23 +32,33 @@ pub fn routes() -> Router<Arc<AppState>> {
 
 async fn chat_completions(
     State(app_state): State<Arc<AppState>>,
-    Json(mut request): Json<ChatCompletionRequest>,
-) -> Result<Json<ChatCompletionResponse>, StatusCode> {
-    let start_time = Utc::now();
+    Json(request): Json<ChatCompletionRequest>,
+) -> Result<Response, StatusCode> {
+    // 检查是否为流式请求
+    if request.stream {
+        // 处理流式请求
+        let response = stream_chat_completions(State(app_state), Json(request)).await?;
+        Ok(response.into_response())
+    } else {
+        // 处理非流式请求（保持原有逻辑）
+        let mut request = request;
+        let start_time = Utc::now();
 
-    apply_model_redirects(&mut request);
+        apply_model_redirects(&mut request);
 
-    // 使用新的基于模型选择供应商的逻辑
-    let (selected, parsed_model) = select_provider_for_model(&app_state, &request.model)
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        // 使用新的基于模型选择供应商的逻辑
+        let (selected, parsed_model) = select_provider_for_model(&app_state, &request.model)
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
-    // 使用解析后的模型信息调用供应商
-    let response = call_provider_with_parsed_model(&selected, &request, &parsed_model).await;
+        // 使用解析后的模型信息调用供应商
+        let response = call_provider_with_parsed_model(&selected, &request, &parsed_model).await;
 
-    // 使用原始的模型名称（包含前缀）进行日志记录
-    log_chat_request(&app_state, start_time, &request.model, &selected.provider.name, &response).await;
+        // 使用原始的模型名称（包含前缀）进行日志记录
+        log_chat_request(&app_state, start_time, &request.model, &selected.provider.name, &response).await;
 
-    response.map(Json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        let json_response = response.map(Json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        Ok(json_response.into_response())
+    }
 }
 
 // 供应商选择与调用逻辑已移动至 `server::provider_dispatch`
