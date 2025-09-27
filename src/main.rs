@@ -4,12 +4,17 @@ mod routing;
 mod providers;
 mod logging;
 mod error;
+mod crypto;
 
-use tracing_subscriber::fmt;
+use tracing_subscriber::{fmt, EnvFilter};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    fmt::init();
+async fn main() -> crate::error::Result<()> {
+    // 使用自定义北京时间格式与环境过滤器
+    fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_timer(crate::logging::time::BeijingTimer)
+        .init();
 
     let config = config::Settings::load()?;
 

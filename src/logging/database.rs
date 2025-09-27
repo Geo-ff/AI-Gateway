@@ -35,8 +35,10 @@ impl DatabaseLogger {
                 timestamp TEXT NOT NULL,
                 method TEXT NOT NULL,
                 path TEXT NOT NULL,
+                request_type TEXT NOT NULL DEFAULT 'chat_once',
                 model TEXT,
                 provider TEXT,
+                api_key TEXT,
                 status_code INTEGER NOT NULL,
                 response_time_ms INTEGER NOT NULL,
                 prompt_tokens INTEGER,
@@ -45,6 +47,16 @@ impl DatabaseLogger {
             )",
             [],
         )?;
+
+        // 迁移：补充旧表缺失的 request_type 列（若已存在则忽略错误）
+        let _ = conn.execute(
+            "ALTER TABLE request_logs ADD COLUMN request_type TEXT NOT NULL DEFAULT 'chat_once'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE request_logs ADD COLUMN api_key TEXT",
+            [],
+        );
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS cached_models (
@@ -59,6 +71,19 @@ impl DatabaseLogger {
             [],
         )?;
 
+        // Provider keys table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS provider_keys (
+                provider TEXT NOT NULL,
+                key_value TEXT NOT NULL,
+                enc INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (provider, key_value)
+            )",
+            [],
+        )?;
+
         Ok(Self {
             connection: Arc::new(Mutex::new(conn)),
         })
@@ -69,16 +94,18 @@ impl DatabaseLogger {
 
         conn.execute(
             "INSERT INTO request_logs (
-                timestamp, method, path, model, provider,
-                status_code, response_time_ms, prompt_tokens,
+                timestamp, method, path, request_type, model, provider,
+                api_key, status_code, response_time_ms, prompt_tokens,
                 completion_tokens, total_tokens
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             (
                 to_beijing_string(&log.timestamp),
                 &log.method,
                 &log.path,
+                &log.request_type,
                 &log.model,
                 &log.provider,
+                &log.api_key,
                 log.status_code,
                 log.response_time_ms,
                 log.prompt_tokens,
@@ -97,8 +124,8 @@ impl DatabaseLogger {
         let conn = self.connection.lock().await;
 
         let mut stmt = conn.prepare(
-            "SELECT id, timestamp, method, path, model, provider,
-                    status_code, response_time_ms, prompt_tokens,
+            "SELECT id, timestamp, method, path, request_type, model, provider,
+                    api_key, status_code, response_time_ms, prompt_tokens,
                     completion_tokens, total_tokens
              FROM request_logs
              ORDER BY timestamp DESC
@@ -112,13 +139,15 @@ impl DatabaseLogger {
                     .unwrap(),
                 method: row.get(2)?,
                 path: row.get(3)?,
-                model: row.get(4)?,
-                provider: row.get(5)?,
-                status_code: row.get(6)?,
-                response_time_ms: row.get(7)?,
-                prompt_tokens: row.get(8)?,
-                completion_tokens: row.get(9)?,
-                total_tokens: row.get(10)?,
+                request_type: row.get(4)?,
+                model: row.get(5)?,
+                provider: row.get(6)?,
+                api_key: row.get(7)?,
+                status_code: row.get(8)?,
+                response_time_ms: row.get(9)?,
+                prompt_tokens: row.get(10)?,
+                completion_tokens: row.get(11)?,
+                total_tokens: row.get(12)?,
             })
         })?;
 

@@ -1,7 +1,6 @@
 use axum::{
     response::{IntoResponse, Sse},
     extract::{State, Json},
-    http::StatusCode,
 };
 use futures_util::StreamExt;
 use std::{convert::Infallible, sync::{Arc, Mutex}};
@@ -13,15 +12,18 @@ use crate::server::AppState;
 use crate::server::provider_dispatch::select_provider_for_model;
 use crate::server::model_redirect::apply_model_redirects;
 use crate::logging::RequestLog;
+use crate::logging::types::REQ_TYPE_CHAT_STREAM;
+use crate::error::GatewayError;
+use crate::config::settings::{KeyLogStrategy, LoggingConfig};
 
 /// 处理流式聊天完成请求
 pub async fn stream_chat_completions(
     State(app_state): State<Arc<AppState>>,
     Json(mut request): Json<ChatCompletionRequest>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, GatewayError> {
     // 如果用户没有请求流式传输，使用常规处理
     if !request.stream {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(GatewayError::Config("stream=false for streaming endpoint".into()));
     }
 
     let start_time = Utc::now();
@@ -29,8 +31,7 @@ pub async fn stream_chat_completions(
     apply_model_redirects(&mut request);
 
     // 使用基于模型的供应商选择逻辑
-    let (selected, parsed_model) = select_provider_for_model(&app_state, &request.model)
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let (selected, parsed_model) = select_provider_for_model(&app_state, &request.model).await?;
 
     // 创建修改后的请求，使用实际模型名
     let mut modified_request = request.clone();
@@ -54,8 +55,7 @@ pub async fn stream_chat_completions(
                 .header("Accept", "text/event-stream")
                 .json(&stream_request)
                 .send()
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                .await?;
 
             // 用于记录 usage 和避免重复日志
             let usage_cell: Arc<Mutex<Option<Usage>>> = Arc::new(Mutex::new(None));
@@ -63,6 +63,9 @@ pub async fn stream_chat_completions(
             let app_state_clone = app_state.clone();
             let model_with_prefix = request.model.clone();
             let provider_name = selected.provider.name.clone();
+
+            // 准备 api_key 日志值（按策略处理）
+            let api_key_ref = api_key_hint(&app_state.config.logging, &selected.api_key);
 
             let stream = response
                 .bytes_stream()
@@ -84,6 +87,7 @@ pub async fn stream_chat_completions(
                                             let state_for_log = app_state_clone.clone();
                                             let model_for_log = model_with_prefix.clone();
                                             let provider_for_log = provider_name.clone();
+                                            let api_key_for_log = api_key_ref.clone();
                                             let started_at = start_time;
                                             tokio::spawn(async move {
                                                 let end_time = Utc::now();
@@ -97,8 +101,10 @@ pub async fn stream_chat_completions(
                                                     timestamp: started_at,
                                                     method: "POST".to_string(),
                                                     path: "/v1/chat/completions".to_string(),
+                                                    request_type: REQ_TYPE_CHAT_STREAM.to_string(),
                                                     model: Some(model_for_log),
                                                     provider: Some(provider_for_log),
+                                                    api_key: api_key_for_log,
                                                     status_code: 200,
                                                     response_time_ms,
                                                     prompt_tokens: prompt,
@@ -140,6 +146,7 @@ pub async fn stream_chat_completions(
                                 let state_for_log = app_state_clone.clone();
                                 let model_for_log = model_with_prefix.clone();
                                 let provider_for_log = provider_name.clone();
+                                let api_key_for_log = api_key_ref.clone();
                                 let started_at = start_time;
                                 tokio::spawn(async move {
                                     let end_time = Utc::now();
@@ -149,8 +156,10 @@ pub async fn stream_chat_completions(
                                         timestamp: started_at,
                                         method: "POST".to_string(),
                                         path: "/v1/chat/completions".to_string(),
+                                        request_type: REQ_TYPE_CHAT_STREAM.to_string(),
                                         model: Some(model_for_log),
                                         provider: Some(provider_for_log),
+                                        api_key: api_key_for_log,
                                         status_code: 500,
                                         response_time_ms,
                                         prompt_tokens: None,
@@ -169,9 +178,20 @@ pub async fn stream_chat_completions(
 
             Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
         }
-        crate::config::ProviderType::Anthropic => {
-            // Anthropic 流式传输暂未实现，返回错误
-            Err(StatusCode::NOT_IMPLEMENTED)
-        }
+        crate::config::ProviderType::Anthropic => Err(GatewayError::Config("Anthropic streaming not implemented".into())),
     }
+}
+
+fn api_key_hint(cfg: &LoggingConfig, key: &str) -> Option<String> {
+    match cfg.key_log_strategy.clone().unwrap_or(KeyLogStrategy::Masked) {
+        KeyLogStrategy::None => None,
+        KeyLogStrategy::Plain => Some(key.to_string()),
+        KeyLogStrategy::Masked => Some(mask_key(key)),
+    }
+}
+
+fn mask_key(key: &str) -> String {
+    if key.len() <= 8 { return "****".to_string(); }
+    let (start, end) = (&key[..4], &key[key.len()-4..]);
+    format!("{}****{}", start, end)
 }

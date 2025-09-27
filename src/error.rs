@@ -1,6 +1,8 @@
 use thiserror::Error;
 
 use crate::routing::load_balancer::BalanceError;
+use axum::{http::StatusCode, response::IntoResponse, Json};
+use serde::Serialize;
 
 #[derive(Debug, Error)]
 pub enum GatewayError {
@@ -9,6 +11,9 @@ pub enum GatewayError {
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("TOML error: {0}")]
+    Toml(#[from] toml::de::Error),
 
     #[error("Database error: {0}")]
     Db(#[from] rusqlite::Error),
@@ -28,3 +33,41 @@ pub enum GatewayError {
 
 pub type Result<T> = std::result::Result<T, GatewayError>;
 
+#[derive(Serialize)]
+struct ErrorBody {
+    code: &'static str,
+    message: String,
+}
+
+impl GatewayError {
+    pub fn status_code(&self) -> StatusCode {
+        match self {
+            GatewayError::Balance(BalanceError::NoProvidersAvailable)
+            | GatewayError::Balance(BalanceError::NoApiKeysAvailable) => StatusCode::SERVICE_UNAVAILABLE,
+            GatewayError::Http(_) => StatusCode::BAD_GATEWAY,
+            GatewayError::Config(_) => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    fn code(&self) -> &'static str {
+        match self {
+            GatewayError::Http(_) => "http_error",
+            GatewayError::Json(_) => "json_error",
+            GatewayError::Toml(_) => "toml_error",
+            GatewayError::Db(_) => "db_error",
+            GatewayError::Io(_) => "io_error",
+            GatewayError::Balance(_) => "balance_error",
+            GatewayError::TimeParse(_) => "time_parse_error",
+            GatewayError::Config(_) => "config_error",
+        }
+    }
+}
+
+impl IntoResponse for GatewayError {
+    fn into_response(self) -> axum::response::Response {
+        let status = self.status_code();
+        let body = ErrorBody { code: self.code(), message: self.to_string() };
+        (status, Json(body)).into_response()
+    }
+}

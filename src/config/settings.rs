@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use crate::error::{GatewayError, Result as AppResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -63,14 +64,25 @@ impl Default for ServerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub database_path: String,
+    #[serde(default)]
+    pub key_log_strategy: Option<KeyLogStrategy>,
 }
 
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
             database_path: "data/gateway.db".to_string(),
+            key_log_strategy: Some(KeyLogStrategy::Masked),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyLogStrategy {
+    None,
+    Masked,
+    Plain,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,7 +91,7 @@ pub struct ModelRedirect {
 }
 
 impl Settings {
-    pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load() -> AppResult<Self> {
         let config_path = Self::find_config_file()?;
         let config_content = std::fs::read_to_string(&config_path)?;
         let mut settings: Settings = toml::from_str(&config_content)?;
@@ -91,7 +103,7 @@ impl Settings {
         Ok(settings)
     }
 
-    pub fn load_model_redirects() -> Result<ModelRedirect, Box<dyn std::error::Error>> {
+    pub fn load_model_redirects() -> AppResult<ModelRedirect> {
         let redirect_path = "redirect.toml";
         if Path::new(redirect_path).exists() {
             let content = std::fs::read_to_string(redirect_path)?;
@@ -103,7 +115,7 @@ impl Settings {
         }
     }
 
-    fn find_config_file() -> Result<String, Box<dyn std::error::Error>> {
+    fn find_config_file() -> AppResult<String> {
         let possible_names = ["custom-config.toml", "config.toml"];
 
         for name in &possible_names {
@@ -112,6 +124,8 @@ impl Settings {
             }
         }
 
-        Err("Configuration file not found. Please create custom-config.toml or config.toml".into())
+        Err(GatewayError::Config(
+            "Configuration file not found. Please create custom-config.toml or config.toml".into(),
+        ))
     }
 }

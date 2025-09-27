@@ -17,6 +17,8 @@ pub trait ModelCache: Send + Sync {
     fn cache_models<'a>(&'a self, provider: &'a str, models: &'a [Model]) -> BoxFuture<'a, rusqlite::Result<()>>;
     fn get_cached_models<'a>(&'a self, provider: Option<&'a str>) -> BoxFuture<'a, rusqlite::Result<Vec<CachedModel>>>;
     fn is_cache_fresh<'a>(&'a self, provider: &'a str, max_age_minutes: i64) -> BoxFuture<'a, rusqlite::Result<bool>>;
+    fn cache_models_append<'a>(&'a self, provider: &'a str, models: &'a [Model]) -> BoxFuture<'a, rusqlite::Result<()>>;
+    fn remove_cached_models<'a>(&'a self, provider: &'a str, ids: &'a [String]) -> BoxFuture<'a, rusqlite::Result<()>>;
 }
 
 // 现有的 DatabaseLogger 作为两种接口的默认实现
@@ -42,5 +44,12 @@ impl ModelCache for DatabaseLogger {
     fn is_cache_fresh<'a>(&'a self, provider: &'a str, max_age_minutes: i64) -> BoxFuture<'a, rusqlite::Result<bool>> {
         Box::pin(async move { self.is_cache_fresh(provider, max_age_minutes).await })
     }
-}
 
+    fn cache_models_append<'a>(&'a self, provider: &'a str, models: &'a [Model]) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move { self.cache_models_append(provider, models).await })
+    }
+
+    fn remove_cached_models<'a>(&'a self, provider: &'a str, ids: &'a [String]) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move { self.remove_cached_models(provider, ids).await })
+    }
+}

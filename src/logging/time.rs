@@ -22,3 +22,13 @@ pub fn parse_beijing_string(s: &str) -> crate::error::Result<DateTime<Utc>> {
     Ok(beijing_dt.with_timezone(&Utc))
 }
 
+// tracing_subscriber 自定义时间格式：输出北京时间，与数据库一致
+pub struct BeijingTimer;
+
+impl tracing_subscriber::fmt::time::FormatTime for BeijingTimer {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        let now = Utc::now();
+        let s = to_beijing_string(&now);
+        write!(w, "{}", s)
+    }
+}

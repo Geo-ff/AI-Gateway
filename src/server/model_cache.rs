@@ -76,3 +76,27 @@ pub async fn cache_models_for_provider(
         .cache_models(provider_name, models)
         .await
 }
+
+// 追加（不清空）某供应商的模型缓存
+pub async fn cache_models_for_provider_append(
+    app_state: &AppState,
+    provider_name: &str,
+    models: &[Model],
+) -> rusqlite::Result<()> {
+    // 若实现支持，使用追加逻辑
+    app_state
+        .model_cache
+        .cache_models_append(provider_name, models)
+        .await
+}
+
+pub async fn remove_models_for_provider(
+    app_state: &AppState,
+    provider_name: &str,
+    model_ids: &[String],
+) -> rusqlite::Result<()> {
+    app_state
+        .model_cache
+        .remove_cached_models(provider_name, model_ids)
+        .await
+}

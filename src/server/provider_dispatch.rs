@@ -6,7 +6,7 @@ use crate::server::AppState;
 use crate::server::model_parser::ParsedModel;
 
 // 基于请求的模型名称选择合适的供应商
-pub fn select_provider_for_model(
+pub async fn select_provider_for_model(
     app_state: &AppState,
     model_name: &str,
 ) -> Result<(SelectedProvider, ParsedModel), BalanceError> {
@@ -15,11 +15,14 @@ pub fn select_provider_for_model(
     // 如果解析出了供应商前缀，尝试直接匹配该供应商
     if let Some(provider_name) = &parsed_model.provider_name {
         if let Some(provider_config) = app_state.config.providers.get(provider_name) {
-            if let Some(api_key) = provider_config.api_keys.first() {
-                let selected = SelectedProvider {
-                    provider: provider_config.clone(),
-                    api_key: api_key.clone(),
-                };
+            // 优先从数据库获取动态密钥
+            let db_keys = app_state
+                .db
+                .get_provider_keys(provider_name, &app_state.config.logging.key_log_strategy)
+                .await
+                .unwrap_or_default();
+            if let Some(api_key) = db_keys.first().cloned().or_else(|| provider_config.api_keys.first().cloned()) {
+                let selected = SelectedProvider { provider: provider_config.clone(), api_key };
                 return Ok((selected, parsed_model));
             } else {
                 return Err(BalanceError::NoApiKeysAvailable);
@@ -30,15 +33,27 @@ pub fn select_provider_for_model(
     }
 
     // 没有指定供应商前缀，使用负载均衡策略选择
-    let selected = select_provider(app_state)?;
+    let selected = select_provider(app_state).await?;
     Ok((selected, parsed_model))
 }
 
 // 基于当前配置选择一个可用的供应商（保留原有逻辑）
-pub fn select_provider(app_state: &AppState) -> Result<SelectedProvider, BalanceError> {
+pub async fn select_provider(app_state: &AppState) -> Result<SelectedProvider, BalanceError> {
     let providers: Vec<_> = app_state.config.providers.values().cloned().collect();
     let load_balancer = LoadBalancer::new(providers, app_state.config.load_balancing.strategy.clone());
-    load_balancer.select_provider()
+    let mut selected = load_balancer.select_provider()?;
+    // 覆盖密钥为数据库动态密钥（若存在）
+    if let Some(db_keys) = app_state
+        .db
+        .get_provider_keys(&selected.provider.name, &app_state.config.logging.key_log_strategy)
+        .await
+        .ok()
+    {
+        if let Some(first) = db_keys.first() {
+            selected.api_key = first.clone();
+        }
+    }
+    Ok(selected)
 }
 
 // 根据选中的供应商和解析的模型调用对应的聊天补全接口

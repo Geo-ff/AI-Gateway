@@ -198,3 +198,174 @@ api_keys = ["claude-key1"]
 - KISS/YAGNI：仅保留必要代码路径，避免过度设计
 - DRY：时间格式化/解析与类型定义统一抽离复用
 - SOLID：按职责拆分模块，降低耦合，便于后续扩展
+
+## 2025-09-27 模型缓存 selected 语义增强与易用性修复（已被更清晰接口替代）
+
+### 背景与问题
+- 期望：通过 `GET /models/{provider}?cache=selected&include=A,B` 仅保留所选模型；通过 `...&remove=X` 删除指定模型。
+- 现状：此前实现将 selected/include 作为“追加/更新”，且仅在 `refresh=true` 时生效；因此
+  - 未带 `refresh=true` 的 selected 请求不会更改缓存。
+  - 无“仅保留所选”的直达能力，需要先全量再排除，操作不直观。
+
+### 改动概要（向后兼容）
+- 支持在未设置 `refresh=true` 的情况下执行 `cache=selected` 的 include/remove 变更。
+- 新增查询参数 `replace=true`：在 `cache=selected` + `include` 时，仅保留 include 中的模型（覆写该供应商缓存）。
+- `cache=all` 分支行为不变：仍需 `refresh=true`，可配合 `exclude` 完整重建缓存。
+- 响应头继续返回摘要：`X-Cache-Added`、`X-Cache-Updated`、`X-Cache-Removed`、`X-Cache-Filtered`。
+
+注：后续已对接口进行语义化拆分，GET 不再承载任何“写入/变更”能力，以下用法现已由 POST/DELETE 替代，详见下一节。
+
+### 设计说明
+- KISS：把 include/remove 的最常见诉求放在一个端点内完成；`replace=true` 显式表达“仅保留所选”。
+- YAGNI：不引入额外复杂模式，默认行为保持“追加/更新”，只有在 `replace=true` 时才覆盖。
+- DRY：沿用现有缓存层接口（覆盖、追加、移除），避免重复代码路径。
+
+### 方法语义建议（后续可选）
+- 出于 REST 语义与代理缓存友好性：建议新增写操作端点，同时保留现有 GET 以兼容：
+  - `POST /models/{provider}/cache`：Body 支持 `{mode: "all"|"selected", include:[], exclude:[], replace:bool}`
+  - `DELETE /models/{provider}/cache?ids=...`：精确删除
+- 当前迭代未变更路由，仅改进 GET 的直观性与可用性。
+
+### 任务小结
+- 允许 `cache=selected` 的 include/remove 在无 `refresh=true` 时生效。
+- 新增 `replace=true` 支持“仅保留所选模型”的覆盖写入。
+- 更新了响应摘要头并保持兼容；建议未来引入 POST/DELETE 语义化端点。
+
+## 2025-09-27 接口拆分与职责简化（POST/DELETE 生效，GET 只读）
+
+为降低参数组合复杂度，彻底拆分接口职责：GET 仅用于读取，写操作迁移至 POST/DELETE。
+
+- POST `/models/{provider}/cache`
+  - Body(JSON)：`{ mode: "all"|"selected", include?: string[], exclude?: string[], replace?: bool }`
+  - 语义：
+    - `mode=all`：从上游拉取并全量覆盖，可用 `exclude` 过滤。
+    - `mode=selected`：仅处理 `include` 列表；`replace=true` 覆盖，仅保留所选；否则为追加/更新。
+  - 响应：返回该供应商当前缓存列表；Header 含 `X-Cache-*` 摘要。
+
+- DELETE `/models/{provider}/cache?ids=id1,id2`
+  - 语义：精确删除所列模型；响应返回当前缓存列表；Header 含 `X-Cache-Removed`。
+
+示例：
+- 仅保留两个模型（覆盖）：
+  - `POST /models/openai/cache`，Body：`{"mode":"selected","include":["GLM-4.5","Qwen3-Coder-Instruct-MD"],"replace":true}`
+- 选择性追加/更新（不清空）：
+  - `POST /models/openai/cache`，Body：`{"mode":"selected","include":["GLM-4.5","Qwen3-Coder-Instruct-MD"]}`
+- 全量重建并排除：
+  - `POST /models/openai/cache`，Body：`{"mode":"all","exclude":["id1","id2"]}`
+- 精确删除：
+  - `DELETE /models/openai/cache?ids=Bge-m3-SiliconCloud`
+
+日志：
+- 新增请求类型：`provider_models_cache_update`、`provider_models_cache_delete`。
+
+同时调整 GET 端点行为：
+- `GET /v1/models`：仅返回缓存结果。
+- `GET /models/{provider}`：
+  - 无 `refresh`：仅返回该供应商缓存结果。
+  - `refresh=true`：直接拉取上游并返回，但不落库、不修改缓存。
+
+## 2025-09-26 日志增强与“意外流式”兼容、错误统一收敛
+
+### 日志增强：请求类型
+- 新增日志字段 `request_type`（TEXT）：用于标记请求类型（当前使用）
+  - `chat_once`：非流式聊天
+  - `chat_stream`：流式聊天
+  - 预留：`models_list`、`provider_models_list`
+- 数据库迁移：在启动阶段尝试 `ALTER TABLE request_logs ADD COLUMN request_type ...`，若已存在则忽略。
+- 所有聊天请求均写入对应类型，保证后续统计更清晰。
+
+### “意外流式”兼容（非流式路径）
+- 当用户未设置 `stream: true`，但上游返回 `text/event-stream` 时：
+  - 自动检测 `Content-Type`，聚合SSE分片为一次性 `ChatCompletionResponse` 返回给客户端
+  - 尽可能提取最终 `usage`，并正常记录日志（类型：`chat_once`）
+  - 实现位置：`providers/openai.rs::chat_completions`
+
+### 错误处理统一（收敛到 GatewayError）
+- 将以下文件签名切换为统一错误类型：
+  - `src/main.rs`、`src/config/settings.rs`、`src/server/mod.rs`
+- `GatewayError` 扩展 `Toml` 变体，覆盖配置解析错误
+- 持续推进其余模块平滑迁移，减少 `Box<dyn Error>` 使用
+
+### 影响文件（新增/修改）
+- 新增：`src/logging/database_cache.rs`
+- 修改：
+  - `src/logging/types.rs`（新增 `request_type` 与常量）
+  - `src/logging/database.rs`（DDL/插入/查询同步更新）
+  - `src/server/request_logging.rs`、`src/server/streaming_handlers.rs`（写入 `request_type`）
+  - `src/providers/openai.rs`（上游“意外流式”聚合为一次性响应）
+  - `src/main.rs`、`src/config/settings.rs`、`src/server/mod.rs`（错误类型统一）
+
+### 模型缓存策略变更（更贴近 NewApi 思路）
+- 不再由 `/v1/models` 主动触发上游获取；仅返回数据库中的缓存结果（可能为空）
+- 通过 `/models/{provider}` 按需刷新：
+  - 支持查询参数：
+    - `refresh=true`：访问上游拉取模型
+    - `cache=all`：将上游返回的所有模型写入缓存
+    - `cache=selected&include=id1,id2`：仅将选择的模型写入缓存
+    - 缺省 `cache`：仅预览，不写入缓存
+  - 仍返回 OpenAI 兼容的模型列表
+- 两个接口均写入请求日志：
+  - `/v1/models` → `request_type=models_list`
+  - `/models/{provider}` → `request_type=provider_models_list`
+
+## 2025-09-26 密钥管理与缓存策略增强（本次会话）
+
+### 供应商密钥入库（复用现有加密策略）
+- 策略复用：沿用配置项 `logging.key_log_strategy`（none/masked/plain），不新增配置项；该策略同时作用于：
+  - 数据库存储：
+    - `plain` → 明文存储
+    - `masked`/`none` → 可逆轻量混淆存储（基于 provider+固定盐 异或+hex），便于后续切换
+  - 日志展示：
+    - `none` 不记录
+    - `masked` 记录首尾4位
+    - `plain` 记录明文（仅建议在安全环境中使用）
+- 数据结构：新增表 `provider_keys(provider, key_value, enc, active, created_at)`，自动建表
+- 启动导入：程序启动时将配置内密钥批量导入数据库（不存在时插入）
+- 选择使用：优先从数据库读取密钥，其次回退到配置文件中的密钥
+- 代码位置：
+  - 存取实现：`src/logging/database_keys.rs`
+  - 轻量混淆：`src/crypto/mod.rs`（protect/unprotect，按策略与provider派生材料）
+  - 调度复用：`src/server/provider_dispatch.rs`（选择供应商时优先 DB 密钥）
+  - 启动导入：`src/server/mod.rs`
+
+### 安全管理接口（HTTP）
+- 添加密钥：`POST /providers/:provider/keys`，Body：`{"key":"sk-..."}`，返回201
+- 删除密钥：`DELETE /providers/:provider/keys`，Body：`{"key":"sk-..."}`，返回200
+- 错误返回统一：使用 `GatewayError`，JSON错误体
+- 日志：
+  - `request_type=provider_key_add` / `provider_key_delete`
+  - 路径与状态码完整记录
+
+### 模型缓存增强
+- `/v1/models`：仅返回缓存结果（可能为空），不主动请求上游；记录 `request_type=models_list`
+- `/models/{provider}`：按需刷新，完整记录 path+query，并在错误时同样落库
+  - `cache=all` 支持 `exclude=id1,id2`，从上游结果中过滤后全量重建该供应商缓存（不影响其他供应商）
+  - `cache=selected` 支持 `include=id1,id2` 追加/更新，`remove=id3,id4` 精确移除（不清空）
+  - 返回头包含变更摘要：
+    - `X-Cache-Added` / `X-Cache-Updated` / `X-Cache-Removed` / `X-Cache-Filtered`
+- 多供应商说明：缓存以 `(id, provider)` 为主键，不同供应商互不影响；`cache=all` 仅影响对应供应商；`cache=selected` 采用追加/更新
+
+### 日志一致性
+- 记录 `request_type` 与 `api_key`（遵循策略 none/masked/plain）
+- 流式与非流式聊天均记录（流式在 `[DONE]` 或错误时落库）
+- `/models/{provider}` 含完整 path+query，错误场景（provider不存在/无密钥/上游失败）均有日志
+
+### 建议与后续工作
+- 可选新增 `GET /providers/:provider/keys`（返回 masked 列表），便于运维审计
+- 将 `GatewayError` 继续扩展替换其余模块的 `Box<dyn Error>`，全链路统一错误风格
+- 流式异常完结（连接被动断开）时的兜底日志，需更细的生命周期钩子，建议后续评估
+- 为 `/models/{provider}` 增加 `?summary=json` 返回JSON摘要（保持现有Header不变），便于程序化消费
+- 强安全场景可替换轻量混淆为成熟AEAD方案（接口保持不变），并结合密钥轮换/审计
+
+### 快速使用示例
+- 添加密钥：`POST /providers/openai/keys`，Body：`{"key":"sk-xxx"}`
+- 删除密钥：`DELETE /providers/openai/keys`，Body：`{"key":"sk-xxx"}`
+- 刷新并全量缓存（排除两个ID）：`GET /models/openai?refresh=true&cache=all&exclude=id1,id2`
+- 选择性缓存与移除：`GET /models/openai?refresh=true&cache=selected&include=id3,id4&remove=id5`
+
+### 本次会话更新小结（变更日志）
+- 复用 `logging.key_log_strategy` 实现供应商密钥的数据库存储与日志展示策略统一
+- 新建 `provider_keys` 表，启动时导入配置内密钥；选择供应商优先使用DB密钥
+- 新增密钥管理接口：`POST/DELETE /providers/:provider/keys`，记录操作日志
+- `/models/{provider}` 增强：`cache=all` 支持 `exclude`，`cache=selected` 支持 `remove`；返回头携带变更摘要
+- 日志增强：记录完整 path+query、错误场景、以及 `api_key`（按策略 none/masked/plain）

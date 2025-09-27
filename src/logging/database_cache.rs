@@ -102,5 +102,39 @@ impl DatabaseLogger {
             Ok(false)
         }
     }
-}
 
+    // 追加或更新模型（不清空该供应商原有缓存）
+    pub async fn cache_models_append(&self, provider: &str, models: &[Model]) -> Result<()> {
+        let conn = self.connection.lock().await;
+        let now = chrono::Utc::now();
+        for model in models {
+            conn.execute(
+                "INSERT OR REPLACE INTO cached_models (id, provider, object, created, owned_by, cached_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                (
+                    &model.id,
+                    provider,
+                    &model.object,
+                    model.created,
+                    &model.owned_by,
+                    crate::logging::time::to_beijing_string(&now),
+                ),
+            )?;
+        }
+        Ok(())
+    }
+
+    pub async fn remove_cached_models(&self, provider: &str, ids: &[String]) -> Result<()> {
+        if ids.is_empty() { return Ok(()); }
+        let conn = self.connection.lock().await;
+        let tx = conn.unchecked_transaction()?;
+        for id in ids {
+            tx.execute(
+                "DELETE FROM cached_models WHERE provider = ?1 AND id = ?2",
+                (provider, id),
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
