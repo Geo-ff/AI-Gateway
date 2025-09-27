@@ -1,6 +1,6 @@
 use crate::config::ProviderType;
 use crate::providers::anthropic::AnthropicProvider;
-use crate::providers::openai::{ChatCompletionRequest, ChatCompletionResponse, OpenAIProvider};
+use crate::providers::openai::{ChatCompletionRequest, OpenAIProvider, RawAndTypedChatCompletion};
 use crate::providers::zhipu as zhipu;
 use crate::routing::{LoadBalancer, SelectedProvider, load_balancer::BalanceError};
 use crate::server::AppState;
@@ -66,7 +66,7 @@ pub async fn call_provider_with_parsed_model(
     selected: &SelectedProvider,
     request: &ChatCompletionRequest,
     parsed_model: &ParsedModel,
-) -> Result<ChatCompletionResponse, GatewayError> {
+) -> Result<RawAndTypedChatCompletion, GatewayError> {
     // 创建一个新的请求，使用实际的模型名称
     let mut modified_request = request.clone();
     modified_request.model = parsed_model.get_upstream_model_name().to_string();
@@ -84,7 +84,7 @@ pub async fn call_provider_with_parsed_model(
 async fn call_openai_provider(
     selected: &SelectedProvider,
     request: &ChatCompletionRequest,
-) -> Result<ChatCompletionResponse, GatewayError> {
+) -> Result<RawAndTypedChatCompletion, GatewayError> {
     OpenAIProvider::chat_completions(
         &selected.provider.base_url,
         &selected.api_key,
@@ -96,7 +96,7 @@ async fn call_openai_provider(
 async fn call_anthropic_provider(
     selected: &SelectedProvider,
     request: &ChatCompletionRequest,
-) -> Result<ChatCompletionResponse, GatewayError> {
+) -> Result<RawAndTypedChatCompletion, GatewayError> {
     let anthropic_request = AnthropicProvider::convert_openai_to_anthropic(request);
 
     let anthropic_response = AnthropicProvider::chat_completions(
@@ -107,13 +107,16 @@ async fn call_anthropic_provider(
     .await
     .map_err(GatewayError::from)?;
 
-    Ok(AnthropicProvider::convert_anthropic_to_openai(&anthropic_response))
+    Ok(RawAndTypedChatCompletion {
+        typed: AnthropicProvider::convert_anthropic_to_openai(&anthropic_response),
+        raw: serde_json::to_value(AnthropicProvider::convert_anthropic_to_openai(&anthropic_response)).unwrap_or(serde_json::json!({})),
+    })
 }
 
 async fn call_zhipu_provider(
     selected: &SelectedProvider,
     request: &ChatCompletionRequest,
-) -> Result<ChatCompletionResponse, GatewayError> {
+) -> Result<RawAndTypedChatCompletion, GatewayError> {
     let adapted = zhipu::adapt_openai_request_for_zhipu(request.clone());
     let resp = zhipu::chat_completions(
         &selected.provider.base_url,

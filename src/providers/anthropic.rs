@@ -186,7 +186,7 @@ impl AnthropicProvider {
         base_url: &str,
         api_key: &str,
         request: &anthropic::CreateMessageParams,
-    ) -> Result<anthropic::CreateMessageResponse, reqwest::Error> {
+    ) -> crate::error::Result<anthropic::CreateMessageResponse> {
         let client = reqwest::Client::new();
         let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
         let response = client
@@ -197,7 +197,7 @@ impl AnthropicProvider {
             .json(request)
             .send()
             .await?;
-        response.json::<anthropic::CreateMessageResponse>().await
+        Ok(response.json::<anthropic::CreateMessageResponse>().await?)
     }
 }
 

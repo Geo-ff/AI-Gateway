@@ -1,5 +1,6 @@
 use async_openai::types as oai;
 use crate::error::GatewayError;
+use crate::providers::openai::types::RawAndTypedChatCompletion;
 
 // 轻量适配：
 // - 去除 data:image/...;base64, 前缀，只保留逗号后的纯 base64 数据
@@ -41,7 +42,7 @@ pub async fn chat_completions(
     base_url: &str,
     api_key: &str,
     request: &oai::CreateChatCompletionRequest,
-) -> Result<oai::CreateChatCompletionResponse, GatewayError> {
+) -> Result<RawAndTypedChatCompletion, GatewayError> {
     let client = reqwest::Client::new();
     let url = format!("{}/api/paas/v4/chat/completions", base_url.trim_end_matches('/'));
     let resp = client
@@ -58,10 +59,12 @@ pub async fn chat_completions(
         let _ = serde_json::from_slice::<serde_json::Value>(&bytes)?;
         unreachable!();
     }
-    match serde_json::from_slice::<oai::CreateChatCompletionResponse>(&bytes) {
-        Ok(ok) => Ok(ok),
-        Err(_) => Ok(fallback_response_from_bytes(&bytes)?),
-    }
+    let raw: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let typed = match serde_json::from_slice::<oai::CreateChatCompletionResponse>(&bytes) {
+        Ok(ok) => ok,
+        Err(_) => fallback_response_from_bytes(&bytes)?,
+    };
+    Ok(RawAndTypedChatCompletion { typed, raw })
 }
 
 fn fallback_response_from_bytes(bytes: &[u8]) -> Result<oai::CreateChatCompletionResponse, GatewayError> {

@@ -1,7 +1,7 @@
 use crate::error::GatewayError;
 
 use super::types::{
-    ChatCompletionRequest, ChatCompletionResponse, ModelListResponse,
+    ChatCompletionRequest, ChatCompletionResponse, ModelListResponse, RawAndTypedChatCompletion,
 };
 
 pub struct OpenAIProvider;
@@ -11,7 +11,7 @@ impl OpenAIProvider {
         base_url: &str,
         api_key: &str,
         request: &ChatCompletionRequest,
-    ) -> Result<ChatCompletionResponse, GatewayError> {
+    ) -> Result<RawAndTypedChatCompletion, GatewayError> {
         let client = reqwest::Client::new();
         let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
 
@@ -31,10 +31,12 @@ impl OpenAIProvider {
                 "empty body",
             ))));
         }
-        match serde_json::from_slice::<ChatCompletionResponse>(&bytes) {
-            Ok(ok) => Ok(ok),
-            Err(_) => Ok(fallback_response_from_bytes(&bytes)?),
-        }
+        let raw: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let typed = match serde_json::from_slice::<ChatCompletionResponse>(&bytes) {
+            Ok(ok) => ok,
+            Err(_) => fallback_response_from_bytes(&bytes)?,
+        };
+        Ok(RawAndTypedChatCompletion { typed, raw })
     }
 
     pub async fn list_models(
@@ -54,7 +56,7 @@ impl OpenAIProvider {
         Ok(response.json::<ModelListResponse>().await?)
     }
 
-    // 备注：流式聊天统一由 server/streaming_handlers.rs 处理（基于 reqwest-eventsource）
+    // 备注：流式聊天统一由 server/streaming 模块处理（基于 reqwest-eventsource）
 }
 
 fn fallback_response_from_bytes(bytes: &[u8]) -> Result<ChatCompletionResponse, GatewayError> {
@@ -83,7 +85,7 @@ fn fallback_response_from_bytes(bytes: &[u8]) -> Result<ChatCompletionResponse, 
         }),
     });
 
-    // choices（尽力而为）
+    // choices（尽力而为，保留 reasoning_content 等扩展字段）
     let mut choices: Vec<oai::ChatChoice> = Vec::new();
     if let Some(arr) = v.get("choices").and_then(|x| x.as_array()) {
         for (i, c) in arr.iter().enumerate() {
@@ -99,7 +101,7 @@ fn fallback_response_from_bytes(bytes: &[u8]) -> Result<ChatCompletionResponse, 
             let content = msg.get("content").and_then(|x| x.as_str()).map(|s| s.to_string());
             // tool_calls（若存在）
             let tool_calls = msg.get("tool_calls").and_then(|tc| tc.as_array()).map(|arr| {
-                arr.iter().enumerate().filter_map(|(idx, t)| {
+                arr.iter().enumerate().filter_map(|(_idx, t)| {
                     let id = t.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
                     let f = t.get("function").cloned().unwrap_or_else(|| serde_json::json!({}));
                     let name = f.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();

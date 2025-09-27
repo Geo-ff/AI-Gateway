@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use crate::logging::RequestLog;
 use crate::logging::types::{REQ_TYPE_CHAT_ONCE};
 use crate::config::settings::{KeyLogStrategy, LoggingConfig};
-use crate::providers::openai::ChatCompletionResponse;
+use crate::providers::openai::types::RawAndTypedChatCompletion;
 use crate::error::GatewayError;
 use crate::server::AppState;
 
@@ -13,7 +13,7 @@ pub async fn log_chat_request(
     model: &str,
     provider_name: &str,
     api_key_raw: &str,
-    response: &Result<ChatCompletionResponse, GatewayError>,
+    response: &Result<RawAndTypedChatCompletion, GatewayError>,
 ) {
     let end_time = Utc::now();
     let response_time_ms = (end_time - start_time).num_milliseconds();
@@ -31,11 +31,11 @@ pub async fn log_chat_request(
         api_key,
         status_code: if response.is_ok() { 200 } else { 500 },
         response_time_ms,
-        prompt_tokens: response.as_ref().ok().and_then(|r| r.usage.as_ref().map(|u| u.prompt_tokens)),
-        completion_tokens: response.as_ref().ok().and_then(|r| r.usage.as_ref().map(|u| u.completion_tokens)),
-        total_tokens: response.as_ref().ok().and_then(|r| r.usage.as_ref().map(|u| u.total_tokens)),
-        cached_tokens: response.as_ref().ok().and_then(|r| r.usage.as_ref().and_then(|u| u.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens))),
-        reasoning_tokens: response.as_ref().ok().and_then(|r| r.usage.as_ref().and_then(|u| u.completion_tokens_details.as_ref().and_then(|d| d.reasoning_tokens))),
+        prompt_tokens: response.as_ref().ok().and_then(|r| r.typed.usage.as_ref().map(|u| u.prompt_tokens)),
+        completion_tokens: response.as_ref().ok().and_then(|r| r.typed.usage.as_ref().map(|u| u.completion_tokens)),
+        total_tokens: response.as_ref().ok().and_then(|r| r.typed.usage.as_ref().map(|u| u.total_tokens)),
+        cached_tokens: response.as_ref().ok().and_then(|r| r.typed.usage.as_ref().and_then(|u| u.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens))),
+        reasoning_tokens: response.as_ref().ok().and_then(|r| r.typed.usage.as_ref().and_then(|u| u.completion_tokens_details.as_ref().and_then(|d| d.reasoning_tokens))),
         error_message: response.as_ref().err().map(|e| e.to_string()),
     };
 

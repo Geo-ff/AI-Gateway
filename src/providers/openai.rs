@@ -4,5 +4,5 @@ pub mod client;
 pub use client::OpenAIProvider;
 pub use types::{
     ChatCompletionRequest, ChatCompletionResponse,
-    Model, ModelListResponse, Usage,
+    Model, ModelListResponse, Usage, RawAndTypedChatCompletion,
 };

@@ -21,3 +21,10 @@ pub struct Model {
     pub created: u64,
     pub owned_by: String,
 }
+
+// 非流式响应：同时保留原始 JSON（便于透传扩展字段，如 reasoning_content）与已解析的结构体供日志使用
+#[derive(Debug, Clone)]
+pub struct RawAndTypedChatCompletion {
+    pub typed: ChatCompletionResponse,
+    pub raw: serde_json::Value,
+}
