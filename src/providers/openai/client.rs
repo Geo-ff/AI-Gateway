@@ -126,7 +126,7 @@ impl OpenAIProvider {
     pub async fn list_models(
         base_url: &str,
         api_key: &str,
-    ) -> Result<ModelListResponse, reqwest::Error> {
+    ) -> Result<ModelListResponse, GatewayError> {
         let client = reqwest::Client::new();
         let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
 
@@ -137,7 +137,7 @@ impl OpenAIProvider {
             .send()
             .await?;
 
-        response.json::<ModelListResponse>().await
+        Ok(response.json::<ModelListResponse>().await?)
     }
 
     // 备注：流式聊天统一由 server/streaming_handlers.rs 处理（基于 reqwest-eventsource）

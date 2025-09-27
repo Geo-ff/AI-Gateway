@@ -111,6 +111,7 @@ pub async fn stream_chat_completions(
                                             prompt_tokens: prompt,
                                             completion_tokens: completion,
                                             total_tokens: total,
+                                            error_message: None,
                                         };
                                         if let Err(e) = state_for_log.log_store.log_request(log).await {
                                             tracing::error!("Failed to log streaming request: {}", e);
@@ -132,12 +133,14 @@ pub async fn stream_chat_completions(
                         }
                         Err(e) => {
                             tracing::error!("Stream error: {}", e);
+                            let error_msg = e.to_string();
                             if !logged_flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
                                 let state_for_log = app_state_clone.clone();
                                 let model_for_log = model_with_prefix.clone();
                                 let provider_for_log = provider_name.clone();
                                 let api_key_for_log = api_key_ref.clone();
                                 let started_at = start_time;
+                                let error_for_log = error_msg.clone();
                                 tokio::spawn(async move {
                                     let end_time = Utc::now();
                                     let response_time_ms = (end_time - started_at).num_milliseconds();
@@ -155,13 +158,14 @@ pub async fn stream_chat_completions(
                                         prompt_tokens: None,
                                         completion_tokens: None,
                                         total_tokens: None,
+                                        error_message: Some(error_for_log),
                                     };
                                     if let Err(e) = state_for_log.log_store.log_request(log).await {
                                         tracing::error!("Failed to log streaming error: {}", e);
                                     }
                                 });
                             }
-                            let _ = tx.send(axum::response::sse::Event::default().data(format!("error: {}", e)));
+                            let _ = tx.send(axum::response::sse::Event::default().data(format!("error: {}", error_msg)));
                             break;
                         }
                     }

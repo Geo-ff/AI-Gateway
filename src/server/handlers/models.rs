@@ -22,7 +22,7 @@ pub async fn list_models(
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| "/v1/models".to_string());
     let result = Json(ModelListResponse { object: "list".to_string(), data: cached_models });
-    log_simple_request(&app_state, start_time, "GET", &path, REQ_TYPE_MODELS_LIST, None, None, 200).await;
+    log_simple_request(&app_state, start_time, "GET", &path, REQ_TYPE_MODELS_LIST, None, None, 200, None).await;
     Ok(result)
 }
 
@@ -47,6 +47,8 @@ pub async fn list_provider_models(
     let provider = match app_state.config.providers.get(&provider_name) {
         Some(p) => p,
         None => {
+            let ge = crate::error::GatewayError::Config(format!("Provider '{}' not found", provider_name));
+            let code = ge.status_code().as_u16();
             log_simple_request(
                 &app_state,
                 start_time,
@@ -55,12 +57,11 @@ pub async fn list_provider_models(
                 REQ_TYPE_PROVIDER_MODELS_LIST,
                 None,
                 Some(provider_name.clone()),
-                crate::error::GatewayError::Config(format!("Provider '{}' not found", provider_name))
-                    .status_code()
-                    .as_u16(),
+                code,
+                Some(format!("Provider '{}' not found", provider_name)),
             )
             .await;
-            return Err(crate::error::GatewayError::Config(format!("Provider '{}' not found", provider_name)));
+            return Err(ge);
         }
     };
 
@@ -79,15 +80,44 @@ pub async fn list_provider_models(
             None,
             Some(provider_name.clone()),
             200,
+            None,
         )
         .await;
         let resp = Json(ModelListResponse { object: "list".into(), data: cached_models });
         return Ok(resp.into_response());
     }
 
-    let api_key = match provider.api_keys.first().cloned() {
-        Some(k) => k,
-        None => {
+    let api_key = {
+        // 优先使用数据库中的动态密钥
+        if let Ok(db_keys) = app_state
+            .db
+            .get_provider_keys(&provider_name, &app_state.config.logging.key_log_strategy)
+            .await
+        {
+            if let Some(k) = db_keys.first().cloned() {
+                k
+            } else if let Some(k) = provider.api_keys.first().cloned() {
+                k
+            } else {
+                let ge: GatewayError = crate::routing::load_balancer::BalanceError::NoApiKeysAvailable.into();
+                let code = ge.status_code().as_u16();
+                log_simple_request(
+                    &app_state,
+                    start_time,
+                    "GET",
+                    &full_path,
+                    REQ_TYPE_PROVIDER_MODELS_LIST,
+                    None,
+                    Some(provider_name.clone()),
+                    code,
+                    None,
+                )
+                .await;
+                return Err(ge);
+            }
+        } else if let Some(k) = provider.api_keys.first().cloned() {
+            k
+        } else {
             let ge: GatewayError = crate::routing::load_balancer::BalanceError::NoApiKeysAvailable.into();
             let code = ge.status_code().as_u16();
             log_simple_request(
@@ -99,6 +129,7 @@ pub async fn list_provider_models(
                 None,
                 Some(provider_name.clone()),
                 code,
+                None,
             )
             .await;
             return Err(ge);
@@ -118,6 +149,7 @@ pub async fn list_provider_models(
                 None,
                 Some(provider_name.clone()),
                 code,
+                Some(e.to_string()),
             )
             .await;
             return Err(e);
@@ -133,6 +165,7 @@ pub async fn list_provider_models(
         None,
         Some(provider_name.clone()),
         200,
+        None,
     )
     .await;
 

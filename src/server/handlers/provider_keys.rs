@@ -35,6 +35,7 @@ pub async fn add_provider_key(
         None,
         Some(provider_name),
         201,
+        None,
     )
     .await;
 
@@ -65,6 +66,7 @@ pub async fn delete_provider_key(
         None,
         Some(provider_name),
         200,
+        None,
     )
     .await;
 

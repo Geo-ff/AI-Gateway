@@ -43,7 +43,8 @@ impl DatabaseLogger {
                 response_time_ms INTEGER NOT NULL,
                 prompt_tokens INTEGER,
                 completion_tokens INTEGER,
-                total_tokens INTEGER
+                total_tokens INTEGER,
+                error_message TEXT
             )",
             [],
         )?;
@@ -55,6 +56,10 @@ impl DatabaseLogger {
         );
         let _ = conn.execute(
             "ALTER TABLE request_logs ADD COLUMN api_key TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE request_logs ADD COLUMN error_message TEXT",
             [],
         );
 
@@ -96,8 +101,8 @@ impl DatabaseLogger {
             "INSERT INTO request_logs (
                 timestamp, method, path, request_type, model, provider,
                 api_key, status_code, response_time_ms, prompt_tokens,
-                completion_tokens, total_tokens
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                completion_tokens, total_tokens, error_message
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             (
                 to_beijing_string(&log.timestamp),
                 &log.method,
@@ -111,6 +116,7 @@ impl DatabaseLogger {
                 log.prompt_tokens,
                 log.completion_tokens,
                 log.total_tokens,
+                &log.error_message,
             ),
         )?;
 
@@ -126,7 +132,7 @@ impl DatabaseLogger {
         let mut stmt = conn.prepare(
             "SELECT id, timestamp, method, path, request_type, model, provider,
                     api_key, status_code, response_time_ms, prompt_tokens,
-                    completion_tokens, total_tokens
+                    completion_tokens, total_tokens, error_message
              FROM request_logs
              ORDER BY timestamp DESC
              LIMIT ?1"
@@ -148,6 +154,7 @@ impl DatabaseLogger {
                 prompt_tokens: row.get(10)?,
                 completion_tokens: row.get(11)?,
                 total_tokens: row.get(12)?,
+                error_message: row.get(13)?,
             })
         })?;
 

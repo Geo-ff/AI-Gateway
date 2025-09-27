@@ -28,7 +28,7 @@ pub async fn fetch_provider_models(
 async fn fetch_models_from_endpoint(
     url: &str,
     api_key: &str,
-) -> Result<ModelListResponse, reqwest::Error> {
+) -> Result<ModelListResponse, GatewayError> {
     let client = reqwest::Client::new();
 
     let response = client
@@ -38,5 +38,5 @@ async fn fetch_models_from_endpoint(
         .send()
         .await?;
 
-    response.json::<ModelListResponse>().await
+    Ok(response.json::<ModelListResponse>().await?)
 }

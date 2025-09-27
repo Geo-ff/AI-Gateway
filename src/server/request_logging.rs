@@ -34,6 +34,7 @@ pub async fn log_chat_request(
         prompt_tokens: response.as_ref().ok().map(|r| r.usage.prompt_tokens),
         completion_tokens: response.as_ref().ok().map(|r| r.usage.completion_tokens),
         total_tokens: response.as_ref().ok().map(|r| r.usage.total_tokens),
+        error_message: response.as_ref().err().map(|e| e.to_string()),
     };
 
     if let Err(e) = app_state.log_store.log_request(log).await {
@@ -65,6 +66,7 @@ pub async fn log_simple_request(
     model: Option<String>,
     provider: Option<String>,
     status_code: u16,
+    error_message: Option<String>,
 ) {
     let end_time = Utc::now();
     let response_time_ms = (end_time - start_time).num_milliseconds();
@@ -83,6 +85,7 @@ pub async fn log_simple_request(
         prompt_tokens: None,
         completion_tokens: None,
         total_tokens: None,
+        error_message,
     };
 
     if let Err(e) = app_state.log_store.log_request(log).await {

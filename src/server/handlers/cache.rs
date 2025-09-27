@@ -35,7 +35,7 @@ pub async fn update_provider_cache(
         None => {
             let ge = GatewayError::Config(format!("Provider '{}' not found", provider_name));
             let code = ge.status_code().as_u16();
-            log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name), code).await;
+            log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name), code, None).await;
             return Err(ge);
         }
     };
@@ -45,7 +45,7 @@ pub async fn update_provider_cache(
         None => {
             let ge: GatewayError = crate::routing::load_balancer::BalanceError::NoApiKeysAvailable.into();
             let code = ge.status_code().as_u16();
-            log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), code).await;
+            log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), code, None).await;
             return Err(ge);
         }
     };
@@ -88,7 +88,7 @@ pub async fn update_provider_cache(
             if include.is_empty() {
                 let ge = GatewayError::Config("include cannot be empty for mode=selected".to_string());
                 let code = ge.status_code().as_u16();
-                log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), code).await;
+                log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), code, Some("include cannot be empty for mode=selected".into())).await;
                 return Err(ge);
             }
             let upstream_models = fetch_provider_models(provider, &api_key).await?;
@@ -125,13 +125,13 @@ pub async fn update_provider_cache(
         _ => {
             let ge = GatewayError::Config("invalid mode".to_string());
             let code = ge.status_code().as_u16();
-            log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), code).await;
+            log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), code, Some("invalid mode".into())).await;
             return Err(ge);
         }
     }
 
     let models = get_cached_models_for_provider(&app_state, &provider_name).await?;
-    log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), 200).await;
+    log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), 200, None).await;
     let mut resp = Json(ModelListResponse { object: "list".into(), data: models }).into_response();
     use axum::http::header::HeaderValue;
     if let Ok(v) = HeaderValue::from_str(&added.to_string()) { resp.headers_mut().insert("X-Cache-Added", v); }
@@ -157,7 +157,7 @@ pub async fn delete_provider_cache(
     if !app_state.config.providers.contains_key(&provider_name) {
         let ge = GatewayError::Config(format!("Provider '{}' not found", provider_name));
         let code = ge.status_code().as_u16();
-        log_simple_request(&app_state, start_time, "DELETE", &path, REQ_TYPE_PROVIDER_CACHE_DELETE, None, Some(provider_name), code).await;
+        log_simple_request(&app_state, start_time, "DELETE", &path, REQ_TYPE_PROVIDER_CACHE_DELETE, None, Some(provider_name.clone()), code, Some(format!("Provider '{}' not found", provider_name))).await;
         return Err(ge);
     }
 
@@ -174,7 +174,7 @@ pub async fn delete_provider_cache(
     let _ = crate::server::model_cache::remove_models_for_provider(&app_state, &provider_name, &ids).await;
 
     let models = get_cached_models_for_provider(&app_state, &provider_name).await?;
-    log_simple_request(&app_state, start_time, "DELETE", &path, REQ_TYPE_PROVIDER_CACHE_DELETE, None, Some(provider_name.clone()), 200).await;
+    log_simple_request(&app_state, start_time, "DELETE", &path, REQ_TYPE_PROVIDER_CACHE_DELETE, None, Some(provider_name.clone()), 200, None).await;
     let mut resp = Json(ModelListResponse { object: "list".into(), data: models }).into_response();
     use axum::http::header::HeaderValue;
     if let Ok(v) = HeaderValue::from_str(&"0".to_string()) { resp.headers_mut().insert("X-Cache-Added", v); }

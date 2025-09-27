@@ -85,3 +85,20 @@
 回归建议
 - 非流式：在上游返回 `application/json` 与 `text/event-stream` 两种情况下分别验证，确认内容不丢字；特别针对 Markdown 场景做对比测试。
 - 流式：确认 `[DONE]` 正确终止，日志只落一次；网络中断后行为可接受（本轮未引入重连策略）。
+
+### 日志增强：记录上游错误消息（2025-09-27）
+- 新增字段：`request_logs.error_message TEXT`，用于保存上游错误详情（例如 `Invalid status code: 554 <unknown status code>`）。
+- 产生场景：
+  - 流式 `/v1/chat/completions` 发生 `EventSource` 错误时记录。
+  - 非流式 `/v1/chat/completions` 返回错误时，记录 `GatewayError` 的 message。
+  - 其他 `log_simple_request` 支持传入可选 `error_message`（默认 `None`）。
+- 影响文件：
+  - `src/logging/types.rs`（`RequestLog.error_message`）
+  - `src/logging/database.rs`（建表/迁移、INSERT、SELECT 全量支持 `error_message`）
+  - `src/server/request_logging.rs`（`log_chat_request` 与 `log_simple_request` 扩展）
+  - `src/server/streaming_handlers.rs`（流式错误带上 `error_message`）
+
+### models 路径错误统一与密钥优先级（2025-09-27）
+- 统一错误：`/v1/models` 与 `/models/{provider}` 全链路返回 `GatewayError`。
+- 上游请求：`fetch_models_from_endpoint` 和 `OpenAIProvider::list_models` 统一返回 `GatewayError`。
+- 密钥优先级：`GET /models/{provider}?refresh=true` 时优先使用 DB 中的动态密钥，回退到配置文件内密钥；两者都无时返回 `NoApiKeysAvailable`。
