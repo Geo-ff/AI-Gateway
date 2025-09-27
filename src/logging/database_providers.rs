@@ -129,6 +129,7 @@ fn provider_type_from_str(s: &str) -> ProviderType {
     match s.to_ascii_lowercase().as_str() {
         "openai" => ProviderType::OpenAI,
         "anthropic" => ProviderType::Anthropic,
+        "zhipu" => ProviderType::Zhipu,
         _ => ProviderType::OpenAI,
     }
 }
@@ -137,5 +138,6 @@ fn provider_type_to_str(t: &ProviderType) -> &'static str {
     match t {
         ProviderType::OpenAI => "openai",
         ProviderType::Anthropic => "anthropic",
+        ProviderType::Zhipu => "zhipu",
     }
 }

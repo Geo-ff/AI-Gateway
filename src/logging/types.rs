@@ -31,6 +31,8 @@ pub struct RequestLog {
     pub prompt_tokens: Option<u32>,
     pub completion_tokens: Option<u32>,
     pub total_tokens: Option<u32>,
+    pub cached_tokens: Option<u32>,
+    pub reasoning_tokens: Option<u32>,
     pub error_message: Option<String>,
 }
 

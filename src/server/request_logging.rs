@@ -34,6 +34,8 @@ pub async fn log_chat_request(
         prompt_tokens: response.as_ref().ok().and_then(|r| r.usage.as_ref().map(|u| u.prompt_tokens)),
         completion_tokens: response.as_ref().ok().and_then(|r| r.usage.as_ref().map(|u| u.completion_tokens)),
         total_tokens: response.as_ref().ok().and_then(|r| r.usage.as_ref().map(|u| u.total_tokens)),
+        cached_tokens: response.as_ref().ok().and_then(|r| r.usage.as_ref().and_then(|u| u.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens))),
+        reasoning_tokens: response.as_ref().ok().and_then(|r| r.usage.as_ref().and_then(|u| u.completion_tokens_details.as_ref().and_then(|d| d.reasoning_tokens))),
         error_message: response.as_ref().err().map(|e| e.to_string()),
     };
 
@@ -85,6 +87,8 @@ pub async fn log_simple_request(
         prompt_tokens: None,
         completion_tokens: None,
         total_tokens: None,
+        cached_tokens: None,
+        reasoning_tokens: None,
         error_message,
     };
 

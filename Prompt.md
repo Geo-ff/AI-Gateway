@@ -1041,6 +1041,323 @@ error: could not compile `gateway` (bin "gateway") due to 7 previous errors; 3 w
 
 
 
+我进行了新的测试，这次我测试的是带有思考能力的模型（你可以在我后面给出的 JSON 内容中观察到），其中一个是完全兼容 OpenAI 格式的 Deepseek-R1 模型，该模型在我使用：
+```
+{
+    "model": "DeepSeek-R1-SophNet",
+    "stream": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "你好呀，请你用 20 个字介绍你自己"
+      }
+    ]
+}
+```
+的方式进行请求后，在：
+```
+[DONE
+]
+```
+的前一个流式中返回了：
+```
+{
+    "choices": [],
+    "created": 1758969624,
+    "id": "021758969624539a515938ea244306efcfd15cec159a1f863d2ea",
+    "model": "DeepSeek-R1-0528",
+    "object": "chat.completion.chunk",
+    "usage": {
+        "completion_tokens": 237,
+        "completion_tokens_details": {
+            "reasoning_tokens": 201
+        },
+        "prompt_tokens": 16,
+        "prompt_tokens_details": {
+            "cached_tokens": 0
+        },
+        "total_tokens": 253
+    }
+}
+```
+详细的情况，同时，我们的数据库也成功将 prompt_tokens、completion_tokens、total_tokens 给记录了下来。
+但是你可以观察到，我们的数据库记录的属性还是不够全面，还有 cached_tokens、reasoning_tokens 这两个值没有记录下来。
+而且，如果我使用了另外一个模型，比如 GLM 的思考模型：
+```
+{
+    "model": "GLM-4.5",
+    "stream": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "你好，请你最简单地介绍一下你自己，不得超过 40 字"
+      }
+    ]
+}
+```
+那么，在：
+```
+[DONE
+]
+```
+的前一个流式中返回了：
+```
+{
+    "id": "20250927183747dcdfb79bc9ad44b5",
+    "created": 1758969467,
+    "model": "glm-4.5",
+    "choices": [
+        {
+            "index": 0,
+            "finish_reason": "stop",
+            "delta": {
+                "role": "assistant",
+                "content": ""
+            }
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 18,
+        "completion_tokens": 108,
+        "total_tokens": 126,
+        "prompt_tokens_details": {
+            "cached_tokens": 0
+        }
+    }
+}
+```
+但是很奇怪的是，我们的数据库中并没有成功将 prompt_tokens、completion_tokens、total_tokens 给记录下来，全都是空的。
+为此，我特意将 Newapi 项目给 clone 到了当前项目下，并且找到了关于 GLM 模型的适配器代码路径：new-api/relay/channel/zhipu_4v
+我知道 GLM 模型要单独适配的，因此请你仔细阅读我给出的路径下的代码实现后，为我解决这个问题。
+而对于这样的，明明是 OpenAI 兼容请求的，但却需要额外适配器的模型，请你单独将其作为一个 api_type 来进行处理。这是 Newapi 的成熟的解决方案，我们应该保持 OpenAI 这样单独的、成熟的结构的稳定性，所以对于 zhipu 模型，请你将其作为一个新的 api_type 来适配。
+
+如果你在编码的过程中碰到语法了错误和问题，请你使用 context7 MCP 来获取最新的开发文档来解决。
+
+在你完成所有的任务之后，将任务日志也精要地追加到 docs/Develop2-2.md 文件中去，并且使用中文。
+
+
+
+
+
+原来如此，不过我刚刚进行了测试，我没有添加任何新的供应商，还是使用原来的 newapi 进行 GLM 模型的请求，结束后查看数据库日志，还是无记录；而换成 Deepseek-R1 则成功记录，但是新增加的 cached_tokens、reasoning_tokens 这两个值却没有记录下来，依旧是空的。
+然后我创建了单独的智谱类型的供应商，不过 URL 还是使用的我一直在用的 URL，也就是 https://apis.134257.xyz，这个 URL 是我通过 Newapi 搭建的站点，对于 GLM 的模型的处理是完全兼容的。然后我使用 newapi-zhipu/GLM-4.5 这样的模型名进行请求，出现了 JSON parsing failed: Text: error: Invalid header value: "text/html". Error message: JSON Parse error: Unexpected identifier "error" 错误。看了一下你的说明，应该是路由到了 https://apis.134257.xyz/api/paas/v4/chat/completions 端点导致失败的，这个正常，因为 Newapi 对外端点就是 OpenAI 兼容的 /v1/chat/completions。
+最后我尝试添加 GLM 官方密钥和官方 URL 进行调用，并且删除了 "models_endpoint": "/v1/models" 这个参数，因为智谱官方没有获取模型列表的端点。所以我通过 /models/{provider}/cache 接口为这个供应商添加 glm-4.5 模型的时候出现了错误：
+```
+{
+    "code": "config_error",
+    "message": "Config error: Zhipu models listing not implemented"
+}
+```
+因此我不得不手动在数据库中进行模型信息的插入，然后再进行调用，但是还是出现了：
+```
+JSON parsing failed: Text: error: Invalid status code: 400 Bad Request. Error message: JSON Parse error: Unexpected identifier "error"
+```
+错误。
+经过我的讲述，你应该知道了前因后果，在你修复之前，我的建议如下：
+1. 为了不混淆模型语义和规范模型调用，请你不要让 OpenAI 兼容 GLM 这样特殊的模型，请你保持 OpenAI 的纯净性。同时修复 cached_tokens、reasoning_tokens 这两个值没有记录下来的问题
+2. 对于没有提供 models_endpoint 参数的供应商，在进行模型添加的时候，就不要去强制检查添加的模型是否在已有的模型中存在
+3. 而对于单独的智谱模型，我希望你将其真正地，完整地独立出来，就像 Newapi 那样，示例代码我也给你了，而不是将其和我们已经实现的 OpenAI 混杂在一起，你这犯了单一职责的原则
+
+请你小心谨慎地进行修复和更改
+
+
+
+
+我刚刚又进行了测试：
+1. 使用 Deepseek-R1 模型进行请求的时候，cached_tokens、reasoning_tokens 这两个值已经可以成功记录（但是第二次测试又记录失败了，说明还是有问题）
+2. 但是如果使用原有的 Newapi URL 去请求 GLM 模型的话，则全部都不会记录，包括 prompt_tokens、completion_tokens、total_tokens，因此说明你对接上游的返回还是失败的
+
+这很难理解，因为上游返回的内容都是固定的形式，为什么你却不能准确解析？
+而对于你说的结尾 [Done] 情况，我使用 Postman 进行测试的，这两个模型的返回感觉都是差不多的，感觉没有什么区别。
+
+上面这些是在流式返回的情况测得的，而如果使用非流式传输的时候，Deepseek-R1 返回的结果如下：
+```
+{
+    "id": "0217589739693795ca2e881a370e1b91d323df8c585f1eb6f318b",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "content": "你好！我是你的AI小帮手，很乐意回答任何问题，随时为你服务！(28字)",
+                "role": "assistant"
+            },
+            "finish_reason": "stop"
+        }
+    ],
+    "created": 1758973974,
+    "model": "DeepSeek-R1-0528",
+    "object": "chat.completion",
+    "usage": {
+        "prompt_tokens": 18,
+        "completion_tokens": 158,
+        "total_tokens": 176,
+        "prompt_tokens_details": {
+            "audio_tokens": null,
+            "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+            "accepted_prediction_tokens": null,
+            "audio_tokens": null,
+            "reasoning_tokens": 135,
+            "rejected_prediction_tokens": null
+        }
+    }
+}
+```
+这个时候观察到所有的参数都是正确记录到数据库日志中去的，但是如果使用非流式的方式请求 GLM 而且也是使用 https://apis.134257.xyz 这个 URL 的话，直接出现：
+```
+{
+    "code": "http_error",
+    "message": "HTTP error: error decoding response body"
+}
+```
+错误。但是当我直接请求 https://apis.134257.xyz 而不是通过当前项目进行中转的话，则能够正确地、成功请求：
+```
+{
+    "choices": [
+        {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+                "content": "我是AI助手，解答问题、提供信息。",
+                "reasoning_content": "用户让我最简单地介绍自己，不超过40字。首先，得抓住核心：我是AI助手，功能是帮助回答问题、提供信息。然后要简洁，比如“我是AI助手，帮你解答问题、提供信息。”数一下字数，“我是AI助手，帮你解答问题、提供信息。”一共20字，符合要求，而且简单明了，覆盖了身份和主要功能。再检查有没有更简洁的，比如“我是AI助手，解答问题、提供信息。”这样更短，18字，也可以，但“帮你”更亲切一点，不过用户要求最简单，可能不需要“帮你”，但“我是AI助手，解答问题、提供信息。”已经足够简单，符合要求。或者“我是AI助手，助你解答问题、提供信息。”但“助你”和“帮你”差不多，不过“解答问题、提供信息”是核心功能，这样组合起来，“我是AI助手，解答问题、提供信息。”刚好18字，不超过40，而且最简单，介绍了身份和功能。对，就这样。",
+                "role": "assistant"
+            }
+        }
+    ],
+    "created": 1758973904,
+    "id": "20250927195142b7f5376ee6b44fc0",
+    "model": "glm-4.5",
+    "request_id": "20250927195142b7f5376ee6b44fc0",
+    "usage": {
+        "completion_tokens": 230,
+        "prompt_tokens": 19,
+        "prompt_tokens_details": {
+            "cached_tokens": 0
+        },
+        "total_tokens": 249
+    }
+}
+```
+
+
+
+我又进行了详细地测试，我可以很高兴地和你说：
+1. 对于 Deepseek-R1 这样完全兼容 OpenAI 格式的模型，已经可以正确入库所有的字段了
+2. 而当使用 OpenAI(newapi) + GLM 的组合方式进行请求的时候，如果是流式，也可以正确进行日志的存储，而 cached_tokens、reasoning_tokens 这两个值本来就不会返回（无论是流式的还是非流式请求 GLM 都不会有），所以也是正确处理的
+
+但是也有最后几个个问题：
+1. 在 OpenAI(newapi) + GLM 的组合方式下进行非流式的请求时，会出现：
+```
+{
+    "code": "json_error",
+    "message": "JSON error: EOF while parsing a value at line 1 column 0"
+}
+```
+问题而请求失败
+2. 当指定供应商类型为 zhipu 和智谱官方 URL 以及密钥进行请求的时候，能够正确记录 prompt_tokens、completion_tokens、total_tokens。但是官方渠道是会返回 cached_tokens、reasoning_tokens 这两个值的，官方的请求结果示例如下：
+```
+{
+  "id": "<string>",
+  "request_id": "<string>",
+  "created": 123,
+  "model": "<string>",
+  "choices": [
+    {
+      "index": 123,
+      "message": {
+        "role": "assistant",
+        "content": "<string>",
+        "reasoning_content": "<string>",
+        "audio": {
+          "id": "<string>",
+          "data": "<string>",
+          "expires_at": "<string>"
+        },
+        "tool_calls": [
+          {
+            "function": {
+              "name": "<string>",
+              "arguments": {}
+            },
+            "mcp": {
+              "id": "<string>",
+              "type": "mcp_list_tools",
+              "server_label": "<string>",
+              "error": "<string>",
+              "tools": [
+                {
+                  "name": "<string>",
+                  "description": "<string>",
+                  "annotations": {},
+                  "input_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [
+                      "<any>"
+                    ],
+                    "additionalProperties": true
+                  }
+                }
+              ],
+              "arguments": "<string>",
+              "name": "<string>",
+              "output": {}
+            },
+            "id": "<string>",
+            "type": "<string>"
+          }
+        ]
+      },
+      "finish_reason": "<string>"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 123,
+    "completion_tokens": 123,
+    "prompt_tokens_details": {
+      "cached_tokens": 123
+    },
+    "total_tokens": 123
+  },
+  "video_result": [
+    {
+      "url": "<string>",
+      "cover_image_url": "<string>"
+    }
+  ],
+  "web_search": [
+    {
+      "icon": "<string>",
+      "title": "<string>",
+      "link": "<string>",
+      "media": "<string>",
+      "publish_date": "<string>",
+      "content": "<string>",
+      "refer": "<string>"
+    }
+  ],
+  "content_filter": [
+    {
+      "role": "<string>",
+      "level": 123
+    }
+  ]
+}
+```
+如果错误：
+```
+{
+  "error": {
+    "code": "<string>",
+    "message": "<string>"
+  }
+}
+```
+所以，对于类型为 zhipu 的供应商，你需要继续完善，以能够准确记录日志，而对于 Newapi 中转来的 GLM 模型，Newapi 已经做了兼容性修改所以是不会返回 cached_tokens、reasoning_tokens 的，因此无需变动。
+
+
+
 
 
 GET /providers/{provider}/keys
@@ -1057,5 +1374,5 @@ GET /providers/{provider}/keys
 
 3. 在你完成上面的任务之后，为当前的对话接口加一个超时机制，因为我在测试的时候碰到过上游供应商很久都没有返回的情况，但是却一直在等待，所以请你先进
 数据库使用 Postgresql 
-识图、思考、工具调用、MCP
+识图、思考、工具调用、MCP、自己的 token 计算逻辑
 密钥分发、TUN 或者 GUI

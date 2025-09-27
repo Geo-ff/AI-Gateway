@@ -108,7 +108,7 @@ pub async fn create_provider(State(app_state): State<Arc<AppState>>, Json(payloa
         operation: REQ_TYPE_PROVIDER_CREATE.to_string(),
         provider: Some(p.name.clone()),
         details: Some(serde_json::to_string(&serde_json::json!({
-            "api_type": match p.api_type { ProviderType::OpenAI => "openai", ProviderType::Anthropic => "anthropic" },
+            "api_type": match p.api_type { ProviderType::OpenAI => "openai", ProviderType::Anthropic => "anthropic", ProviderType::Zhipu => "zhipu" },
             "base_url": p.base_url,
             "models_endpoint": p.models_endpoint
         })).unwrap_or_default()),
@@ -135,7 +135,7 @@ pub async fn update_provider(Path(name): Path<String>, State(app_state): State<A
         operation: REQ_TYPE_PROVIDER_UPDATE.to_string(),
         provider: Some(p.name.clone()),
         details: Some(serde_json::to_string(&serde_json::json!({
-            "api_type": match p.api_type { ProviderType::OpenAI => "openai", ProviderType::Anthropic => "anthropic" },
+            "api_type": match p.api_type { ProviderType::OpenAI => "openai", ProviderType::Anthropic => "anthropic", ProviderType::Zhipu => "zhipu" },
             "base_url": p.base_url,
             "models_endpoint": p.models_endpoint
         })).unwrap_or_default()),

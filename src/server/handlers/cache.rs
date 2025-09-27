@@ -98,14 +98,27 @@ pub async fn update_provider_cache(
                 log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), code, Some("include cannot be empty for mode=selected".into())).await;
                 return Err(ge);
             }
-            let upstream_models = fetch_provider_models(&provider, &api_key).await?;
             use std::collections::{HashMap, HashSet};
-            let include_ids: HashSet<_> = include.iter().map(|s| s.as_str()).collect();
-            let selected: Vec<Model> = upstream_models
-                .iter()
-                .filter(|m| include_ids.contains(m.id.as_str()))
-                .cloned()
-                .collect();
+            let selected: Vec<Model> = if provider.models_endpoint.is_none() {
+                // 无 models_endpoint：不强制校验是否存在于上游，直接根据 include 构造缓存条目
+                include
+                    .iter()
+                    .map(|id| Model {
+                        id: id.clone(),
+                        object: "model".to_string(),
+                        created: chrono::Utc::now().timestamp() as u64,
+                        owned_by: provider_name.clone(),
+                    })
+                    .collect()
+            } else {
+                let upstream_models = fetch_provider_models(&provider, &api_key).await?;
+                let include_ids: HashSet<_> = include.iter().map(|s| s.as_str()).collect();
+                upstream_models
+                    .iter()
+                    .filter(|m| include_ids.contains(m.id.as_str()))
+                    .cloned()
+                    .collect()
+            };
             let prev_map: HashMap<_, _> = prev.iter().map(|m| (m.id.clone(), (m.object.clone(), m.owned_by.clone(), m.created))).collect();
             let sel_ids: HashSet<_> = selected.iter().map(|m| m.id.clone()).collect();
             let prev_ids: HashSet<_> = prev_map.keys().cloned().collect();

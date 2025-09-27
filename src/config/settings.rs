@@ -24,6 +24,7 @@ pub struct Provider {
 pub enum ProviderType {
     OpenAI,
     Anthropic,
+    Zhipu,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -20,6 +20,9 @@ pub async fn fetch_provider_models(
             ProviderType::Anthropic => {
                 Err(GatewayError::Config("Anthropic models listing not implemented".into()))
             }
+            ProviderType::Zhipu => {
+                Err(GatewayError::Config("Zhipu models listing not implemented".into()))
+            }
         }
     }
 }

@@ -1,6 +1,7 @@
 use crate::config::ProviderType;
 use crate::providers::anthropic::AnthropicProvider;
 use crate::providers::openai::{ChatCompletionRequest, ChatCompletionResponse, OpenAIProvider};
+use crate::providers::zhipu as zhipu;
 use crate::routing::{LoadBalancer, SelectedProvider, load_balancer::BalanceError};
 use crate::server::AppState;
 use crate::server::model_parser::ParsedModel;
@@ -73,6 +74,7 @@ pub async fn call_provider_with_parsed_model(
     match selected.provider.api_type {
         ProviderType::OpenAI => call_openai_provider(selected, &modified_request).await,
         ProviderType::Anthropic => call_anthropic_provider(selected, &modified_request).await,
+        ProviderType::Zhipu => call_zhipu_provider(selected, &modified_request).await,
     }
 }
 
@@ -106,4 +108,18 @@ async fn call_anthropic_provider(
     .map_err(GatewayError::from)?;
 
     Ok(AnthropicProvider::convert_anthropic_to_openai(&anthropic_response))
+}
+
+async fn call_zhipu_provider(
+    selected: &SelectedProvider,
+    request: &ChatCompletionRequest,
+) -> Result<ChatCompletionResponse, GatewayError> {
+    let adapted = zhipu::adapt_openai_request_for_zhipu(request.clone());
+    let resp = zhipu::chat_completions(
+        &selected.provider.base_url,
+        &selected.api_key,
+        &adapted,
+    )
+    .await?;
+    Ok(resp)
 }
