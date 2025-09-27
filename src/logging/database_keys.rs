@@ -5,21 +5,6 @@ use super::database::DatabaseLogger;
 use crate::config::settings::KeyLogStrategy;
 
 impl DatabaseLogger {
-    pub async fn add_provider_keys_if_missing(&self, provider: &str, keys: &[String], strategy: &Option<KeyLogStrategy>) -> Result<usize> {
-        let conn = self.connection.lock().await;
-        let now = crate::logging::time::to_beijing_string(&Utc::now());
-        let mut added = 0usize;
-        for key in keys {
-            let (stored, enc) = crate::crypto::protect(strategy, provider, key);
-            let res = conn.execute(
-                "INSERT OR IGNORE INTO provider_keys (provider, key_value, enc, active, created_at)
-                 VALUES (?1, ?2, ?3, 1, ?4)",
-                (provider, stored, if enc {1} else {0}, &now),
-            )?;
-            if res > 0 { added += 1; }
-        }
-        Ok(added)
-    }
 
     pub async fn get_provider_keys(&self, provider: &str, strategy: &Option<KeyLogStrategy>) -> Result<Vec<String>> {
         let conn = self.connection.lock().await;

@@ -45,14 +45,7 @@ impl DatabaseLogger {
         Ok(exists)
     }
 
-    pub async fn list_provider_names(&self) -> Result<Vec<String>> {
-        let conn = self.connection.lock().await;
-        let mut stmt = conn.prepare("SELECT name FROM providers ORDER BY name")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        let mut out = Vec::new();
-        for r in rows { out.push(r?); }
-        Ok(out)
-    }
+    
 
     pub async fn get_provider(&self, name: &str) -> Result<Option<Provider>> {
         let conn = self.connection.lock().await;
@@ -75,15 +68,7 @@ impl DatabaseLogger {
         Ok(provider)
     }
 
-    pub async fn get_provider_with_keys(&self, name: &str, strategy: &Option<KeyLogStrategy>) -> Result<Option<Provider>> {
-        if let Some(mut p) = self.get_provider(name).await? {
-            let keys = self.get_provider_keys(&p.name, strategy).await?;
-            p.api_keys = keys;
-            Ok(Some(p))
-        } else {
-            Ok(None)
-        }
-    }
+    
 
     pub async fn list_providers(&self) -> Result<Vec<Provider>> {
         let conn = self.connection.lock().await;
