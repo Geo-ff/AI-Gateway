@@ -3,6 +3,7 @@ use crate::logging::RequestLog;
 use crate::logging::types::{REQ_TYPE_CHAT_ONCE};
 use crate::config::settings::{KeyLogStrategy, LoggingConfig};
 use crate::providers::openai::ChatCompletionResponse;
+use crate::error::GatewayError;
 use crate::server::AppState;
 
 // 记录聊天请求日志（包含响应耗时和 token 使用情况）
@@ -12,7 +13,7 @@ pub async fn log_chat_request(
     model: &str,
     provider_name: &str,
     api_key_raw: &str,
-    response: &Result<ChatCompletionResponse, reqwest::Error>,
+    response: &Result<ChatCompletionResponse, GatewayError>,
 ) {
     let end_time = Utc::now();
     let response_time_ms = (end_time - start_time).num_milliseconds();

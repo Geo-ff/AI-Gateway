@@ -33,6 +33,7 @@
 - tracing 时间本地化：
   - `src/logging/time.rs`
   - `src/main.rs`
+- 依赖：新增 `reqwest-eventsource` 用于稳定 SSE 事件解析
 
 ### 回归要点
 - `GET /models/{provider}`：不进行任何写入/变更；`refresh=true` 仅从上游拉取返回。
@@ -43,3 +44,44 @@
 - KISS：接口职责单一，读写分离，时间格式统一。
 - YAGNI：不引入额外复杂配置；仅落地当前明确需求。
 - DRY/SOLID：复用时间与缓存接口，模块职责清晰（handlers 已拆分）。
+
+### 追加修复：非流式 SSE 回退聚合丢字问题（2025-09-27）
+- 现象：`/v1/chat/completions` 在 `stream=false` 下，个别上游仍以 `text/event-stream` 返回，网关按行解析时因跨 chunk 半行/半事件导致内容缺失，Markdown 渲染偶发缺字。
+- 处理：改造 OpenAI 客户端的 SSE 回退聚合逻辑，新增跨 chunk 缓冲：
+  - `line_buf`：保留末尾半行，等待下个 chunk 拼接。
+  - `event_buf`：按空行作为边界聚合多行 `data:` 形成完整事件，再 JSON 解析。
+  - 解析失败时不丢字符，原样追加到内容，确保“最多多字，不会少字”。
+- 影响文件：
+  - `src/providers/openai/client.rs`
+- 回归要点：
+  - 非流式正常返回 `application/json` 不受影响。
+  - 上游意外 SSE 返回时，聚合为一次性响应且不丢字符。
+
+### 追加优化：参考 ai-gateway 的逐事件转发流式实现（2025-09-27）
+- 背景：`ai-gateway/ai-gateway` 采用 `reqwest-eventsource` 将 SSE 事件逐条推送至下游，避免同一 chunk 内多个 `data:` 被丢弃。
+- 优化：我们的 `streaming_handlers.rs` 基于 `reqwest-eventsource` 的 `EventSource` 对齐实现，逐事件转发；下游不再丢首个之外的 `data:` 行。
+- 效果：
+  - 流式响应在大块分包/多事件同 chunk 场景下不再丢字符。
+  - `[DONE]` 到达时仅记录一次日志并正确完结；过程中尝试捕获 `usage` 聚合到日志。
+- 影响文件：
+  - `src/server/streaming_handlers.rs`
+
+### 进一步对齐：移除 bytes_stream 回退，统一使用 reqwest-eventsource（2025-09-27）
+- 背景：此前非流式在上游返回 SSE 时采用 `bytes_stream` 手工解析与聚合（冗余且维护成本高）。
+- 对齐：彻底移除旧的 `bytes_stream` 回退模块，统一改为基于 `reqwest-eventsource` 的事件聚合，实现与 `ai-gateway` 一致的行为。
+- 变更要点：
+  - `OpenAIProvider::chat_completions` 先尝试以 SSE 打开（`Accept: text/event-stream`），逐事件聚合；若不支持/失败，则回退为 JSON 一次性解析。
+  - 删除文件：`src/providers/openai/sse_fallback.rs`。
+  - 删除未使用的流式客户端实现（统一走 `server/streaming_handlers.rs`）。
+- 错误处理：统一返回 `GatewayError`，避免闭包式零散处理。
+- 影响文件：
+  - `src/providers/openai/client.rs`
+  - `src/providers/openai.rs`
+  - `src/server/provider_dispatch.rs`（错误类型统一）
+  - `src/server/handlers/chat.rs`（错误映射移除，直接传播统一错误）
+  - `src/server/request_logging.rs`（日志函数参数类型改为 `Result<.., GatewayError>`）
+- 依赖：本次不新增依赖；已使用 `reqwest-eventsource = "0.6.0"` 与仓库现有的 `futures-util`/`tokio`。
+
+回归建议
+- 非流式：在上游返回 `application/json` 与 `text/event-stream` 两种情况下分别验证，确认内容不丢字；特别针对 Markdown 场景做对比测试。
+- 流式：确认 `[DONE]` 正确终止，日志只落一次；网络中断后行为可接受（本轮未引入重连策略）。

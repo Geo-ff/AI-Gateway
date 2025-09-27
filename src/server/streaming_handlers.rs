@@ -4,6 +4,7 @@ use axum::{
 };
 use futures_util::StreamExt;
 use std::{convert::Infallible, sync::{Arc, Mutex}};
+use reqwest_eventsource::{Event, RequestBuilderExt};
 
 use chrono::Utc;
 use crate::providers::openai::{ChatCompletionRequest, Usage};
@@ -40,22 +41,19 @@ pub async fn stream_chat_completions(
     // 根据供应商类型创建流
     match selected.provider.api_type {
         crate::config::ProviderType::OpenAI => {
-            // 直接在这里创建 OpenAI 流，避免生命周期问题
+            // 使用 reqwest-eventsource 建立稳定的 SSE 事件源
             let client = reqwest::Client::new();
             let url = format!("{}/v1/chat/completions", selected.provider.base_url.trim_end_matches('/'));
 
-            // 创建流式请求
             let mut stream_request = modified_request.clone();
             stream_request.stream = true;
 
-            let response = client
+            let request_builder = client
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", selected.api_key))
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
-                .json(&stream_request)
-                .send()
-                .await?;
+                .json(&stream_request);
 
             // 用于记录 usage 和避免重复日志
             let usage_cell: Arc<Mutex<Option<Usage>>> = Arc::new(Mutex::new(None));
@@ -67,81 +65,73 @@ pub async fn stream_chat_completions(
             // 准备 api_key 日志值（按策略处理）
             let api_key_ref = api_key_hint(&app_state.config.logging, &selected.api_key);
 
-            let stream = response
-                .bytes_stream()
-                .map(move |item| -> Result<axum::response::sse::Event, Infallible> {
-                    match item {
-                        Ok(bytes) => {
-                            let text = String::from_utf8_lossy(&bytes);
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<axum::response::sse::Event>();
+            tokio::spawn(async move {
+                let mut es = match request_builder.eventsource() {
+                    Ok(es) => es,
+                    Err(e) => {
+                        tracing::error!("Failed to open eventsource: {}", e);
+                        let _ = tx.send(axum::response::sse::Event::default().data(format!("error: {}", e)));
+                        return;
+                    }
+                };
 
-                            // 解析 Server-Sent Events 格式
-                            let mut first_event_data: Option<String> = None;
-                            for line in text.lines() {
-                                if line.starts_with("data: ") {
-                                    let data = &line[6..]; // 去掉 "data: " 前缀
+                while let Some(ev) = es.next().await {
+                    match ev {
+                        Ok(Event::Open) => {
+                            // ignore
+                        }
+                        Ok(Event::Message(m)) => {
+                            if m.data == "[DONE]" {
+                                if !logged_flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                                    let usage_snapshot = usage_cell.lock().unwrap().clone();
+                                    let state_for_log = app_state_clone.clone();
+                                    let model_for_log = model_with_prefix.clone();
+                                    let provider_for_log = provider_name.clone();
+                                    let api_key_for_log = api_key_ref.clone();
+                                    let started_at = start_time;
+                                    tokio::spawn(async move {
+                                        let end_time = Utc::now();
+                                        let response_time_ms = (end_time - started_at).num_milliseconds();
+                                        let (prompt, completion, total) = usage_snapshot
+                                            .map(|u| (Some(u.prompt_tokens), Some(u.completion_tokens), Some(u.total_tokens)))
+                                            .unwrap_or((None, None, None));
 
-                                    if data == "[DONE]" {
-                                        // 在流结束时记录日志（仅一次）
-                                        if !logged_flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                                            let usage_snapshot = usage_cell.lock().unwrap().clone();
-                                            let state_for_log = app_state_clone.clone();
-                                            let model_for_log = model_with_prefix.clone();
-                                            let provider_for_log = provider_name.clone();
-                                            let api_key_for_log = api_key_ref.clone();
-                                            let started_at = start_time;
-                                            tokio::spawn(async move {
-                                                let end_time = Utc::now();
-                                                let response_time_ms = (end_time - started_at).num_milliseconds();
-                                                let (prompt, completion, total) = usage_snapshot
-                                                    .map(|u| (Some(u.prompt_tokens), Some(u.completion_tokens), Some(u.total_tokens)))
-                                                    .unwrap_or((None, None, None));
-
-                                                let log = RequestLog {
-                                                    id: None,
-                                                    timestamp: started_at,
-                                                    method: "POST".to_string(),
-                                                    path: "/v1/chat/completions".to_string(),
-                                                    request_type: REQ_TYPE_CHAT_STREAM.to_string(),
-                                                    model: Some(model_for_log),
-                                                    provider: Some(provider_for_log),
-                                                    api_key: api_key_for_log,
-                                                    status_code: 200,
-                                                    response_time_ms,
-                                                    prompt_tokens: prompt,
-                                                    completion_tokens: completion,
-                                                    total_tokens: total,
-                                                };
-                                                if let Err(e) = state_for_log.log_store.log_request(log).await {
-                                                    tracing::error!("Failed to log streaming request: {}", e);
-                                                }
-                                            });
+                                        let log = RequestLog {
+                                            id: None,
+                                            timestamp: started_at,
+                                            method: "POST".to_string(),
+                                            path: "/v1/chat/completions".to_string(),
+                                            request_type: REQ_TYPE_CHAT_STREAM.to_string(),
+                                            model: Some(model_for_log),
+                                            provider: Some(provider_for_log),
+                                            api_key: api_key_for_log,
+                                            status_code: 200,
+                                            response_time_ms,
+                                            prompt_tokens: prompt,
+                                            completion_tokens: completion,
+                                            total_tokens: total,
+                                        };
+                                        if let Err(e) = state_for_log.log_store.log_request(log).await {
+                                            tracing::error!("Failed to log streaming request: {}", e);
                                         }
-                                        return Ok(axum::response::sse::Event::default().data("[DONE]"));
-                                    }
+                                    });
+                                }
+                                let _ = tx.send(axum::response::sse::Event::default().data("[DONE]"));
+                                break;
+                            }
 
-                                    // 尝试从 JSON 数据中提取 usage
-                                    if let Ok(chunk) = serde_json::from_str::<StreamChatCompletionChunk>(data) {
-                                        if let Some(usage) = chunk.usage {
-                                            *usage_cell.lock().unwrap() = Some(usage);
-                                        }
-                                    }
-
-                                    if first_event_data.is_none() {
-                                        first_event_data = Some(data.to_string());
-                                    }
+                            // 尝试从事件 JSON 捕获 usage
+                            if let Ok(chunk) = serde_json::from_str::<StreamChatCompletionChunk>(&m.data) {
+                                if let Some(u) = &chunk.usage {
+                                    *usage_cell.lock().unwrap() = Some(u.clone());
                                 }
                             }
 
-                            // 返回首个 data 事件；若没有则返回原始文本
-                            if let Some(data) = first_event_data {
-                                Ok(axum::response::sse::Event::default().data(data))
-                            } else {
-                                Ok(axum::response::sse::Event::default().data(text.to_string()))
-                            }
+                            let _ = tx.send(axum::response::sse::Event::default().data(m.data));
                         }
                         Err(e) => {
                             tracing::error!("Stream error: {}", e);
-                            // 出错时也尝试记录一次失败日志
                             if !logged_flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
                                 let state_for_log = app_state_clone.clone();
                                 let model_for_log = model_with_prefix.clone();
@@ -171,12 +161,18 @@ pub async fn stream_chat_completions(
                                     }
                                 });
                             }
-                            Ok(axum::response::sse::Event::default().data(format!("error: {}", e)))
+                            let _ = tx.send(axum::response::sse::Event::default().data(format!("error: {}", e)));
+                            break;
                         }
                     }
-                });
+                }
 
-            Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
+                es.close();
+            });
+
+            let out_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx)
+                .map(Ok::<_, Infallible>);
+            Ok(Sse::new(out_stream).keep_alive(axum::response::sse::KeepAlive::default()))
         }
         crate::config::ProviderType::Anthropic => Err(GatewayError::Config("Anthropic streaming not implemented".into())),
     }

@@ -24,8 +24,7 @@ pub async fn chat_completions(
         let response = call_provider_with_parsed_model(&selected, &request, &parsed_model).await;
 
         log_chat_request(&app_state, start_time, &request.model, &selected.provider.name, &selected.api_key, &response).await;
-        let json_response = response.map(Json).map_err(GatewayError::Http)?;
+        let json_response = response.map(Json)?;
         Ok(json_response.into_response())
     }
 }
-
