@@ -8,7 +8,7 @@ use reqwest_eventsource::{Event, RequestBuilderExt};
 
 use chrono::Utc;
 use crate::providers::openai::{ChatCompletionRequest, Usage};
-use crate::providers::streaming::StreamChatCompletionChunk;
+use async_openai::types::{CreateChatCompletionStreamResponse, ChatCompletionStreamOptions};
 use crate::server::AppState;
 use crate::server::provider_dispatch::select_provider_for_model;
 use crate::server::model_redirect::apply_model_redirects;
@@ -23,7 +23,7 @@ pub async fn stream_chat_completions(
     Json(mut request): Json<ChatCompletionRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
     // 如果用户没有请求流式传输，使用常规处理
-    if !request.stream {
+    if !request.stream.unwrap_or(false) {
         return Err(GatewayError::Config("stream=false for streaming endpoint".into()));
     }
 
@@ -46,7 +46,9 @@ pub async fn stream_chat_completions(
             let url = format!("{}/v1/chat/completions", selected.provider.base_url.trim_end_matches('/'));
 
             let mut stream_request = modified_request.clone();
-            stream_request.stream = true;
+            stream_request.stream = Some(true);
+            // 对齐 ai-gateway：明确请求在流式增量中返回 usage
+            stream_request.stream_options = Some(ChatCompletionStreamOptions { include_usage: true });
 
             let request_builder = client
                 .post(&url)
@@ -66,6 +68,7 @@ pub async fn stream_chat_completions(
             let api_key_ref = api_key_hint(&app_state.config.logging, &selected.api_key);
 
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<axum::response::sse::Event>();
+            let usage_cell_for_task = usage_cell.clone();
             tokio::spawn(async move {
                 let mut es = match request_builder.eventsource() {
                     Ok(es) => es,
@@ -84,7 +87,7 @@ pub async fn stream_chat_completions(
                         Ok(Event::Message(m)) => {
                             if m.data == "[DONE]" {
                                 if !logged_flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                                    let usage_snapshot = usage_cell.lock().unwrap().clone();
+                                    let usage_snapshot = usage_cell_for_task.lock().unwrap().clone();
                                     let state_for_log = app_state_clone.clone();
                                     let model_for_log = model_with_prefix.clone();
                                     let provider_for_log = provider_name.clone();
@@ -96,7 +99,6 @@ pub async fn stream_chat_completions(
                                         let (prompt, completion, total) = usage_snapshot
                                             .map(|u| (Some(u.prompt_tokens), Some(u.completion_tokens), Some(u.total_tokens)))
                                             .unwrap_or((None, None, None));
-
                                         let log = RequestLog {
                                             id: None,
                                             timestamp: started_at,
@@ -122,10 +124,10 @@ pub async fn stream_chat_completions(
                                 break;
                             }
 
-                            // 尝试从事件 JSON 捕获 usage
-                            if let Ok(chunk) = serde_json::from_str::<StreamChatCompletionChunk>(&m.data) {
+                            // 捕获上游 usage（若上游提供）
+                            if let Ok(chunk) = serde_json::from_str::<CreateChatCompletionStreamResponse>(&m.data) {
                                 if let Some(u) = &chunk.usage {
-                                    *usage_cell.lock().unwrap() = Some(u.clone());
+                                    *usage_cell_for_task.lock().unwrap() = Some(u.clone());
                                 }
                             }
 

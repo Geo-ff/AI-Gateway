@@ -12,7 +12,7 @@ pub async fn chat_completions(
     State(app_state): State<Arc<AppState>>,
     Json(request): Json<ChatCompletionRequest>,
 ) -> Result<Response, GatewayError> {
-    if request.stream {
+    if request.stream.unwrap_or(false) {
         let response = stream_chat_completions(State(app_state), Json(request)).await?;
         Ok(response.into_response())
     } else {

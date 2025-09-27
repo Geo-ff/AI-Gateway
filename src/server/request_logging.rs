@@ -31,9 +31,9 @@ pub async fn log_chat_request(
         api_key,
         status_code: if response.is_ok() { 200 } else { 500 },
         response_time_ms,
-        prompt_tokens: response.as_ref().ok().map(|r| r.usage.prompt_tokens),
-        completion_tokens: response.as_ref().ok().map(|r| r.usage.completion_tokens),
-        total_tokens: response.as_ref().ok().map(|r| r.usage.total_tokens),
+        prompt_tokens: response.as_ref().ok().and_then(|r| r.usage.as_ref().map(|u| u.prompt_tokens)),
+        completion_tokens: response.as_ref().ok().and_then(|r| r.usage.as_ref().map(|u| u.completion_tokens)),
+        total_tokens: response.as_ref().ok().and_then(|r| r.usage.as_ref().map(|u| u.total_tokens)),
         error_message: response.as_ref().err().map(|e| e.to_string()),
     };
 

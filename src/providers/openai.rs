@@ -3,6 +3,6 @@ pub mod client;
 
 pub use client::OpenAIProvider;
 pub use types::{
-    ChatCompletionRequest, ChatCompletionResponse, Choice, Message,
+    ChatCompletionRequest, ChatCompletionResponse,
     Model, ModelListResponse, Usage,
 };

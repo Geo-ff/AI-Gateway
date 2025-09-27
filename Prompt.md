@@ -874,6 +874,175 @@ models_endpoint = "/v1/models"
 好的，请你补上 GET /providers/{provider}/keys，并在 docs/Develop1-2.md 说明接口语义和安全注意事项
 
 
+
+
+
+
+
+
+你是一名经验丰富的软件开发工程师，专注于构建高性能、健壮的解决方案。
+
+你的任务是：**审查、理解并迭代式地改进现有代码库**
+
+现在，我们将工作重心重新放到 /v1/chat/completions 接口上来，目前这个接口功能和我们已有的 openai 数据结构是很脆弱的：
+1. 我的上游供应商提供了一个可以识别图片的模型，但是通过我们当前项目的接口进行转发对话的时候，却返回了：OK Failed to deserialize the JSON body into the target type: messages[0].content: invalid type: sequence, expected a string at line 1 column 90 错误，这很显然是不合理的
+
+所以当前的工作重心是需要你对齐 ai-gateway/ai-gateway 路径下的 ai-gateway 项目的对于识图模型的解决方案，因为直接使用成熟的解决方案会比我们这样逐步修改提高代码复杂性的可靠性更高。
+我猜测对于图片的处理是将图片转为 base64 编码来进行处理，但是这个是我的猜测，具体实现方式你一定要对齐 ai-gateway/ai-gateway 路径下的 ai-gateway 项目的成熟的解决方案。
+如果你发现 ai-gateway 项目采用了额外的依赖来解决了这个问题，那么请你将需要添加的依赖告诉我，我来进行添加，
+
+如果你在编码的过程中碰到语法了错误和问题，请你使用 context7 MCP 来获取最新的开发文档来解决。
+
+
+在你完成所有的任务之后，将任务日志也精要地追加到 docs/Develop2.md 文件中去，并且使用中文。
+
+在整个工作流程中，你必须内化并严格遵循以下核心编程原则，确保你的每次输出和建议都体现这些理念：
+
+- **简单至上 (KISS):** 追求代码和设计的极致简洁与直观，避免不必要的复杂性。
+- **精益求精 (YAGNI):** 仅实现当前明确所需的功能，抵制过度设计和不必要的未来特性预留。
+- **坚实基础 (SOLID):**
+  - **S (单一职责):** 各组件、类、函数只承担一项明确职责。
+  - **O (开放/封闭):** 功能扩展无需修改现有代码。
+  - **L (里氏替换):** 子类型可无缝替换其基类型。
+  - **I (接口隔离):** 接口应专一，避免“胖接口”。
+  - **D (依赖倒置):** 依赖抽象而非具体实现。
+- **杜绝重复 (DRY):** 识别并消除代码或逻辑中的重复模式，提升复用性。
+
+
+
+
+很好的修改，现在已经可以正常对图片进行对话了。
+1. 当然要加入 async-openai 并完全替换本地类型，以获得最严谨的类型约束与更全字段覆盖了。还记得我和你说的吗？如果有必要的话，引入新的依赖可以精简代码并获得更好的效果的话，那么就要加上依赖，而不是全都自己手写。我已经加上了 async-openai = "0.29.3" 依赖了，请你开始修改吧！
+2. 不需要添加一个最小 curl 示例（含 base64 图片）到 docs 里
+
+
+
+
+1. 当前项目中出现了错误，请你仔细修复：
+
+```
+error[E0432]: unresolved import `async_openai::types::Usage`
+  --> src/providers/openai/types.rs:14:5
+   |
+14 |     Usage,
+   |     ^^^^^ no `Usage` in `types`
+   |
+   = help: consider importing this struct instead:
+           async_openai::types::responses::Usage
+
+error[E0432]: unresolved import `crate::providers::openai::Role`
+ --> src/providers/anthropic.rs:2:120
+  |
+2 | use crate::providers::openai::{ChatCompletionRequest, ChatCompletionResponse, Message as OpenAIMessage, Choice, Usage, Role};
+  |                                                                                                                        ^^^^ no `Role` in `providers::openai`
+  |
+  = help: consider importing one of these enums instead:
+          crate::providers::anthropic::oai::responses::Role
+          crate::providers::openai::types::Role
+          async_openai::types::Role
+          async_openai::types::responses::Role
+
+error[E0432]: unresolved import `crate::providers::openai::Usage`
+  --> src/server/streaming_handlers.rs:10:55
+   |
+10 | use crate::providers::openai::{ChatCompletionRequest, Usage};
+   |                                                       ^^^^^ no `Usage` in `providers::openai`
+   |
+   = help: consider importing one of these items instead:
+           crate::providers::openai::types::Usage
+           async_openai::types::responses::Usage
+
+error[E0432]: unresolved import `super::types::FinishReason`
+  --> src/providers/openai/client.rs:10:101
+   |
+10 |     ChatCompletionRequest, ChatCompletionResponse, Choice, Message, ModelListResponse, Usage, Role, FinishReason,
+   |                                                                                                     ^^^^^^^^^^^^ no `FinishReason` in `providers::openai::types`
+   |
+   = help: consider importing this enum instead:
+           async_openai::types::FinishReason
+
+warning: unused imports: `CompletionTokensDetails`, `CreateChatCompletionStreamResponse`, `Logprobs as LogProbs`, and `PromptTokensDetails`
+  --> src/providers/openai/types.rs:9:5
+   |
+ 9 |     CreateChatCompletionStreamResponse,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+10 |     Logprobs as LogProbs,
+   |     ^^^^^^^^^^^^^^^^^^^^
+11 |     PromptTokensDetails,
+   |     ^^^^^^^^^^^^^^^^^^^
+12 |     CompletionTokensDetails,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+error[E0308]: mismatched types
+  --> src/providers/openai/client.rs:86:38
+   |
+86 | ...                   created: Utc::now().timestamp() as u64,
+   |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `u32`, found `u64`
+
+warning: use of deprecated field `async_openai::types::CreateChatCompletionRequest::max_tokens`
+  --> src/providers/anthropic.rs:72:25
+   |
+72 |             max_tokens: openai_req.max_tokens.unwrap_or(1024),
+   |                         ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated field `async_openai::types::ChatCompletionResponseMessage::function_call`
+  --> src/providers/anthropic.rs:92:17
+   |
+92 |                 function_call: None,
+   |                 ^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+   --> src/providers/anthropic.rs:102:22
+    |
+102 |             created: chrono::Utc::now().timestamp() as u64,
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `u32`, found `u64`
+
+error[E0063]: missing fields `service_tier` and `system_fingerprint` in initializer of `CreateChatCompletionResponse`
+  --> src/providers/anthropic.rs:99:9
+   |
+99 |         ChatCompletionResponse {
+   |         ^^^^^^^^^^^^^^^^^^^^^^ missing `service_tier` and `system_fingerprint`
+
+Some errors have detailed explanations: E0063, E0308, E0432.
+For more information about an error, try `rustc --explain E0063`.
+warning: `gateway` (bin "gateway") generated 3 warnings
+error: could not compile `gateway` (bin "gateway") due to 7 previous errors; 3 warnings emitted
+```
+
+2. 移除现已无用的本地流式结构定义 src/providers/streaming.rs
+3. Anthropic 有关的部分暂时先放着，先解决已有的问题再进行处理
+
+
+
+
+这次编译通过了而且项目也成功启动并且使用也是正常的。但是很显然，因为你的修改，导致现在请求后的日志中并不能包含 token 统计了。之前很显然是可以的，所以请你：
+1. 将我们原本有的统计功能加回来
+2. 不要因为将类型改为了 async-openai 带的类型而将我们原有的好的功能给抛弃掉
+3. 我还是希望你再仔细看看 ai-gateway/ai-gateway 路径下的 ai-gateway 项目是如何处理这个情况的，如果这个项目也没有记录上游 token 信息的话，那我们要保留项目中原有的记录功能，这就是我们的特色
+4. 在你完成上面的修改后，max_tokens、function_call 这两个特性也要进行实现，因为这两个功能是很重要的，也请你参考 ai-gateway/ai-gateway 路径下的 ai-gateway 项目来进行实现
+
+
+
+我刚刚对于模型的工具调用功能进行了测试，我发现工作是正常的，token 消耗日志也恢复了正常。不过我还有一些疑问：
+1. 你说“非流式 SSE 聚合响应依旧保底返回 Usage（为空则填充 0），但当出现 function_call/tool_calls 时改为回退 JSON，避免丢失结构”，我可以理解为我们当前项目有两种策略么?这个是有必要的吗？没有办法通过一个统一的超集去覆盖到所有情况吗？ai-gateway/ai-gateway 路径下的 ai-gateway 项目也是这样进行处理的吗？
+2. 如果必要的话再精简一下未使用的 re-export 以减少编译警告，如果没有必要或者可能会导致歧义，那么不要精简
+3. 如果 ai-gateway/ai-gateway 路径下的 ai-gateway 项目有对 Anthropic 的多模态转译与 system/developer 消息优化对齐的成熟的思路，那么请你将其应用到我们当前项目中来。如果有需要添加的依赖，请你告诉我
+
+
+
+
+1. 如果你可以在保留我们项目原有的 token 等记录功能的同时完全对齐 ai-gateway 并进一步降低复杂度的话，那么请你这么做来进一步优化和对齐。并且在你这么做之后详细告诉我和我们原来的区别是什么，以及对齐是否是有必要的
+2. 我已经按照你的要求添加好了 anthropic-ai-sdk = "0.2.25" 依赖，你可以进行使用和继续对齐 ai-gateway 对 Anthropic 的处理逻辑了
+
+
+
+
+
+
 GET /providers/{provider}/keys
 行为：返回该供应商密钥的掩码列表
 加一个仅供管理员使用的“明文查看”开关吗？默认继续保持安全的掩码返回。
@@ -882,6 +1051,11 @@ GET /providers/{provider}/keys
 当前项目中，你已经为我实现了当我删除掉一个供应商的时候，同步删除其密钥和缓存的模型。然后我们不是现在又实现了对于密钥删除的日志记录吗？所以请你将这些日志都同步记录进去可以么？如果过于复杂，或者其实没有必要，则不用实现。
 
 
+我们现在可以开始实现管理员和普通用户的功能了。请你先实现：
+1. 如果你知道 OneApi 或者 NewApi 这任意一个项目的话，你就知道这两个 AI 网关项目是管理员才可以创建供应商和添加修改模型和为每个供应商的密钥进行管理，还可以对用户进行 curd 的管理，同时可以修改每个用户的“余额”和可以使用的模型。并且管理员还可以创建属于自己的“令牌”，通过这个新的“令牌”来去调用添加好的供应商提供的模型（而且管理员也可以限制自己的某个令牌可以调用的模型，以及可以使用的余额，超过了就自动禁用令牌，而且还可以设定令牌的过期时间），从而实现所有的供应商的模型聚合，达成 AI 网关的目的；而普通用户的权利只有创建属于自己的模型调用“令牌”的权限，并且也无法修改自己的用户“余额”，只能修改自己对于每个“令牌”的可用余额和过期时间以及可以调用的模型（也就是在管理员对这个用户开放的模型权限的基础上，用户可以再单独对自己的某个令牌做模型调用限制），这个“令牌”可用“余额”看似可以随意修改，但是会受到用户本身的“余额”的约束。
 
+
+3. 在你完成上面的任务之后，为当前的对话接口加一个超时机制，因为我在测试的时候碰到过上游供应商很久都没有返回的情况，但是却一直在等待，所以请你先进
+数据库使用 Postgresql 
 识图、思考、工具调用、MCP
 密钥分发、TUN 或者 GUI
