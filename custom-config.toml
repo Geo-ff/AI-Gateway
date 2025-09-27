@@ -7,10 +7,3 @@ port = 8080
 
 [logging]
 database_path = "data/gateway.db"
-
-[providers.openai]
-name = "openai"
-api_type = "openai"
-base_url = "https://apis.134257.xyz"
-api_keys = ["sk-giseB9gAQ3zi7jNRwXURl7K24vfbDvxchsDefOxysHAeeX0c"]
-models_endpoint = "/v1/models"

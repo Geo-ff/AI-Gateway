@@ -53,17 +53,22 @@ impl DatabaseLogger {
         Ok(())
     }
 
-    pub async fn remove_provider_key(&self, provider: &str, key: &str, strategy: &Option<KeyLogStrategy>) -> Result<()> {
+    pub async fn remove_provider_key(&self, provider: &str, key: &str, strategy: &Option<KeyLogStrategy>) -> Result<bool> {
         let conn = self.connection.lock().await;
         // 删除明文或密文匹配
         // 优先删除密文匹配
         let (stored, enc) = crate::crypto::protect(strategy, provider, key);
-        let _ = conn.execute(
+        let mut affected = conn.execute(
             "DELETE FROM provider_keys WHERE provider = ?1 AND key_value = ?2",
             (provider, stored),
         )?;
         // 兼容已存明文的情况
-        if enc { let _ = conn.execute("DELETE FROM provider_keys WHERE provider = ?1 AND key_value = ?2", (provider, key))?; }
-        Ok(())
+        if enc {
+            affected += conn.execute(
+                "DELETE FROM provider_keys WHERE provider = ?1 AND key_value = ?2",
+                (provider, key),
+            )?;
+        }
+        Ok(affected > 0)
     }
 }

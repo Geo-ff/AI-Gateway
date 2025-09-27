@@ -5,7 +5,6 @@ use crate::error::{GatewayError, Result as AppResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
-    pub providers: HashMap<String, Provider>,
     pub load_balancing: LoadBalancing,
     pub server: ServerConfig,
     pub logging: LoggingConfig,
@@ -94,11 +93,7 @@ impl Settings {
     pub fn load() -> AppResult<Self> {
         let config_path = Self::find_config_file()?;
         let config_content = std::fs::read_to_string(&config_path)?;
-        let mut settings: Settings = toml::from_str(&config_content)?;
-
-        for (name, provider) in &mut settings.providers {
-            provider.name = name.clone();
-        }
+        let settings: Settings = toml::from_str(&config_content)?;
 
         Ok(settings)
     }

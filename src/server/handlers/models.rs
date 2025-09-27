@@ -44,10 +44,10 @@ pub async fn list_provider_models(
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| format!("/models/{}", provider_name));
 
-    let provider = match app_state.config.providers.get(&provider_name) {
+    let provider = match app_state.db.get_provider(&provider_name).await.map_err(GatewayError::Db)? {
         Some(p) => p,
         None => {
-            let ge = crate::error::GatewayError::Config(format!("Provider '{}' not found", provider_name));
+            let ge = crate::error::GatewayError::NotFound(format!("Provider '{}' not found", provider_name));
             let code = ge.status_code().as_u16();
             log_simple_request(
                 &app_state,
@@ -87,37 +87,16 @@ pub async fn list_provider_models(
         return Ok(resp.into_response());
     }
 
-    let api_key = {
-        // 优先使用数据库中的动态密钥
-        if let Ok(db_keys) = app_state
-            .db
-            .get_provider_keys(&provider_name, &app_state.config.logging.key_log_strategy)
-            .await
-        {
-            if let Some(k) = db_keys.first().cloned() {
-                k
-            } else if let Some(k) = provider.api_keys.first().cloned() {
-                k
-            } else {
-                let ge: GatewayError = crate::routing::load_balancer::BalanceError::NoApiKeysAvailable.into();
-                let code = ge.status_code().as_u16();
-                log_simple_request(
-                    &app_state,
-                    start_time,
-                    "GET",
-                    &full_path,
-                    REQ_TYPE_PROVIDER_MODELS_LIST,
-                    None,
-                    Some(provider_name.clone()),
-                    code,
-                    None,
-                )
-                .await;
-                return Err(ge);
-            }
-        } else if let Some(k) = provider.api_keys.first().cloned() {
-            k
-        } else {
+    let api_key = match app_state
+        .db
+        .get_provider_keys(&provider_name, &app_state.config.logging.key_log_strategy)
+        .await
+        .map_err(GatewayError::Db)?
+        .first()
+        .cloned()
+    {
+        Some(k) => k,
+        None => {
             let ge: GatewayError = crate::routing::load_balancer::BalanceError::NoApiKeysAvailable.into();
             let code = ge.status_code().as_u16();
             log_simple_request(
@@ -136,7 +115,7 @@ pub async fn list_provider_models(
         }
     };
 
-    let upstream_models = match fetch_provider_models(provider, &api_key).await {
+    let upstream_models = match fetch_provider_models(&provider, &api_key).await {
         Ok(models) => models,
         Err(e) => {
             let code = e.status_code().as_u16();

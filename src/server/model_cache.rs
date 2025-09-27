@@ -38,32 +38,7 @@ pub async fn get_cached_models_for_provider(
 }
 
 // 检查所有供应商的缓存是否都在有效期内（任一失败或错误均视为不新鲜）
-pub async fn is_cache_fresh_for_all(app_state: &AppState, max_age_minutes: i64) -> bool {
-    for provider_name in app_state.config.providers.keys() {
-        match app_state
-            .model_cache
-            .is_cache_fresh(provider_name, max_age_minutes)
-            .await
-        {
-            Ok(true) => {}
-            _ => return false,
-        }
-    }
-    true
-}
-
-// 检查某个供应商的缓存是否在有效期内（错误记为不新鲜）
-pub async fn is_cache_fresh_for_provider(
-    app_state: &AppState,
-    provider_name: &str,
-    max_age_minutes: i64,
-) -> bool {
-    app_state
-        .model_cache
-        .is_cache_fresh(provider_name, max_age_minutes)
-        .await
-        .unwrap_or(false)
-}
+// 自动刷新机制已移除，避免影响模型名称稳定性。
 
 // 写入（覆盖）某供应商的模型缓存
 pub async fn cache_models_for_provider(

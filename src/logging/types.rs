@@ -7,8 +7,14 @@ pub const REQ_TYPE_MODELS_LIST: &str = "models_list";
 pub const REQ_TYPE_PROVIDER_MODELS_LIST: &str = "provider_models_list";
 pub const REQ_TYPE_PROVIDER_KEY_ADD: &str = "provider_key_add";
 pub const REQ_TYPE_PROVIDER_KEY_DELETE: &str = "provider_key_delete";
+pub const REQ_TYPE_PROVIDER_KEY_LIST: &str = "provider_key_list";
 pub const REQ_TYPE_PROVIDER_CACHE_UPDATE: &str = "provider_models_cache_update";
 pub const REQ_TYPE_PROVIDER_CACHE_DELETE: &str = "provider_models_cache_delete";
+pub const REQ_TYPE_PROVIDER_CREATE: &str = "provider_create";
+pub const REQ_TYPE_PROVIDER_UPDATE: &str = "provider_update";
+pub const REQ_TYPE_PROVIDER_DELETE: &str = "provider_delete";
+pub const REQ_TYPE_PROVIDER_GET: &str = "provider_get";
+pub const REQ_TYPE_PROVIDER_LIST: &str = "provider_list";
 
 #[derive(Debug, Clone)]
 pub struct RequestLog {
@@ -36,4 +42,13 @@ pub struct CachedModel {
     pub created: u64,
     pub owned_by: String,
     pub cached_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderOpLog {
+    pub id: Option<i64>,
+    pub timestamp: DateTime<Utc>,
+    pub operation: String,
+    pub provider: Option<String>,
+    pub details: Option<String>,
 }

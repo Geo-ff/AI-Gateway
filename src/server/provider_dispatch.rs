@@ -10,50 +10,53 @@ use crate::error::GatewayError;
 pub async fn select_provider_for_model(
     app_state: &AppState,
     model_name: &str,
-) -> Result<(SelectedProvider, ParsedModel), BalanceError> {
+) -> Result<(SelectedProvider, ParsedModel), GatewayError> {
     let parsed_model = ParsedModel::parse(model_name);
 
-    // 如果解析出了供应商前缀，尝试直接匹配该供应商
+    // 如果解析出了供应商前缀，尝试直接匹配该供应商（从数据库读取）
     if let Some(provider_name) = &parsed_model.provider_name {
-        if let Some(provider_config) = app_state.config.providers.get(provider_name) {
-            // 优先从数据库获取动态密钥
+        if let Some(provider) = app_state
+            .db
+            .get_provider(provider_name)
+            .await
+            .ok()
+            .flatten()
+        {
             let db_keys = app_state
                 .db
                 .get_provider_keys(provider_name, &app_state.config.logging.key_log_strategy)
                 .await
                 .unwrap_or_default();
-            if let Some(api_key) = db_keys.first().cloned().or_else(|| provider_config.api_keys.first().cloned()) {
-                let selected = SelectedProvider { provider: provider_config.clone(), api_key };
+            if let Some(api_key) = db_keys.first().cloned() {
+                let selected = SelectedProvider { provider, api_key };
                 return Ok((selected, parsed_model));
             } else {
-                return Err(BalanceError::NoApiKeysAvailable);
+                return Err(GatewayError::from(BalanceError::NoApiKeysAvailable));
             }
+        } else {
+            // 指定供应商不存在
+            return Err(GatewayError::NotFound(format!("Provider '{}' not found", provider_name)));
         }
-        // 指定供应商不存在
-        return Err(BalanceError::NoProvidersAvailable);
     }
 
     // 没有指定供应商前缀，使用负载均衡策略选择
-    let selected = select_provider(app_state).await?;
+    let selected = select_provider(app_state).await.map_err(GatewayError::from)?;
     Ok((selected, parsed_model))
 }
 
-// 基于当前配置选择一个可用的供应商（保留原有逻辑）
+// 基于数据库中可用的供应商进行选择（替代文件配置）
 pub async fn select_provider(app_state: &AppState) -> Result<SelectedProvider, BalanceError> {
-    let providers: Vec<_> = app_state.config.providers.values().cloned().collect();
-    let load_balancer = LoadBalancer::new(providers, app_state.config.load_balancing.strategy.clone());
-    let mut selected = load_balancer.select_provider()?;
-    // 覆盖密钥为数据库动态密钥（若存在）
-    if let Some(db_keys) = app_state
+    // 从数据库读取所有供应商，并为其填充动态密钥
+    let mut providers = app_state
         .db
-        .get_provider_keys(&selected.provider.name, &app_state.config.logging.key_log_strategy)
+        .list_providers_with_keys(&app_state.config.logging.key_log_strategy)
         .await
-        .ok()
-    {
-        if let Some(first) = db_keys.first() {
-            selected.api_key = first.clone();
-        }
-    }
+        .map_err(|_| BalanceError::NoProvidersAvailable)?;
+
+    // 仅保留至少一个可用密钥的供应商
+    providers.retain(|p| !p.api_keys.is_empty());
+    let load_balancer = LoadBalancer::new(providers, app_state.config.load_balancing.strategy.clone());
+    let selected = load_balancer.select_provider()?;
     Ok(selected)
 }
 

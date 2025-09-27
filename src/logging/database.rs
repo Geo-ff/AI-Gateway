@@ -1,10 +1,8 @@
-use rusqlite::{Connection, Result, OptionalExtension};
-use chrono::{DateTime, Utc};
+use rusqlite::{Connection, Result};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::providers::openai::Model;
 use crate::logging::time::{to_beijing_string, parse_beijing_string};
-use crate::logging::types::{CachedModel, RequestLog};
+use crate::logging::types::RequestLog;
 
 #[derive(Clone)]
 pub struct DatabaseLogger {
@@ -85,6 +83,29 @@ impl DatabaseLogger {
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 PRIMARY KEY (provider, key_value)
+            )",
+            [],
+        )?;
+
+        // Providers table (dynamic provider metadata)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS providers (
+                name TEXT PRIMARY KEY,
+                api_type TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                models_endpoint TEXT
+            )",
+            [],
+        )?;
+
+        // Provider operations audit logs
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS provider_ops_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                provider TEXT,
+                details TEXT
             )",
             [],
         )?;

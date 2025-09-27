@@ -16,7 +16,6 @@ pub trait RequestLogStore: Send + Sync {
 pub trait ModelCache: Send + Sync {
     fn cache_models<'a>(&'a self, provider: &'a str, models: &'a [Model]) -> BoxFuture<'a, rusqlite::Result<()>>;
     fn get_cached_models<'a>(&'a self, provider: Option<&'a str>) -> BoxFuture<'a, rusqlite::Result<Vec<CachedModel>>>;
-    fn is_cache_fresh<'a>(&'a self, provider: &'a str, max_age_minutes: i64) -> BoxFuture<'a, rusqlite::Result<bool>>;
     fn cache_models_append<'a>(&'a self, provider: &'a str, models: &'a [Model]) -> BoxFuture<'a, rusqlite::Result<()>>;
     fn remove_cached_models<'a>(&'a self, provider: &'a str, ids: &'a [String]) -> BoxFuture<'a, rusqlite::Result<()>>;
 }
@@ -39,10 +38,6 @@ impl ModelCache for DatabaseLogger {
 
     fn get_cached_models<'a>(&'a self, provider: Option<&'a str>) -> BoxFuture<'a, rusqlite::Result<Vec<CachedModel>>> {
         Box::pin(async move { self.get_cached_models(provider).await })
-    }
-
-    fn is_cache_fresh<'a>(&'a self, provider: &'a str, max_age_minutes: i64) -> BoxFuture<'a, rusqlite::Result<bool>> {
-        Box::pin(async move { self.is_cache_fresh(provider, max_age_minutes).await })
     }
 
     fn cache_models_append<'a>(&'a self, provider: &'a str, models: &'a [Model]) -> BoxFuture<'a, rusqlite::Result<()>> {

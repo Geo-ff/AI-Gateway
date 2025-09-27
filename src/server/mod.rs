@@ -35,14 +35,6 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
         db: db_logger.clone(),
     };
 
-    // 将配置中的初始密钥导入数据库（若不存在）
-    for (name, provider) in &app_state.config.providers {
-        let _ = app_state
-            .db
-            .add_provider_keys_if_missing(name, &provider.api_keys, &app_state.config.logging.key_log_strategy)
-            .await;
-    }
-
     let app = handlers::routes()
         .with_state(Arc::new(app_state));
 

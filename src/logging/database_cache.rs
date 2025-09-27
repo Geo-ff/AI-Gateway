@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::{OptionalExtension, Result};
+use rusqlite::Result;
 
 use crate::logging::time::{parse_beijing_string, to_beijing_string};
 use crate::logging::types::CachedModel;
@@ -80,26 +80,6 @@ impl DatabaseLogger {
             let mut models = Vec::new();
             for model in model_iter { models.push(model?); }
             Ok(models)
-        }
-    }
-
-    pub async fn is_cache_fresh(&self, provider: &str, max_age_minutes: i64) -> Result<bool> {
-        let conn = self.connection.lock().await;
-
-        let mut stmt = conn.prepare(
-            "SELECT cached_at FROM cached_models WHERE provider = ?1 LIMIT 1"
-        )?;
-
-        let cache_time: Option<String> = stmt.query_row([provider], |row| {
-            Ok(row.get(0)?)
-        }).optional()?;
-
-        if let Some(cached_at_str) = cache_time {
-            let cached_at = parse_beijing_string(&cached_at_str).unwrap();
-            let age = Utc::now() - cached_at;
-            Ok(age.num_minutes() < max_age_minutes)
-        } else {
-            Ok(false)
         }
     }
 

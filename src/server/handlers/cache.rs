@@ -30,17 +30,24 @@ pub async fn update_provider_cache(
 ) -> Result<Response, GatewayError> {
     let start_time = Utc::now();
     let path = format!("/models/{}/cache", provider_name);
-    let provider = match app_state.config.providers.get(&provider_name) {
+    let provider = match app_state.db.get_provider(&provider_name).await.map_err(GatewayError::Db)? {
         Some(p) => p,
         None => {
-            let ge = GatewayError::Config(format!("Provider '{}' not found", provider_name));
+            let ge = GatewayError::NotFound(format!("Provider '{}' not found", provider_name));
             let code = ge.status_code().as_u16();
-            log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name), code, None).await;
+            log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), code, None).await;
             return Err(ge);
         }
     };
 
-    let api_key = match provider.api_keys.first().cloned() {
+    let api_key = match app_state
+        .db
+        .get_provider_keys(&provider_name, &app_state.config.logging.key_log_strategy)
+        .await
+        .map_err(GatewayError::Db)?
+        .first()
+        .cloned()
+    {
         Some(k) => k,
         None => {
             let ge: GatewayError = crate::routing::load_balancer::BalanceError::NoApiKeysAvailable.into();
@@ -51,9 +58,9 @@ pub async fn update_provider_cache(
     };
 
     let mode = payload.mode.as_deref().unwrap_or("selected");
-    let mut added = 0usize;
+    let added: usize;
     let mut removed = 0usize;
-    let mut updated = 0usize;
+    let updated: usize;
     let mut filtered = 0usize;
 
     let prev = crate::server::model_cache::get_cached_models_for_provider(&app_state, &provider_name)
@@ -62,7 +69,7 @@ pub async fn update_provider_cache(
 
     match mode {
         "all" => {
-            let mut upstream_models = fetch_provider_models(provider, &api_key).await?;
+            let mut upstream_models = fetch_provider_models(&provider, &api_key).await?;
             if let Some(ex) = payload.exclude.as_ref() {
                 use std::collections::HashSet;
                 let set: HashSet<_> = ex.iter().map(|s| s.as_str()).collect();
@@ -91,7 +98,7 @@ pub async fn update_provider_cache(
                 log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), code, Some("include cannot be empty for mode=selected".into())).await;
                 return Err(ge);
             }
-            let upstream_models = fetch_provider_models(provider, &api_key).await?;
+            let upstream_models = fetch_provider_models(&provider, &api_key).await?;
             use std::collections::{HashMap, HashSet};
             let include_ids: HashSet<_> = include.iter().map(|s| s.as_str()).collect();
             let selected: Vec<Model> = upstream_models
@@ -154,8 +161,8 @@ pub async fn delete_provider_cache(
 ) -> Result<Response, GatewayError> {
     let start_time = Utc::now();
     let path = format!("/models/{}/cache", provider_name);
-    if !app_state.config.providers.contains_key(&provider_name) {
-        let ge = GatewayError::Config(format!("Provider '{}' not found", provider_name));
+    if !app_state.db.provider_exists(&provider_name).await.map_err(GatewayError::Db)? {
+        let ge = GatewayError::NotFound(format!("Provider '{}' not found", provider_name));
         let code = ge.status_code().as_u16();
         log_simple_request(&app_state, start_time, "DELETE", &path, REQ_TYPE_PROVIDER_CACHE_DELETE, None, Some(provider_name.clone()), code, Some(format!("Provider '{}' not found", provider_name))).await;
         return Err(ge);

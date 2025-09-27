@@ -29,6 +29,9 @@ pub enum GatewayError {
 
     #[error("Config error: {0}")]
     Config(String),
+
+    #[error("Not found: {0}")]
+    NotFound(String),
 }
 
 pub type Result<T> = std::result::Result<T, GatewayError>;
@@ -46,6 +49,7 @@ impl GatewayError {
             | GatewayError::Balance(BalanceError::NoApiKeysAvailable) => StatusCode::SERVICE_UNAVAILABLE,
             GatewayError::Http(_) => StatusCode::BAD_GATEWAY,
             GatewayError::Config(_) => StatusCode::BAD_REQUEST,
+            GatewayError::NotFound(_) => StatusCode::NOT_FOUND,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -60,6 +64,7 @@ impl GatewayError {
             GatewayError::Balance(_) => "balance_error",
             GatewayError::TimeParse(_) => "time_parse_error",
             GatewayError::Config(_) => "config_error",
+            GatewayError::NotFound(_) => "not_found",
         }
     }
 }
