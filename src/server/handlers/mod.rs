@@ -12,9 +12,15 @@ mod admin_tokens;
 mod admin_prices;
 mod token_info;
 mod auth;
+mod auth_login;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        // Auth for Web
+        .route("/auth/login-codes", post(auth_login::create_login_code))
+        .route("/auth/code/redeem", post(auth_login::redeem_code))
+        .route("/auth/session", get(auth_login::get_session))
+        .route("/auth/logout", post(auth_login::logout))
         .route("/v1/chat/completions", post(chat::chat_completions))
         .route("/v1/models", get(models::list_models))
         .route("/models/{provider}", get(models::list_provider_models))

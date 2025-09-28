@@ -1,4 +1,5 @@
 pub mod handlers;
+pub mod login;
 pub(crate) mod model_helpers;
 pub(crate) mod model_cache;
 pub(crate) mod model_parser;
@@ -27,6 +28,7 @@ pub struct AppState {
     pub providers: Arc<dyn ProviderStore + Send + Sync>,
     pub token_store: Arc<dyn TokenStore + Send + Sync>,
     pub admin_identity_token: String,
+    pub login_manager: Arc<login::LoginManager>,
 }
 
 pub async fn create_app(config: Settings) -> AppResult<Router> {
@@ -66,10 +68,30 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
         providers: provider_store_arc,
         token_store,
         admin_identity_token,
+        login_manager: Arc::new(login::LoginManager::new()),
     };
 
-    let app = handlers::routes()
+    let mut app = handlers::routes()
         .with_state(Arc::new(app_state));
+
+    // CORS（开发环境便于前端联调；生产应收敛来源并仅 HTTPS）
+    use tower_http::cors::{CorsLayer, AllowOrigin};
+    use axum::http::{HeaderValue, Method, header};
+    let cors = CorsLayer::new()
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+        ])
+        // 反射请求来源（便于 dev server 代理转发携带 Cookie）
+        .allow_origin(AllowOrigin::mirror_request())
+        .allow_credentials(true);
+    app = app.layer(cors);
 
     Ok(app)
 }
