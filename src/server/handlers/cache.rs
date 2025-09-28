@@ -9,6 +9,7 @@ use crate::providers::openai::{Model, ModelListResponse};
 use crate::server::model_cache::{cache_models_for_provider, get_cached_models_for_provider};
 use crate::server::model_helpers::fetch_provider_models;
 use crate::server::request_logging::log_simple_request;
+use crate::server::util::{bearer_token, token_for_log};
 use super::auth::ensure_admin;
 use crate::server::AppState;
 
@@ -30,11 +31,7 @@ pub async fn update_provider_cache(
     headers: axum::http::HeaderMap,
     Json(payload): Json<CacheUpdatePayload>,
 ) -> Result<Response, GatewayError> {
-    let provided_token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+    let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state) {
         let start_time = chrono::Utc::now();
         let path = format!("/models/{}/cache", provider_name);
@@ -173,7 +170,7 @@ pub async fn update_provider_cache(
     }
 
     let models = get_cached_models_for_provider(&app_state, &provider_name).await?;
-    log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), provided_token.as_deref().map(|tok| if tok == app_state.admin_identity_token { "admin_token" } else { tok }), 200, None).await;
+    log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), token_for_log(provided_token.as_deref(), &app_state.admin_identity_token), 200, None).await;
     let mut resp = Json(ModelListResponse { object: "list".into(), data: models }).into_response();
     use axum::http::header::HeaderValue;
     if let Ok(v) = HeaderValue::from_str(&added.to_string()) { resp.headers_mut().insert("X-Cache-Added", v); }
@@ -195,11 +192,7 @@ pub async fn delete_provider_cache(
     headers: axum::http::HeaderMap,
     Json(payload): Json<CacheDeletePayload>,
 ) -> Result<Response, GatewayError> {
-    let provided_token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+    let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state) {
         let start_time = chrono::Utc::now();
         let path = format!("/models/{}/cache", provider_name);
@@ -236,7 +229,7 @@ pub async fn delete_provider_cache(
     let _ = crate::server::model_cache::remove_models_for_provider(&app_state, &provider_name, &ids).await;
 
     let models = get_cached_models_for_provider(&app_state, &provider_name).await?;
-    log_simple_request(&app_state, start_time, "DELETE", &path, REQ_TYPE_PROVIDER_CACHE_DELETE, None, Some(provider_name.clone()), provided_token.as_deref().map(|tok| if tok == app_state.admin_identity_token { "admin_token" } else { tok }), 200, None).await;
+    log_simple_request(&app_state, start_time, "DELETE", &path, REQ_TYPE_PROVIDER_CACHE_DELETE, None, Some(provider_name.clone()), token_for_log(provided_token.as_deref(), &app_state.admin_identity_token), 200, None).await;
     let mut resp = Json(ModelListResponse { object: "list".into(), data: models }).into_response();
     use axum::http::header::HeaderValue;
     if let Ok(v) = HeaderValue::from_str(&"0".to_string()) { resp.headers_mut().insert("X-Cache-Added", v); }

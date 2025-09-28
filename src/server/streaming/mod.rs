@@ -3,7 +3,8 @@ use axum::http::HeaderMap;
 use chrono::Utc;
 use std::sync::Arc;
 
-use crate::config::settings::{KeyLogStrategy, LoggingConfig};
+// Reuse API key hint from shared server utilities
+pub(super) use crate::server::util::api_key_hint;
 use crate::error::GatewayError;
 use crate::providers::openai::ChatCompletionRequest;
 use crate::server::model_redirect::apply_model_redirects;
@@ -137,18 +138,4 @@ pub async fn stream_chat_completions(
     }
 }
 
-pub(super) fn api_key_hint(cfg: &LoggingConfig, key: &str) -> Option<String> {
-    match cfg.key_log_strategy.clone().unwrap_or(KeyLogStrategy::Masked) {
-        KeyLogStrategy::None => None,
-        KeyLogStrategy::Plain => Some(key.to_string()),
-        KeyLogStrategy::Masked => Some(mask_key(key)),
-    }
-}
-
-fn mask_key(key: &str) -> String {
-    if key.len() <= 8 {
-        return "****".to_string();
-    }
-    let (start, end) = (&key[..4], &key[key.len() - 4..]);
-    format!("{}****{}", start, end)
-}
+// api_key_hint is re-exported above from server::util

@@ -129,3 +129,32 @@ pub(super) async fn log_stream_success(
         }
     }
 }
+
+// Extract Usage from a JSON value if fields are present (lenient across providers)
+pub(super) fn parse_usage_from_value(v: &serde_json::Value) -> Option<Usage> {
+    use async_openai::types::{CompletionTokensDetails, PromptTokensDetails};
+    let u = v.get("usage")?;
+    let prompt = u.get("prompt_tokens").and_then(|x| x.as_u64()).map(|x| x as u32);
+    let completion = u.get("completion_tokens").and_then(|x| x.as_u64()).map(|x| x as u32);
+    let total = u.get("total_tokens").and_then(|x| x.as_u64()).map(|x| x as u32);
+    let cached = u
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(|x| x.as_u64())
+        .map(|x| x as u32);
+    let reasoning = u
+        .get("completion_tokens_details")
+        .and_then(|d| d.get("reasoning_tokens"))
+        .and_then(|x| x.as_u64())
+        .map(|x| x as u32);
+    if prompt.is_none() && completion.is_none() && total.is_none() && cached.is_none() && reasoning.is_none() {
+        return None;
+    }
+    Some(Usage {
+        prompt_tokens: prompt.unwrap_or(0),
+        completion_tokens: completion.unwrap_or(0),
+        total_tokens: total.unwrap_or(prompt.unwrap_or(0) + completion.unwrap_or(0)),
+        prompt_tokens_details: if cached.is_some() { Some(PromptTokensDetails { cached_tokens: cached, audio_tokens: None }) } else { None },
+        completion_tokens_details: if reasoning.is_some() { Some(CompletionTokensDetails { reasoning_tokens: reasoning, audio_tokens: None, accepted_prediction_tokens: None, rejected_prediction_tokens: None }) } else { None },
+    })
+}

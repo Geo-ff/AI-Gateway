@@ -40,16 +40,8 @@ impl PgPool {
                     .map_err(|e| GatewayError::Config(format!("Failed to set search_path: {}", e)))?;
             }
             let client = Arc::new(client);
-            {
-                let c = Arc::clone(&client);
-                tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
-                    loop {
-                        interval.tick().await;
-                        let _ = c.execute("SELECT 1", &[]).await;
-                    }
-                });
-            }
+            // improve: jittered keepalive to avoid herd effects
+            crate::db::postgres::spawn_keepalive(Arc::clone(&client), 240, 420);
             clients.push(client);
         }
         Ok(Self { clients, next: AtomicUsize::new(0) })
@@ -160,6 +152,31 @@ impl PgLogStore {
     }
 }
 
+impl PgLogStore {
+    fn row_to_request_log(r: tokio_postgres::Row) -> RequestLog {
+        RequestLog {
+            id: Some(r.get::<usize, i32>(0) as i64),
+            timestamp: parse_beijing_string(&r.get::<usize, String>(1)).unwrap_or(Utc::now()),
+            method: r.get(2),
+            path: r.get(3),
+            request_type: r.get(4),
+            model: r.get(5),
+            provider: r.get(6),
+            api_key: r.get(7),
+            status_code: r.get::<usize, i32>(8) as u16,
+            response_time_ms: r.get(9),
+            prompt_tokens: r.get::<usize, Option<i32>>(10).map(|v| v as u32),
+            completion_tokens: r.get::<usize, Option<i32>>(11).map(|v| v as u32),
+            total_tokens: r.get::<usize, Option<i32>>(12).map(|v| v as u32),
+            cached_tokens: r.get::<usize, Option<i32>>(13).map(|v| v as u32),
+            reasoning_tokens: r.get::<usize, Option<i32>>(14).map(|v| v as u32),
+            error_message: r.get(15),
+            client_token: r.get(16),
+            amount_spent: r.get(17),
+        }
+    }
+}
+
 impl RequestLogStore for PgLogStore {
     fn log_request<'a>(&'a self, log: RequestLog) -> BoxFuture<'a, rusqlite::Result<i64>> {
         Box::pin(async move {
@@ -187,30 +204,7 @@ impl RequestLogStore for PgLogStore {
                 )
                 .await
                 .map_err(pg_err)?;
-            let mut out = Vec::new();
-            for r in rows {
-                out.push(RequestLog {
-                    id: Some(r.get::<usize, i32>(0) as i64),
-                    timestamp: parse_beijing_string(&r.get::<usize, String>(1)).unwrap_or(Utc::now()),
-                    method: r.get(2),
-                    path: r.get(3),
-                    request_type: r.get(4),
-                    model: r.get(5),
-                    provider: r.get(6),
-                    api_key: r.get(7),
-                    status_code: r.get::<usize, i32>(8) as u16,
-                    response_time_ms: r.get(9),
-                    prompt_tokens: r.get::<usize, Option<i32>>(10).map(|v| v as u32),
-                    completion_tokens: r.get::<usize, Option<i32>>(11).map(|v| v as u32),
-                    total_tokens: r.get::<usize, Option<i32>>(12).map(|v| v as u32),
-                    cached_tokens: r.get::<usize, Option<i32>>(13).map(|v| v as u32),
-                    reasoning_tokens: r.get::<usize, Option<i32>>(14).map(|v| v as u32),
-                    error_message: r.get(15),
-                    client_token: r.get(16),
-                    amount_spent: r.get(17),
-                });
-            }
-            Ok(out)
+            Ok(rows.into_iter().map(Self::row_to_request_log).collect())
         })
     }
 
@@ -237,30 +231,7 @@ impl RequestLogStore for PgLogStore {
                 )
                 .await
                 .map_err(pg_err)?;
-            let mut out = Vec::new();
-            for r in rows {
-                out.push(RequestLog {
-                    id: Some(r.get::<usize, i32>(0) as i64),
-                    timestamp: parse_beijing_string(&r.get::<usize, String>(1)).unwrap_or(Utc::now()),
-                    method: r.get(2),
-                    path: r.get(3),
-                    request_type: r.get(4),
-                    model: r.get(5),
-                    provider: r.get(6),
-                    api_key: r.get(7),
-                    status_code: r.get::<usize, i32>(8) as u16,
-                    response_time_ms: r.get(9),
-                    prompt_tokens: r.get::<usize, Option<i32>>(10).map(|v| v as u32),
-                    completion_tokens: r.get::<usize, Option<i32>>(11).map(|v| v as u32),
-                    total_tokens: r.get::<usize, Option<i32>>(12).map(|v| v as u32),
-                    cached_tokens: r.get::<usize, Option<i32>>(13).map(|v| v as u32),
-                    reasoning_tokens: r.get::<usize, Option<i32>>(14).map(|v| v as u32),
-                    error_message: r.get(15),
-                    client_token: r.get(16),
-                    amount_spent: r.get(17),
-                });
-            }
-            Ok(out)
+            Ok(rows.into_iter().map(Self::row_to_request_log).collect())
         })
     }
 

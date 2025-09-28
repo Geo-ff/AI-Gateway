@@ -4,7 +4,7 @@ use axum::response::{IntoResponse, Response, Sse};
 use chrono::{DateTime, Utc};
 use reqwest_eventsource::{Event, RequestBuilderExt};
 
-use async_openai::types::{ChatCompletionStreamOptions, CreateChatCompletionStreamResponse, CompletionTokensDetails, PromptTokensDetails};
+use async_openai::types::{ChatCompletionStreamOptions, CreateChatCompletionStreamResponse};
 use serde_json::Value;
 
 use crate::error::GatewayError;
@@ -116,31 +116,8 @@ pub async fn stream_openai_chat(
                     // Fallback: Value parse to extract usage (tolerate vendor extensions)
                     if !captured {
                         if let Ok(v) = serde_json::from_str::<Value>(&m.data) {
-                            if let Some(u) = v.get("usage") {
-                                let prompt = u.get("prompt_tokens").and_then(|x| x.as_u64()).map(|x| x as u32);
-                                let completion = u.get("completion_tokens").and_then(|x| x.as_u64()).map(|x| x as u32);
-                                let total = u.get("total_tokens").and_then(|x| x.as_u64()).map(|x| x as u32);
-                                let cached = u
-                                    .get("prompt_tokens_details")
-                                    .and_then(|d| d.get("cached_tokens"))
-                                    .and_then(|x| x.as_u64())
-                                    .map(|x| x as u32);
-                                let reasoning = u
-                                    .get("completion_tokens_details")
-                                    .and_then(|d| d.get("reasoning_tokens"))
-                                    .and_then(|x| x.as_u64())
-                                    .map(|x| x as u32);
-
-                                if prompt.is_some() || completion.is_some() || total.is_some() || cached.is_some() || reasoning.is_some() {
-                                    let usage = Usage {
-                                        prompt_tokens: prompt.unwrap_or(0),
-                                        completion_tokens: completion.unwrap_or(0),
-                                        total_tokens: total.unwrap_or(prompt.unwrap_or(0) + completion.unwrap_or(0)),
-                                        prompt_tokens_details: if cached.is_some() { Some(PromptTokensDetails { cached_tokens: cached, audio_tokens: None }) } else { None },
-                                        completion_tokens_details: if reasoning.is_some() { Some(CompletionTokensDetails { reasoning_tokens: reasoning, audio_tokens: None, accepted_prediction_tokens: None, rejected_prediction_tokens: None }) } else { None },
-                                    };
-                                    *usage_cell_for_task.lock().unwrap() = Some(usage);
-                                }
+                            if let Some(usage) = super::common::parse_usage_from_value(&v) {
+                                *usage_cell_for_task.lock().unwrap() = Some(usage);
                             }
                         }
                     }

@@ -22,7 +22,7 @@ impl TokenStore for DatabaseLogger {
         // 始终生成随机令牌，忽略传入 token 字段
         let token = {
             use rand::Rng;
-            let mut rng = rand::rng();
+            let rng = rand::rng();
             use rand::distr::Alphanumeric;
             let s: String = rng.sample_iter(&Alphanumeric).take(40).map(char::from).collect();
             s

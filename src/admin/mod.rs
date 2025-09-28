@@ -72,6 +72,43 @@ pub struct PgTokenStore {
     client: std::sync::Arc<tokio_postgres::Client>,
 }
 
+// --- helpers to keep Postgres mapping concise and consistent ---
+fn join_allowed_models(v: &Option<Vec<String>>) -> Option<String> {
+    v.as_ref().map(|list| list.join(","))
+}
+
+fn parse_allowed_models(s: Option<String>) -> Option<Vec<String>> {
+    s.map(|v| v.split(',').filter(|x| !x.trim().is_empty()).map(|x| x.trim().to_string()).collect::<Vec<_>>())
+        .map(|v| if v.is_empty() { None } else { Some(v) }).flatten()
+}
+
+fn row_to_admin_token(r: &tokio_postgres::Row) -> AdminToken {
+    let token: String = r.get(0);
+    let allowed_s: Option<String> = r.get(1);
+    let max_tokens: Option<i64> = r.get(2);
+    let enabled: bool = r.get::<usize, Option<bool>>(3).unwrap_or(true);
+    let expires_s: Option<String> = r.get(4);
+    let created_s: String = r.get(5);
+    let max_amount: Option<f64> = r.get(6);
+    let amount_spent: f64 = r.get::<usize, Option<f64>>(7).unwrap_or(0.0);
+    let prompt_tokens_spent: i64 = r.get::<usize, Option<i64>>(8).unwrap_or(0);
+    let completion_tokens_spent: i64 = r.get::<usize, Option<i64>>(9).unwrap_or(0);
+    let total_tokens_spent: i64 = r.get::<usize, Option<i64>>(10).unwrap_or(0);
+    AdminToken {
+        token,
+        allowed_models: parse_allowed_models(allowed_s),
+        max_tokens,
+        max_amount,
+        enabled,
+        expires_at: expires_s.and_then(|s| parse_beijing_string(&s).ok()),
+        created_at: parse_beijing_string(&created_s).unwrap_or(Utc::now()),
+        amount_spent,
+        prompt_tokens_spent,
+        completion_tokens_spent,
+        total_tokens_spent,
+    }
+}
+
 impl PgTokenStore {
     pub async fn connect(pg_url: &str, schema: Option<&str>) -> Result<Self, GatewayError> {
         let (client, connection) = tokio_postgres::connect(pg_url, tokio_postgres::NoTls)
@@ -112,17 +149,8 @@ impl PgTokenStore {
         let _ = client.execute("ALTER TABLE admin_tokens ADD COLUMN completion_tokens_spent BIGINT DEFAULT 0", &[]).await;
         let _ = client.execute("ALTER TABLE admin_tokens ADD COLUMN total_tokens_spent BIGINT DEFAULT 0", &[]).await;
         let store = Self { client: std::sync::Arc::new(client) };
-        // keepalive，降低空闲会话被服务端回收的概率
-        {
-            let client = std::sync::Arc::clone(&store.client);
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
-                loop {
-                    interval.tick().await;
-                    let _ = client.execute("SELECT 1", &[]).await;
-                }
-            });
-        }
+        // keepalive（带抖动），降低空闲回收的概率并避免集群齐刷刷触发
+        crate::db::postgres::spawn_keepalive(std::sync::Arc::clone(&store.client), 240, 420);
         Ok(store)
     }
 }
@@ -133,12 +161,12 @@ impl TokenStore for PgTokenStore {
         // 始终生成随机令牌，忽略传入 token 字段
         let token = {
             use rand::Rng;
-            let mut rng = rand::rng();
+            let rng = rand::rng();
             use rand::distr::Alphanumeric;
             rng.sample_iter(&Alphanumeric).take(40).map(char::from).collect::<String>()
         };
         let now = Utc::now();
-        let allowed_models_s = payload.allowed_models.as_ref().map(|v| v.join(","));
+        let allowed_models_s = join_allowed_models(&payload.allowed_models);
         let expires_s = payload.expires_at.clone();
         self.client
             .execute(
@@ -173,46 +201,23 @@ impl TokenStore for PgTokenStore {
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         let Some(r) = row else { return Ok(None) };
-        let tok: String = r.get(0);
-        let allowed_models_s: Option<String> = r.get(1);
-        let mut allowed_models = allowed_models_s.as_deref().map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>());
-        let mut max_tokens: Option<i64> = r.get(2);
-        let mut enabled: bool = r.get::<usize, Option<bool>>(3).unwrap_or(true);
-        let mut expires_at: Option<String> = r.get(4);
-        let created_at: String = r.get(5);
-        let mut max_amount: Option<f64> = r.get(6);
-        let amount_spent: f64 = r.get::<usize, Option<f64>>(7).unwrap_or(0.0);
-        let prompt_tokens_spent: i64 = r.get::<usize, Option<i64>>(8).unwrap_or(0);
-        let completion_tokens_spent: i64 = r.get::<usize, Option<i64>>(9).unwrap_or(0);
-        let total_tokens_spent: i64 = r.get::<usize, Option<i64>>(10).unwrap_or(0);
+        let mut current = row_to_admin_token(&r);
 
-        if let Some(v) = payload.allowed_models { allowed_models = Some(v); }
-        if let Some(v) = payload.max_tokens { max_tokens = v; }
-        if let Some(v) = payload.max_amount { max_amount = v; }
-        if let Some(v) = payload.enabled { enabled = v; }
-        if let Some(v) = payload.expires_at { expires_at = v; }
+        if let Some(v) = payload.allowed_models { current.allowed_models = Some(v); }
+        if let Some(v) = payload.max_tokens { current.max_tokens = v; }
+        if let Some(v) = payload.max_amount { current.max_amount = v; }
+        if let Some(v) = payload.enabled { current.enabled = v; }
+        if let Some(v) = payload.expires_at { current.expires_at = v.map(|s| parse_beijing_string(&s).ok()).flatten(); }
 
         self.client
             .execute(
                 "UPDATE admin_tokens SET allowed_models = $2, max_tokens = $3, enabled = $4, expires_at = $5, max_amount = $6 WHERE token = $1",
-                &[&token, &allowed_models.as_ref().map(|v| v.join(",")), &max_tokens, &enabled, &expires_at, &max_amount],
+                &[&token, &join_allowed_models(&current.allowed_models), &current.max_tokens, &current.enabled, &current.expires_at.as_ref().map(|dt| to_beijing_string(dt)), &current.max_amount],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
 
-        Ok(Some(AdminToken {
-            token: tok,
-            allowed_models,
-            max_tokens,
-            max_amount,
-            enabled,
-            expires_at: match expires_at { Some(s) => Some(parse_beijing_string(&s)?), None => None },
-            created_at: parse_beijing_string(&created_at).unwrap_or(Utc::now()),
-            amount_spent,
-            prompt_tokens_spent,
-            completion_tokens_spent,
-            total_tokens_spent,
-        }))
+        Ok(Some(current))
     }
 
     async fn set_enabled(&self, token: &str, enabled: bool) -> Result<bool, GatewayError> {
@@ -231,21 +236,7 @@ impl TokenStore for PgTokenStore {
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
-        if let Some(r) = row {
-            Ok(Some(AdminToken {
-                token: r.get(0),
-                allowed_models: r.get::<usize, Option<String>>(1).as_deref().map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>()),
-                max_tokens: r.get(2),
-                max_amount: r.get(6),
-                enabled: r.get::<usize, Option<bool>>(3).unwrap_or(true),
-                expires_at: r.get::<usize, Option<String>>(4).and_then(|s| parse_beijing_string(&s).ok()),
-                created_at: parse_beijing_string(&r.get::<usize, String>(5)).unwrap_or(Utc::now()),
-                amount_spent: r.get::<usize, Option<f64>>(7).unwrap_or(0.0),
-                prompt_tokens_spent: r.get::<usize, Option<i64>>(8).unwrap_or(0),
-                completion_tokens_spent: r.get::<usize, Option<i64>>(9).unwrap_or(0),
-                total_tokens_spent: r.get::<usize, Option<i64>>(10).unwrap_or(0),
-            }))
-        } else { Ok(None) }
+        if let Some(r) = row { Ok(Some(row_to_admin_token(&r))) } else { Ok(None) }
     }
 
     async fn list_tokens(&self) -> Result<Vec<AdminToken>, GatewayError> {
@@ -256,34 +247,7 @@ impl TokenStore for PgTokenStore {
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
-        let mut out = Vec::new();
-        for r in rows {
-            let token: String = r.get(0);
-            let allowed_models_s: Option<String> = r.get(1);
-            let max_tokens: Option<i64> = r.get(2);
-            let enabled: bool = r.get::<usize, Option<bool>>(3).unwrap_or(true);
-            let expires_at_s: Option<String> = r.get(4);
-            let created_at_s: String = r.get(5);
-            let max_amount: Option<f64> = r.get(6);
-            let amount_spent: f64 = r.get::<usize, Option<f64>>(7).unwrap_or(0.0);
-            let prompt_tokens_spent: i64 = r.get::<usize, Option<i64>>(8).unwrap_or(0);
-            let completion_tokens_spent: i64 = r.get::<usize, Option<i64>>(9).unwrap_or(0);
-            let total_tokens_spent: i64 = r.get::<usize, Option<i64>>(10).unwrap_or(0);
-            out.push(AdminToken {
-                token,
-                allowed_models: allowed_models_s.as_deref().map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>()),
-                max_tokens,
-                max_amount,
-                enabled,
-                expires_at: expires_at_s.and_then(|s| parse_beijing_string(&s).ok()),
-                created_at: parse_beijing_string(&created_at_s).unwrap_or(Utc::now()),
-                amount_spent,
-                prompt_tokens_spent,
-                completion_tokens_spent,
-                total_tokens_spent,
-            });
-        }
-        Ok(out)
+        Ok(rows.into_iter().map(|r| row_to_admin_token(&r)).collect())
     }
 
     async fn add_amount_spent(&self, token: &str, delta: f64) -> Result<(), GatewayError> {

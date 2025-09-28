@@ -8,7 +8,7 @@ use crate::logging::types::{REQ_TYPE_PROVIDER_KEY_ADD, REQ_TYPE_PROVIDER_KEY_DEL
 use crate::server::request_logging::log_simple_request;
 use super::auth::ensure_admin;
 use crate::server::AppState;
-use crate::config::settings::{KeyLogStrategy};
+use crate::server::util::{key_display_hint, mask_key};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct KeyPayload { key: String }
@@ -245,16 +245,4 @@ pub async fn list_provider_keys(
     Ok((axum::http::StatusCode::OK, Json(serde_json::json!({"keys": masked}))).into_response())
 }
 
-fn key_display_hint(strategy: &Option<KeyLogStrategy>, key: &str) -> Option<String> {
-    match strategy.clone().unwrap_or(KeyLogStrategy::Masked) {
-        KeyLogStrategy::None => None,
-        KeyLogStrategy::Plain => Some(key.to_string()),
-        KeyLogStrategy::Masked => Some(mask_key(key)),
-    }
-}
-
-fn mask_key(key: &str) -> String {
-    if key.len() <= 8 { return "****".to_string(); }
-    let (start, end) = (&key[..4], &key[key.len()-4..]);
-    format!("{}****{}", start, end)
-}
+// key_display_hint and mask_key are imported from server::util

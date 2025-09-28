@@ -1930,6 +1930,38 @@ Connection: keep-alive
 
 
 
+你是一名经验丰富的软件开发工程师，专注于构建高性能、健壮的解决方案。
+
+你的任务是：**审查、理解并迭代式地改进现有代码库**
+
+现在，将我们的工作重心从新功能开发转到对已有代码的优化上来吧：
+当前项目中的
+
+src/admin/mod.rs、src/logging/database_admin_tokens.rs、src/logging/database.rs、src/logging/postgres_store.rs、src/providers/anthropic.rs、src/server/handlers/admin_tokens.rs、src/server/handlers/cache.rs、src/server/handlers/models.rs、src/server/handlers/provider_keys.rs、src/server/handlers/providers.rs、src/server/streaming/openai.rs、src/server/streaming/zhipu.rs
+
+这些文件的代码量基本都达到甚至超过了 150 行，有些甚至有几百行。
+请你仔细阅读和理解这些文件和我们当前项目的代码情况后，对这些文件进行优化和适当的重构，在保证功能逻辑不变的前提下进行优化。
+在你工作过程中，请你遵循下面的原则：
+- 时刻关注优雅的架构设计，避免出现以下可能侵蚀我们代码质量的「坏味道」：
+    （1）僵化 (Rigidity): 系统难以变更，任何微小的改动都会引发一连串的连锁修改。
+    （2）冗余 (Redundancy): 同样的代码逻辑在多处重复出现，导致维护困难且容易产生不一致。
+    （3）循环依赖 (Circular Dependency): 两个或多个模块互相纠缠，形成无法解耦的“死结”，导致难以测试与复用。
+    （4）脆弱性 (Fragility): 对代码一处的修改，导致了系统中其他看似无关部分功能的意外损坏。
+    （5）晦涩性 (Obscurity): 代码意图不明，结构混乱，导致阅读者难以理解其功能和设计。
+    （6）数据泥团 (Data Clump): 多个数据项总是一起出现在不同方法的参数中，暗示着它们应该被组合成一个独立的对象。
+    （7）不必要的复杂性 (Needless Complexity): 用“杀牛刀”去解决“杀鸡”的问题，过度设计使系统变得臃肿且难以理解。
+- 【非常重要！！】无论是你自己编写代码，还是阅读或审核他人代码时，都要严格遵守上述硬性指标，以及时刻关注优雅的架构设计。
+- 【非常重要！！】无论何时，一旦你识别出那些可能侵蚀我们代码质量的「坏味道」，都应当立即询问用户是否需要优化，并给出合理的优化建议。
+最后补充一下，如果有些文件确实需要那么长的代码量才合适，那么就可以不需要去修改，必要的时候，遵循 KISS 准则
+
+
+
+
+好的，请你继续优化 Anthropic 文件拆分和 Postgres keepalive 抽象吧，而且对于后面这个 Postgres keepalive 功能，可以优化一下实现效果么？请你在不影响原本的工作逻辑上继续优化。SSE 循环去重先不要处理
+
+
+
+
 
 GET /providers/{provider}/keys
 行为：返回该供应商密钥的掩码列表

@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use crate::logging::RequestLog;
 use crate::logging::types::{REQ_TYPE_CHAT_ONCE};
-use crate::config::settings::{KeyLogStrategy, LoggingConfig};
+use crate::server::util::api_key_hint;
 use crate::providers::openai::types::RawAndTypedChatCompletion;
 use crate::error::GatewayError;
 use crate::server::AppState;
@@ -82,19 +82,7 @@ pub async fn log_chat_request(
     }
 }
 
-fn api_key_hint(cfg: &LoggingConfig, key: &str) -> Option<String> {
-    match cfg.key_log_strategy.clone().unwrap_or(KeyLogStrategy::Masked) {
-        KeyLogStrategy::None => None,
-        KeyLogStrategy::Plain => Some(key.to_string()),
-        KeyLogStrategy::Masked => Some(mask_key(key)),
-    }
-}
-
-fn mask_key(key: &str) -> String {
-    if key.len() <= 8 { return "****".to_string(); }
-    let (start, end) = (&key[..4], &key[key.len()-4..]);
-    format!("{}****{}", start, end)
-}
+// api_key_hint imported from server::util
 
 // 记录普通请求（不含 tokens）
 pub async fn log_simple_request(

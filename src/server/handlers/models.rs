@@ -9,6 +9,7 @@ use crate::providers::openai::ModelListResponse;
 use crate::server::model_helpers::fetch_provider_models;
 use crate::server::model_cache::{get_cached_models_all, get_cached_models_for_provider};
 use crate::server::request_logging::log_simple_request;
+use crate::server::util::{bearer_token, token_for_log};
 use crate::server::AppState;
 use super::auth::ensure_client;
 
@@ -18,11 +19,7 @@ pub async fn list_models(
     uri: Uri,
 ) -> Result<Json<ModelListResponse>, GatewayError> {
     let start_time = Utc::now();
-    let provided_token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+    let provided_token = bearer_token(&headers);
     // 令牌校验
     let is_admin = match ensure_client(&headers, &app_state).await {
         Ok(v) => v,
@@ -58,8 +55,8 @@ pub async fn list_models(
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| "/v1/models".to_string());
     let result = Json(ModelListResponse { object: "list".to_string(), data: cached_models });
-    let token_for_log = provided_token.as_deref().map(|tok| if tok == app_state.admin_identity_token { "admin_token" } else { tok });
-    log_simple_request(&app_state, start_time, "GET", &path, REQ_TYPE_MODELS_LIST, None, None, token_for_log, 200, None).await;
+    let token_log = token_for_log(provided_token.as_deref(), &app_state.admin_identity_token);
+    log_simple_request(&app_state, start_time, "GET", &path, REQ_TYPE_MODELS_LIST, None, None, token_log, 200, None).await;
     Ok(result)
 }
 
@@ -77,11 +74,7 @@ pub async fn list_provider_models(
     uri: Uri,
 ) -> Result<Response, GatewayError> {
     let start_time = Utc::now();
-    let provided_token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+    let provided_token = bearer_token(&headers);
     let full_path = uri
         .path_and_query()
         .map(|pq| pq.as_str().to_string())

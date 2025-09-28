@@ -6,6 +6,7 @@ mod logging;
 mod error;
 mod crypto;
 mod admin;
+mod db;
 
 use tracing_subscriber::{fmt, EnvFilter};
 

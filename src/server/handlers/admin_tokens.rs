@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::{admin::{AdminToken, CreateTokenPayload, UpdateTokenPayload}, error::GatewayError, server::AppState};
+use crate::server::util::{bearer_token, token_for_log};
 
 #[derive(Debug, Serialize)]
 pub struct AdminTokenOut {
@@ -46,18 +47,14 @@ pub async fn list_tokens(
     headers: HeaderMap,
 ) -> Result<Json<Vec<AdminTokenOut>>, GatewayError> {
     let start_time = Utc::now();
-    let provided_token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+    let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state) {
         let code = e.status_code().as_u16();
         log_simple_request(&app_state, start_time, "GET", "/admin/tokens", "admin_tokens_list", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
         return Err(e);
     }
     let tokens = app_state.token_store.list_tokens().await?.into_iter().map(AdminTokenOut::from).collect();
-    log_simple_request(&app_state, start_time, "GET", "/admin/tokens", "admin_tokens_list", None, None, provided_token.as_deref().map(|tok| if tok == app_state.admin_identity_token { "admin_token" } else { tok }), 200, None).await;
+    log_simple_request(&app_state, start_time, "GET", "/admin/tokens", "admin_tokens_list", None, None, token_for_log(provided_token.as_deref(), &app_state.admin_identity_token), 200, None).await;
     Ok(Json(tokens))
 }
 
@@ -67,11 +64,7 @@ pub async fn get_token(
     headers: HeaderMap,
 ) -> Result<Json<AdminTokenOut>, GatewayError> {
     let start_time = Utc::now();
-    let provided_token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+    let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state) {
         let code = e.status_code().as_u16();
         log_simple_request(&app_state, start_time, "GET", &format!("/admin/tokens/{}", token), "admin_tokens_get", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
@@ -94,11 +87,7 @@ pub async fn create_token(
     Json(payload): Json<CreateTokenPayload>,
 ) -> Result<(axum::http::StatusCode, Json<AdminTokenOut>), GatewayError> {
     let start_time = Utc::now();
-    let provided_token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+    let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state) {
         let code = e.status_code().as_u16();
         log_simple_request(&app_state, start_time, "POST", "/admin/tokens", "admin_tokens_create", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
@@ -118,7 +107,7 @@ pub async fn create_token(
         }
     }
     let t = app_state.token_store.create_token(CreateTokenPayload { token: None, ..payload }).await?;
-    log_simple_request(&app_state, start_time, "POST", "/admin/tokens", "admin_tokens_create", None, None, provided_token.as_deref().map(|tok| if tok == app_state.admin_identity_token { "admin_token" } else { tok }), 201, None).await;
+    log_simple_request(&app_state, start_time, "POST", "/admin/tokens", "admin_tokens_create", None, None, token_for_log(provided_token.as_deref(), &app_state.admin_identity_token), 201, None).await;
     Ok((axum::http::StatusCode::CREATED, Json(AdminTokenOut::from(t))))
 }
 
@@ -132,11 +121,7 @@ pub async fn toggle_token(
     Json(payload): Json<TogglePayload>,
 ) -> Result<Json<serde_json::Value>, GatewayError> {
     let start_time = Utc::now();
-    let provided_token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+    let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state) {
         let code = e.status_code().as_u16();
         log_simple_request(&app_state, start_time, "POST", &format!("/admin/tokens/{}/toggle", token), "admin_tokens_toggle", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
@@ -144,7 +129,7 @@ pub async fn toggle_token(
     }
     let ok = app_state.token_store.set_enabled(&token, payload.enabled).await?;
     if ok {
-        log_simple_request(&app_state, start_time, "POST", &format!("/admin/tokens/{}/toggle", token), "admin_tokens_toggle", None, None, provided_token.as_deref().map(|tok| if tok == app_state.admin_identity_token { "admin_token" } else { tok }), 200, None).await;
+        log_simple_request(&app_state, start_time, "POST", &format!("/admin/tokens/{}/toggle", token), "admin_tokens_toggle", None, None, token_for_log(provided_token.as_deref(), &app_state.admin_identity_token), 200, None).await;
         Ok(Json(serde_json::json!({"status":"ok"})))
     } else {
         let ge = GatewayError::NotFound("token not found".into());
@@ -161,11 +146,7 @@ pub async fn update_token(
     Json(payload): Json<UpdateTokenPayload>,
 ) -> Result<Json<AdminTokenOut>, GatewayError> {
     let start_time = Utc::now();
-    let provided_token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+    let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state) {
         let code = e.status_code().as_u16();
         log_simple_request(&app_state, start_time, "PUT", &format!("/admin/tokens/{}", token), "admin_tokens_update", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
@@ -184,7 +165,7 @@ pub async fn update_token(
     }
     match app_state.token_store.update_token(&token, payload).await? {
         Some(t) => {
-            log_simple_request(&app_state, start_time, "PUT", &format!("/admin/tokens/{}", token), "admin_tokens_update", None, None, provided_token.as_deref().map(|tok| if tok == app_state.admin_identity_token { "admin_token" } else { tok }), 200, None).await;
+            log_simple_request(&app_state, start_time, "PUT", &format!("/admin/tokens/{}", token), "admin_tokens_update", None, None, token_for_log(provided_token.as_deref(), &app_state.admin_identity_token), 200, None).await;
             Ok(Json(AdminTokenOut::from(t)))
         },
         None => {

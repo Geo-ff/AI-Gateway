@@ -7,6 +7,7 @@ pub(crate) mod model_redirect;
 pub(crate) mod request_logging;
 pub(crate) mod storage_traits;
 pub(crate) mod streaming;
+pub(crate) mod util;
 
 use crate::config::Settings;
 use crate::logging::DatabaseLogger;
