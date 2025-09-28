@@ -1962,6 +1962,18 @@ src/admin/mod.rs、src/logging/database_admin_tokens.rs、src/logging/database.r
 
 
 
+现在，我们来做一个小插曲，使用 Criterion.rs 依赖做一个 benchmark，简单测试一下我们一些端点的可靠性。
+最新的版本是 criterion = "0.7.0"。在此之前我有个小问题，就是使用这个进行测试的时候，会将测试的时候请求的情况也写入到我们的数据库吗？而且也会和供应商上游进行交互吗？要是都会的话，好像我们项目不适合做 benchmark，因为会导致太多的无用日志以及对上游发起了太多的请求。
+
+
+
+
+
+benckmark，HTTPS、TLS
+
+
+
+
 
 GET /providers/{provider}/keys
 行为：返回该供应商密钥的掩码列表
