@@ -50,6 +50,8 @@ impl Default for BalanceStrategy {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    #[serde(default)]
+    pub admin_secret: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -57,15 +59,23 @@ impl Default for ServerConfig {
         Self {
             host: "0.0.0.0".to_string(),
             port: 8000,
+            admin_secret: None,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfig {
+    #[serde(default = "default_database_path")]
     pub database_path: String,
     #[serde(default)]
     pub key_log_strategy: Option<KeyLogStrategy>,
+    #[serde(default)]
+    pub pg_url: Option<String>,
+    #[serde(default)]
+    pub pg_schema: Option<String>,
+    #[serde(default)]
+    pub pg_pool_size: Option<usize>,
 }
 
 impl Default for LoggingConfig {
@@ -73,9 +83,14 @@ impl Default for LoggingConfig {
         Self {
             database_path: "data/gateway.db".to_string(),
             key_log_strategy: Some(KeyLogStrategy::Masked),
+            pg_url: None,
+            pg_schema: None,
+            pg_pool_size: None,
         }
     }
 }
+
+fn default_database_path() -> String { "data/gateway.db".to_string() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

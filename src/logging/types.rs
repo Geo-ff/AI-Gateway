@@ -26,6 +26,9 @@ pub struct RequestLog {
     pub model: Option<String>,
     pub provider: Option<String>,
     pub api_key: Option<String>,
+    pub client_token: Option<String>,
+    // 本次请求消耗的金额；仅在有价格与 usage 可用时计算
+    pub amount_spent: Option<f64>,
     pub status_code: u16,
     pub response_time_ms: i64,
     pub prompt_tokens: Option<u32>,

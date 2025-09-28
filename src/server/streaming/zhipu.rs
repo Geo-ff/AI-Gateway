@@ -20,6 +20,7 @@ pub async fn stream_zhipu_chat(
     base_url: String,
     provider_name: String,
     api_key: String,
+    client_token: Option<String>,
     upstream_req: ChatCompletionRequest,
 ) -> Result<Response, GatewayError> {
     let client = reqwest::Client::new();
@@ -42,6 +43,7 @@ pub async fn stream_zhipu_chat(
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<axum::response::sse::Event>();
     let usage_cell_for_task = usage_cell.clone();
     let app_state_clone = app_state.clone();
+    let client_token_for_outer = client_token.clone();
     tokio::spawn(async move {
         let mut es = match request_builder.eventsource() {
             Ok(es) => es,
@@ -53,6 +55,7 @@ pub async fn stream_zhipu_chat(
                 let api_key_for_log = api_key_ref.clone();
                 let started_at = start_time;
                 let msg = e.to_string();
+                let ct_err = client_token_for_outer.clone();
                 tokio::spawn(async move {
                     super::common::log_stream_error(
                         state_for_log,
@@ -60,6 +63,7 @@ pub async fn stream_zhipu_chat(
                         model_for_log,
                         provider_for_log,
                         api_key_for_log,
+                        ct_err,
                         msg,
                     )
                     .await;
@@ -76,6 +80,7 @@ pub async fn stream_zhipu_chat(
                     if m.data.trim() == "[DONE]" {
                         if !logged_flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
                             let usage_snapshot = usage_cell_for_task.lock().unwrap().clone();
+                            let ct_done = client_token_for_outer.clone();
                             tokio::spawn({
                                 let app = app_state_clone.clone();
                                 let model = model_with_prefix.clone();
@@ -88,6 +93,7 @@ pub async fn stream_zhipu_chat(
                                         model,
                                         provider,
                                         api_key,
+                                        ct_done,
                                         usage_snapshot,
                                     )
                                     .await;
@@ -140,6 +146,7 @@ pub async fn stream_zhipu_chat(
                         let api_key_for_log = api_key_ref.clone();
                         let started_at = start_time;
                         let error_for_log = error_msg.clone();
+                        let ct_stream_err = client_token_for_outer.clone();
                         tokio::spawn(async move {
                             super::common::log_stream_error(
                                 state_for_log,
@@ -147,6 +154,7 @@ pub async fn stream_zhipu_chat(
                                 model_for_log,
                                 provider_for_log,
                                 api_key_for_log,
+                                ct_stream_err,
                                 error_for_log,
                             )
                             .await;
@@ -161,6 +169,7 @@ pub async fn stream_zhipu_chat(
         // 兜底：未收到 [DONE] 但流已结束，按最后一次 usage 记录日志
         if !logged_flag.load(std::sync::atomic::Ordering::SeqCst) {
             let usage_snapshot = usage_cell_for_task.lock().unwrap().clone();
+            let ct_fallback = client_token_for_outer.clone();
             tokio::spawn({
                 let app = app_state_clone.clone();
                 let model = model_with_prefix.clone();
@@ -173,6 +182,7 @@ pub async fn stream_zhipu_chat(
                         model,
                         provider,
                         api_key,
+                        ct_fallback,
                         usage_snapshot,
                     )
                     .await;

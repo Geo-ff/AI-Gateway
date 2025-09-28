@@ -17,14 +17,14 @@ pub async fn select_provider_for_model(
     // 如果解析出了供应商前缀，尝试直接匹配该供应商（从数据库读取）
     if let Some(provider_name) = &parsed_model.provider_name {
         if let Some(provider) = app_state
-            .db
+            .providers
             .get_provider(provider_name)
             .await
             .ok()
             .flatten()
         {
             let db_keys = app_state
-                .db
+                .providers
                 .get_provider_keys(provider_name, &app_state.config.logging.key_log_strategy)
                 .await
                 .unwrap_or_default();
@@ -49,7 +49,7 @@ pub async fn select_provider_for_model(
 pub async fn select_provider(app_state: &AppState) -> Result<SelectedProvider, BalanceError> {
     // 从数据库读取所有供应商，并为其填充动态密钥
     let mut providers = app_state
-        .db
+        .providers
         .list_providers_with_keys(&app_state.config.logging.key_log_strategy)
         .await
         .map_err(|_| BalanceError::NoProvidersAvailable)?;

@@ -6,4 +6,5 @@ host = "0.0.0.0"
 port = 8080
 
 [logging]
-database_path = "data/gateway.db"
+pg_url = "host=127.0.0.1 port=15432 dbname=postgres user=gaussdb password=MyPassword123@abc"
+pg_schema = "public"

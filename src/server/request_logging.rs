@@ -13,12 +13,33 @@ pub async fn log_chat_request(
     model: &str,
     provider_name: &str,
     api_key_raw: &str,
+    client_token: Option<&str>,
     response: &Result<RawAndTypedChatCompletion, GatewayError>,
 ) {
     let end_time = Utc::now();
     let response_time_ms = (end_time - start_time).num_milliseconds();
 
     let api_key = api_key_hint(&app_state.config.logging, api_key_raw);
+
+    // 计算本次消耗金额（仅当有价格与 usage 可用，且非管理员“身份令牌”）
+    let amount_spent: Option<f64> = match response {
+        Ok(dual) => {
+            let usage = dual.typed.usage.as_ref();
+            if let (Some(u), Some(tok)) = (usage, client_token) {
+                if tok == "admin_token" { None } else {
+                    match app_state.log_store.get_model_price(provider_name, model).await {
+                        Ok(Some((p_pm, c_pm, _))) => {
+                            let p = u.prompt_tokens as f64 * p_pm / 1_000_000.0;
+                            let c = u.completion_tokens as f64 * c_pm / 1_000_000.0;
+                            Some(p + c)
+                        }
+                        _ => None,
+                    }
+                }
+            } else { None }
+        }
+        Err(_) => None,
+    };
 
     let log = RequestLog {
         id: None,
@@ -29,6 +50,8 @@ pub async fn log_chat_request(
         model: Some(model.to_string()),
         provider: Some(provider_name.to_string()),
         api_key,
+        client_token: client_token.map(|s| s.to_string()),
+        amount_spent,
         status_code: if response.is_ok() { 200 } else { 500 },
         response_time_ms,
         prompt_tokens: response.as_ref().ok().and_then(|r| r.typed.usage.as_ref().map(|u| u.prompt_tokens)),
@@ -41,6 +64,21 @@ pub async fn log_chat_request(
 
     if let Err(e) = app_state.log_store.log_request(log).await {
         tracing::error!("Failed to log request: {}", e);
+    }
+
+    // 增量更新 admin_tokens：金额与 tokens（仅非管理员令牌且有 usage/金额时）
+    if let Some(tok) = client_token.filter(|t| *t != "admin_token") {
+        if let Some(delta) = amount_spent {
+            if let Err(e) = app_state.token_store.add_amount_spent(tok, delta).await { tracing::warn!("Failed to update token spent: {}", e); }
+        }
+        if let Ok(r) = response {
+            if let Some(u) = r.typed.usage.as_ref() {
+                let prompt = u.prompt_tokens as i64;
+                let completion = u.completion_tokens as i64;
+                let total = u.total_tokens as i64;
+                if let Err(e) = app_state.token_store.add_usage_spent(tok, prompt, completion, total).await { tracing::warn!("Failed to update token tokens: {}", e); }
+            }
+        }
     }
 }
 
@@ -67,6 +105,7 @@ pub async fn log_simple_request(
     request_type: &str,
     model: Option<String>,
     provider: Option<String>,
+    client_token: Option<&str>,
     status_code: u16,
     error_message: Option<String>,
 ) {
@@ -82,6 +121,8 @@ pub async fn log_simple_request(
         model,
         provider,
         api_key: None,
+        client_token: client_token.map(|s| s.to_string()),
+        amount_spent: None,
         status_code,
         response_time_ms,
         prompt_tokens: None,

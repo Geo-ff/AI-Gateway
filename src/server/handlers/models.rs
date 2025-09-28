@@ -1,4 +1,4 @@
-use axum::{extract::{Path, Query, State}, http::Uri, response::{IntoResponse, Json, Response}};
+use axum::{extract::{Path, Query, State}, http::{Uri, HeaderMap}, response::{IntoResponse, Json, Response}};
 use chrono::Utc;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -10,19 +10,56 @@ use crate::server::model_helpers::fetch_provider_models;
 use crate::server::model_cache::{get_cached_models_all, get_cached_models_for_provider};
 use crate::server::request_logging::log_simple_request;
 use crate::server::AppState;
+use super::auth::ensure_client;
 
 pub async fn list_models(
     State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
     uri: Uri,
 ) -> Result<Json<ModelListResponse>, GatewayError> {
     let start_time = Utc::now();
-    let cached_models = get_cached_models_all(&app_state).await?;
+    let provided_token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
+    // 令牌校验
+    let is_admin = match ensure_client(&headers, &app_state).await {
+        Ok(v) => v,
+        Err(e) => {
+            let path = uri
+                .path_and_query()
+                .map(|pq| pq.as_str().to_string())
+                .unwrap_or_else(|| "/v1/models".to_string());
+            let code = e.status_code().as_u16();
+            log_simple_request(&app_state, start_time, "GET", &path, REQ_TYPE_MODELS_LIST, None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
+            return Err(e);
+        }
+    };
+    let mut cached_models = get_cached_models_all(&app_state).await?;
+    // 若令牌有限制，仅返回该令牌允许的模型
+    if !is_admin {
+        if let Some(tok) = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "))
+        {
+            if let Some(t) = app_state.token_store.get_token(tok).await? {
+                if let Some(allow) = t.allowed_models.as_ref() {
+                    use std::collections::HashSet;
+                    let allow_set: HashSet<&str> = allow.iter().map(|s| s.as_str()).collect();
+                    cached_models.retain(|m| allow_set.contains(m.id.as_str()));
+                }
+            }
+        }
+    }
     let path = uri
         .path_and_query()
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| "/v1/models".to_string());
     let result = Json(ModelListResponse { object: "list".to_string(), data: cached_models });
-    log_simple_request(&app_state, start_time, "GET", &path, REQ_TYPE_MODELS_LIST, None, None, 200, None).await;
+    let token_for_log = provided_token.as_deref().map(|tok| if tok == app_state.admin_identity_token { "admin_token" } else { tok });
+    log_simple_request(&app_state, start_time, "GET", &path, REQ_TYPE_MODELS_LIST, None, None, token_for_log, 200, None).await;
     Ok(result)
 }
 
@@ -36,15 +73,39 @@ pub async fn list_provider_models(
     Path(provider_name): Path<String>,
     State(app_state): State<Arc<AppState>>,
     Query(params): Query<ProviderModelsQuery>,
+    headers: HeaderMap,
     uri: Uri,
 ) -> Result<Response, GatewayError> {
     let start_time = Utc::now();
+    let provided_token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
     let full_path = uri
         .path_and_query()
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| format!("/models/{}", provider_name));
 
-    let provider = match app_state.db.get_provider(&provider_name).await.map_err(GatewayError::Db)? {
+    // 令牌校验（任意有效令牌）
+    if let Err(e) = ensure_client(&headers, &app_state).await {
+        let code = e.status_code().as_u16();
+        log_simple_request(
+            &app_state,
+            start_time,
+            "GET",
+            &full_path,
+            REQ_TYPE_PROVIDER_MODELS_LIST,
+            None,
+            Some(provider_name.clone()),
+            provided_token.as_deref(),
+            code,
+            Some(e.to_string()),
+        ).await;
+        return Err(e);
+    }
+
+    let provider = match app_state.providers.get_provider(&provider_name).await.map_err(GatewayError::Db)? {
         Some(p) => p,
         None => {
             let ge = crate::error::GatewayError::NotFound(format!("Provider '{}' not found", provider_name));
@@ -57,6 +118,7 @@ pub async fn list_provider_models(
                 REQ_TYPE_PROVIDER_MODELS_LIST,
                 None,
                 Some(provider_name.clone()),
+                provided_token.as_deref(),
                 code,
                 Some(format!("Provider '{}' not found", provider_name)),
             )
@@ -79,6 +141,7 @@ pub async fn list_provider_models(
             REQ_TYPE_PROVIDER_MODELS_LIST,
             None,
             Some(provider_name.clone()),
+            provided_token.as_deref(),
             200,
             None,
         )
@@ -88,7 +151,7 @@ pub async fn list_provider_models(
     }
 
     let api_key = match app_state
-        .db
+        .providers
         .get_provider_keys(&provider_name, &app_state.config.logging.key_log_strategy)
         .await
         .map_err(GatewayError::Db)?
@@ -107,6 +170,7 @@ pub async fn list_provider_models(
                 REQ_TYPE_PROVIDER_MODELS_LIST,
                 None,
                 Some(provider_name.clone()),
+                provided_token.as_deref(),
                 code,
                 None,
             )
@@ -127,6 +191,7 @@ pub async fn list_provider_models(
                 REQ_TYPE_PROVIDER_MODELS_LIST,
                 None,
                 Some(provider_name.clone()),
+                provided_token.as_deref(),
                 code,
                 Some(e.to_string()),
             )
@@ -143,6 +208,7 @@ pub async fn list_provider_models(
         REQ_TYPE_PROVIDER_MODELS_LIST,
         None,
         Some(provider_name.clone()),
+        provided_token.as_deref(),
         200,
         None,
     )

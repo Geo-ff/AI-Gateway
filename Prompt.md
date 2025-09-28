@@ -1587,10 +1587,345 @@ JSON parsing failed: Text: error: Invalid status code: 400 Bad Request. Error me
 还有，请问当前项目中，还有那些函数或者方法是没有使用我们定义的统一的 error 而是自己处理错误的？请你也进行评估和处理
 
 
+你是一名经验丰富的软件开发工程师，专注于构建高性能、健壮的解决方案。
+
+你的任务是：**审查、理解并迭代式地改进现有代码库**
+
+我们现在可以开始实现管理员和普通用户的功能了。请你先实现：
+1. 如果你知道 OneApi 或者 NewApi 这任意一个项目的话，你就知道这两个 AI 网关项目是管理员才可以创建供应商和添加修改模型和为每个供应商的密钥进行管理，还可以对用户进行 curd 的管理，同时可以修改每个用户的“余额”和可以使用的模型。并且管理员还可以创建属于自己的“令牌”，通过这个新的“令牌”来去调用添加好的供应商提供的模型（而且管理员也可以限制自己的某个令牌可以调用的模型，以及可以使用的余额，超过了就自动禁用令牌，而且还可以设定令牌的过期时间），从而实现所有的供应商的模型聚合，达成 AI 网关的目的；而普通用户的权利只有创建属于自己的模型调用“令牌”的权限，并且也无法修改自己的用户“余额”，只能修改自己对于每个“令牌”的可用余额和过期时间以及可以调用的模型（也就是在管理员对这个用户开放的模型权限的基础上，用户可以再单独对自己的某个令牌做模型调用限制），这个“令牌”可用“余额”看似可以随意修改，但是会受到用户本身的“余额”的约束。
+2. 我们当前使用的数据库是 sqlite，但是如果用户在启动项目的时候，在 custom-config.toml 文件中的 [logging] 部分定义了 Postgresql 数据库的连接地址，指定了需要连接的 schema 等参数，那么同样的可以进行连接和处理。而且我需要使用 GaussDB 数据库，其实 Postgresql 数据库并不是我想要使用的，我只要使用 GaussDB 数据库。你知道这个数据库么？似乎是和 Postgresql 数据库兼容的，所以我才用 Postgresql 数据库举例而已。
+
+当前路径下有两个成熟的项目，一个是 Newapi，对应的路径是 new-api，你可以进行阅读来了解到底该如何合理地设计多用户和令牌等，并且基于我当前项目的情况进行合适的实现。而另外一个是在 ai-gateway/ai-gateway 路径下的 ai-gateway，这个项目你可以和进行阅读来了解该如何去与 Postgresql 数据库集成。
+
+对于任务 1，我在思考后决定不要实现和“用户”有关的任何功能，包括对用户的 curd 操作等都不要实现，只要你为我实现管理员的功能，和管理员的“令牌”创建和对于单个令牌的模型限制以及额度限制功能，还可以对令牌进行禁用和启用，并且将模型的使用情况和我们当前已有的日志记录结合起来，Newapi 成熟的商业分发等功能都不要添加和实现。
+而对于任务 2，先尝试进行标准的 Postgresql 数据库的连接和处理（我本地是 17 的版本），再尝试去兼容 GaussDB 数据库（经过我的查询，对于我们这个常规的 curd 操作，只要用操作 Postgresql 数据库的方式对 GaussDB 数据库操作即可，语法是完全兼容的，因此你直接按照 Postgresql 数据库的方式来实现就好了，如果你需要查询当前 Postgresql 数据库中的表情况，你可以使用已有的名为 postgres 的 mcp 工具进行只读查询操作，数据库我已经启动在本地，连接地址参数为： postgresql://127.0.0.1:15432/postgres?currentSchema=public&user=gaussdb&password=MyPassword123@abc）
+
+因此，请你在完整了解当前项目已有代码和我的要求的前提下，进行准确的功能添加。
+
+如果你在编码的过程中碰到语法了错误和问题，请你使用 context7 MCP 来获取最新的开发文档来解决。
+
+在你完成所有的任务之后，将任务日志也精要地追加到 docs/Develop3.md 文件中去，并且使用中文。
+
+在整个工作流程中，你必须内化并严格遵循以下核心编程原则，确保你的每次输出和建议都体现这些理念：
+
+- **简单至上 (KISS):** 追求代码和设计的极致简洁与直观，避免不必要的复杂性。
+- **精益求精 (YAGNI):** 仅实现当前明确所需的功能，抵制过度设计和不必要的未来特性预留。
+- **坚实基础 (SOLID):**
+  - **S (单一职责):** 各组件、类、函数只承担一项明确职责。
+  - **O (开放/封闭):** 功能扩展无需修改现有代码。
+  - **L (里氏替换):** 子类型可无缝替换其基类型。
+  - **I (接口隔离):** 接口应专一，避免“胖接口”。
+  - **D (依赖倒置):** 依赖抽象而非具体实现。
+- **杜绝重复 (DRY):** 识别并消除代码或逻辑中的重复模式，提升复用性。
 
 
 
 
+我看了一下你的说明，我希望你继续完成：
+1. 要将 sqlite 和 Postgresql 独立出来，你当前竟然还保留 sqlite 作为兼容性？我已经表述的很明确了，如果用户在配置文件中定义了使用 Postgresql 数据库，那么所有的日志都是用 Postgresql 存储，而不是你现在的还保留 sqlite，你不觉得这样代码耦合性太高了吗？明明是两个独立的数据库服务，你却要同时使用
+2. 对于额度限制，我看到你当前说明是根据使用量来进行限制的，请你引入 Newapi 那样的管理员可以为已经添加好的模型设置输入输出（也就是提示和补全）的价格（不是 Newapi 采用的倍率模型，我们直接用价格，比如每百万 Token 提示/输入 是多少美元/人民币，输出每百万 token 是多少美元/人民币，这样进行额度的限制，更易于人类读），这样就可以设置“额度”来对令牌进行管理
+3. 管理员属于自己的专属令牌，也就是使用所有接口和可以创建令牌的这个“身份令牌”，应当在系统启动的时候，系统自动生成一个新的，而且是每次都是唯一的，新的。并且显示在控制台输出中，以确保管理员“身份令牌”的安全性，这个是使用管理员接口的唯一凭证
+4. 而业务调用（聊天）接口，如果携带的是管理员的“身份令牌”，则可以无限制地使用所有模型和无额度限制，其他的令牌则按照常规的约束来进行验证。并且，既然已经引入了令牌机制，那么若未携带令牌，不要给我保持什么兼容性，直接拒绝访问，然后令牌的放置位置和 OpenAI 统一，放在 Bearer <token> 部分即可
+
+
+
+
+1. 对于 GET /v1/models 接口，缺少必要的令牌认证
+2. 对于 POST /providers 接口，使用下面的数据添加供应商失败：
+```
+{
+    "name": "newapi",
+    "api_type": "openai",
+    "base_url": "https://apis.134257.xyz",
+    "models_endpoint": "/v1/models"
+}
+```
+返回：
+```
+{
+    "code": "db_error",
+    "message": "Database error: db error: ERROR: syntax error at or near \"CONFLICT (\""
+}
+```
+错误，控制台日志为：
+```
+2025-09-28 13:11:57 DEBUG tokio_postgres::prepare: preparing query s19: SELECT 1 FROM providers WHERE name = $1 LIMIT 1
+2025-09-28 13:11:57 DEBUG tokio_postgres::query: executing statement s19 with parameters: ["newapi"]
+2025-09-28 13:11:57 DEBUG tokio_postgres::prepare: preparing query s20: INSERT INTO providers (name, api_type, base_url, models_endpoint) VALUES ($1,$2,$3,$4)
+                     ON CONFLICT (name) DO NOTHING
+```
+并且对于这种错误，provider_ops_logs 表中并没有错误记录，request_logs 表也未见日志
+3. GET /models/{provider}?refresh=true 接口也没有进行令牌验证
+4. 请你为所有接口都加上必要的令牌验证，并修复我提出的问题
+
+
+
+
+1. 还是对于 GET /v1/models 接口，如果请求用的令牌有模型限制，那么就只能返回该令牌可用的模型。
+
+2. 对于 POST /providers/{provider}/keys、POST /models/{provider}/cache 等其他所有可能会因为没有设置令牌或者其他的原因而导致操作失败返回报错信息的接口，都要如实记录在对应的操作日志表中。
+
+3. 对于 POST /admin/model-prices 接口，你需要加上验证，当前数据库根本没有名为 openai 的供应商和名为 gpt-4o-mini 的模型，但是通过：
+```
+{
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "prompt_price_per_million": 3.0,
+    "completion_price_per_million": 15.0,
+    "currency": "USD"
+}
+```
+竟然添加成功了。请你修复
+
+4. 这个 POST /admin/tokens/{token} 接口是如何使用的？还有 GET /admin/tokens/:{token}、GET /admin/tokens 接口又是如何使用的呢？并且，创建令牌，是管理员自己写创建的令牌么？比如自定义个 sk-giseB9gAQ3zi7jNRwXURl7K24vfbDvxchsDefc 令牌？还是创建令牌的接口只要传递进去：
+```
+{
+    "allowed_models": [
+        "openai/gpt-4o-mini"
+    ],
+    "max_amount": 0.01,
+    "enabled": true,
+    "expires_at": "2025-12-31 23:59:59"
+}
+```
+这样的参数就可以直接创建成功，获得一个随机的令牌？我希望是这样随机生成的。而且令牌要有单独的数据库表存储，请你加上，而不是一次性的。
+而且，这个接口创建也没有必要的检查，我使用：
+```
+{
+    "allowed_models": [
+        "openai/gpt-4o-mini"
+    ],
+    "max_amount": 0.01,
+    "enabled": true,
+    "expires_at": "2025-12-31 23:59:59"
+}
+```
+创建一个新的令牌，数据库已经缓存的模型中根本没有 openai/gpt-4o-mini 这个模型，竟然也能创建成功？
+我再补充一下，创建令牌的时候，需要进行模型的存在性检查，但是删除模型的时候，不需要进行令牌的反向检查。
+请你修复
+
+5. 还有，为什么数据库连接会超时？是数据库的原因还是程序的原因：
+```
+2025-09-28 13:42:08  INFO tokio_postgres::connection: WARNING: Session unused timeout.
+2025-09-28 13:42:08 ERROR gateway::admin: postgres connection error: db error: FATAL: terminating connection due to administrator command
+```
+
+6. 若某模型未设置价格，则禁止调用，除非是管理员令牌
+
+请你继续仔细的进行修改
+
+
+
+
+1. 请你加上必要的连接池来提高性能和提高连接稳定性
+2. 还是对于 GET /admin/tokens 接口，为什么我没有在数据库中看到 admin_tokens 这个表？是不是你又用了之前我就禁止你使用的 sqlite 了？请你使用 Postgre MCP 工具查询一下数据库表情况
+3. 而对于 /v1/chat/completions 聊天接口，如果请求出现报错也需要记录在数据库日志中，比如：
+```
+{
+    "code": "config_error",
+    "message": "Config error: missing bearer token"
+}
+```
+或者：
+```
+OK {"code":"config_error","message":"Config error: model price not set"}
+```
+4. 而对于 request_logs 表，因为我们现在引入了密钥机制，因此还要新添加一个属性，用于记录请求是使用了哪个令牌发出的（包含完整令牌，不要匿名），如果没有令牌就不记录，管理员令牌则记录为 admin_token
+
+
+
+
+1. 对于 GET /admin/tokens 接口，请求记录和失败日志也要记录到日志中去：
+```
+{
+    "code": "config_error",
+    "message": "Config error: admin token invalid"
+}
+```
+2. 我尝试用创建的密钥去请求 /v1/chat/completions 进行聊天，但是请求的模型没有设置价格，返回了：
+```
+{"code":"config_error","message":"Config error: model price not set"}
+```
+日志中也正确出现了日志，但是缺少请求的令牌信息，也就是没有 client_token 值
+3. 同样的 /admin/model-prices 这个接口和相关的接口，无论是请求成功还是失败也好，都没有在数据库的 provider_ops_logs 表中记录日志信息
+4. 我刚刚使用了令牌和已经设置好价格的模型进行了一次对话，我看到日志已经显示消耗了 0.00444 USD，然后我去看了一下 admin_tokens 中对应令牌的剩余额度，我惊讶的发现竟然没有这个属性值，请你进行修复
+5. 应该对外新加一个令牌额度查询接口，可以使用令牌进行余额和设定的额度上限的查询；并且再加一个接口，用于查询传入的令牌的最近的使用和消费情况；传入管理员令牌则阻止查询
+
+
+
+1. 我使用令牌进行对话的时候，我使用了一个超出可使用金额上限的令牌，然后返回了：
+```
+{"code":"config_error","message":"Config error: token disabled"}
+```
+这很好，但是错误返回的太模糊了，对于这种情况，应该先检查是不是余额不足而导致的令牌禁用的，如果是，就应该返回该令牌余额不足的报错而不是现在这个
+2. 对于 /v1/token/balance 查询接口，我测试了一下传入管理员令牌，确实是拦截了，但是看了一下数据库中的日志，client_token 属性竟然记录下来管理员的真实令牌信息，而不是我们约定好的 admin_token
+3. 而我使用 /v1/token/usage?limit=N 接口，传递的是 /v1/token/usage?limit=5 的时候，竟然报错了：
+```
+{
+    "code": "db_error",
+    "message": "Database error: error serializing parameter 1: cannot convert between the Rust type `i32` and the Postgres type `int8`"
+}
+```
+请你修复这些问题
+
+
+
+
+1. 还是 /v1/token/usage?limit=N 接口，传递了 /v1/token/usage?limit=5 的时候，现在出现了严重的错误：
+终端报错内容如下
+```
+executing statement s54 with parameters: ["dsMjxqxNSiACLiLrzTmrCt5OBQiECnZntsTL8XSt"]
+2025-09-28 15:57:11 DEBUG tokio_postgres::prepare: preparing query s55: SELECT id, timestamp, method, path, request_type, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs WHERE client_token = $1 ORDER BY id DESC LIMIT $2
+2025-09-28 15:57:11 DEBUG tokio_postgres::query: executing statement s55 with parameters: ["dsMjxqxNSiACLiLrzTmrCt5OBQiECnZntsTL8XSt", 5]
+
+thread 'tokio-runtime-worker' panicked at src/logging/postgres_store.rs:242:32:
+error retrieving column 0: error deserializing column 0: cannot convert between the Rust type `i64` and the Postgres type `int4`
+```
+postman 返回的内容如下：
+```
+GET http://localhost:8080/v1/token/usage?limit=5
+Error: socket hang up
+Request Headers
+Authorization: Bearer dsMjxqxNSiACLiLrzTmrCt5OBQiECnZntsTL8XSt
+User-Agent: PostmanRuntime/7.48.0
+Accept: */*
+Postman-Token: be093aac-70c5-45f5-8829-b51bb3c868b8
+Host: localhost:8080
+Accept-Encoding: gzip, deflate, br
+Connection: keep-alive
+```
+请你进行仔细修复
+
+
+
+
+
+
+
+对于这个 /v1/token/usage?limit=N 接口，我刚刚进行了测试，返回了下面的内容：
+```
+{
+    "items": [
+        {
+            "amount_spent": null,
+            "completion_tokens": null,
+            "error_message": null,
+            "method": "GET",
+            "model": null,
+            "path": "/v1/token/usage",
+            "prompt_tokens": null,
+            "provider": null,
+            "response_time_ms": 4,
+            "status_code": 200,
+            "timestamp": "2025-09-28 16:03:27",
+            "total_tokens": null
+        },
+        {
+            "amount_spent": null,
+            "completion_tokens": null,
+            "error_message": null,
+            "method": "GET",
+            "model": null,
+            "path": "/v1/token/balance",
+            "prompt_tokens": null,
+            "provider": null,
+            "response_time_ms": 5,
+            "status_code": 200,
+            "timestamp": "2025-09-28 15:55:38",
+            "total_tokens": null
+        },
+        {
+            "amount_spent": null,
+            "completion_tokens": null,
+            "error_message": "Config error: admin token invalid",
+            "method": "POST",
+            "model": null,
+            "path": "/admin/tokens/dsMjxqxNSiACLiLrzTmrCt5OBQiECnZntsTL8XSt/toggle",
+            "prompt_tokens": null,
+            "provider": null,
+            "response_time_ms": 0,
+            "status_code": 400,
+            "timestamp": "2025-09-28 15:52:44",
+            "total_tokens": null
+        },
+        {
+            "amount_spent": 0.007941,
+            "completion_tokens": 224,
+            "error_message": null,
+            "method": "POST",
+            "model": "Claude-4-Foxcode",
+            "path": "/v1/chat/completions",
+            "prompt_tokens": 1527,
+            "provider": "newapi",
+            "response_time_ms": 11736,
+            "status_code": 200,
+            "timestamp": "2025-09-28 15:44:19",
+            "total_tokens": 1751
+        },
+        {
+            "amount_spent": null,
+            "completion_tokens": null,
+            "error_message": null,
+            "method": "GET",
+            "model": null,
+            "path": "/v1/token/balance",
+            "prompt_tokens": null,
+            "provider": null,
+            "response_time_ms": 5,
+            "status_code": 200,
+            "timestamp": "2025-09-28 15:40:00",
+            "total_tokens": null
+        },
+        {
+            "amount_spent": 0.006204,
+            "completion_tokens": 139,
+            "error_message": null,
+            "method": "POST",
+            "model": "Claude-4-Foxcode",
+            "path": "/v1/chat/completions",
+            "prompt_tokens": 1373,
+            "provider": "newapi",
+            "response_time_ms": 6161,
+            "status_code": 200,
+            "timestamp": "2025-09-28 15:30:51",
+            "total_tokens": 1512
+        },
+        {
+            "amount_spent": 0.004485,
+            "completion_tokens": 34,
+            "error_message": null,
+            "method": "POST",
+            "model": "Claude-4-Foxcode",
+            "path": "/v1/chat/completions",
+            "prompt_tokens": 1325,
+            "provider": "newapi",
+            "response_time_ms": 7222,
+            "status_code": 200,
+            "timestamp": "2025-09-28 15:30:02",
+            "total_tokens": 1359
+        },
+        {
+            "amount_spent": 0.00444,
+            "completion_tokens": 31,
+            "error_message": null,
+            "method": "POST",
+            "model": "Claude-4-Foxcode",
+            "path": "/v1/chat/completions",
+            "prompt_tokens": 1325,
+            "provider": "newapi",
+            "response_time_ms": 8031,
+            "status_code": 200,
+            "timestamp": "2025-09-28 15:01:21",
+            "total_tokens": 1356
+        }
+    ],
+    "limit": 10,
+    "token": "dsMjxqxNSiACLiLrzTmrCt5OBQiECnZntsTL8XSt"
+}
+```
+1. 对于非 /v1/chat/completions 补全的日志，都不要返回，避免暴露系统内部信息
+2. 返回的日志结构调整一下，items 结构体中不需要返回 method、path
+3. 添加一个 total_cost 属性在最外层总结该令牌一共消费了多少额度
 
 
 
@@ -1604,11 +1939,6 @@ GET /providers/{provider}/keys
 当前项目中，你已经为我实现了当我删除掉一个供应商的时候，同步删除其密钥和缓存的模型。然后我们不是现在又实现了对于密钥删除的日志记录吗？所以请你将这些日志都同步记录进去可以么？如果过于复杂，或者其实没有必要，则不用实现。
 
 
-我们现在可以开始实现管理员和普通用户的功能了。请你先实现：
-1. 如果你知道 OneApi 或者 NewApi 这任意一个项目的话，你就知道这两个 AI 网关项目是管理员才可以创建供应商和添加修改模型和为每个供应商的密钥进行管理，还可以对用户进行 curd 的管理，同时可以修改每个用户的“余额”和可以使用的模型。并且管理员还可以创建属于自己的“令牌”，通过这个新的“令牌”来去调用添加好的供应商提供的模型（而且管理员也可以限制自己的某个令牌可以调用的模型，以及可以使用的余额，超过了就自动禁用令牌，而且还可以设定令牌的过期时间），从而实现所有的供应商的模型聚合，达成 AI 网关的目的；而普通用户的权利只有创建属于自己的模型调用“令牌”的权限，并且也无法修改自己的用户“余额”，只能修改自己对于每个“令牌”的可用余额和过期时间以及可以调用的模型（也就是在管理员对这个用户开放的模型权限的基础上，用户可以再单独对自己的某个令牌做模型调用限制），这个“令牌”可用“余额”看似可以随意修改，但是会受到用户本身的“余额”的约束。
-
-
-3. 在你完成上面的任务之后，为当前的对话接口加一个超时机制，因为我在测试的时候碰到过上游供应商很久都没有返回的情况，但是却一直在等待，所以请你先进
 数据库使用 Postgresql 
 识图、思考、工具调用、MCP、自己的 token 计算逻辑
 密钥分发、TUN 或者 GUI

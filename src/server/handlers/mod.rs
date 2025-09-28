@@ -8,6 +8,10 @@ mod models;
 mod cache;
 mod provider_keys;
 mod providers;
+mod admin_tokens;
+mod admin_prices;
+mod token_info;
+mod auth;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -29,4 +33,17 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/providers/{provider}",
             get(providers::get_provider).put(providers::update_provider).delete(providers::delete_provider),
         )
+        .route("/admin/tokens", get(admin_tokens::list_tokens).post(admin_tokens::create_token))
+        .route(
+            "/admin/tokens/{token}",
+            get(admin_tokens::get_token).put(admin_tokens::update_token),
+        )
+        .route(
+            "/admin/tokens/{token}/toggle",
+            post(admin_tokens::toggle_token),
+        )
+        .route("/admin/model-prices", post(admin_prices::upsert_model_price).get(admin_prices::list_model_prices))
+        .route("/admin/model-prices/{provider}/{model}", get(admin_prices::get_model_price))
+        .route("/v1/token/balance", get(token_info::token_balance))
+        .route("/v1/token/usage", get(token_info::token_usage))
 }

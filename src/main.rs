@@ -5,6 +5,7 @@ mod providers;
 mod logging;
 mod error;
 mod crypto;
+mod admin;
 
 use tracing_subscriber::{fmt, EnvFilter};
 
