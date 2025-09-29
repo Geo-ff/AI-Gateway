@@ -1,22 +1,29 @@
-use axum::{routing::{get, post}, Router};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use std::sync::Arc;
 
 use crate::server::AppState;
 
-mod chat;
-mod models;
-mod cache;
-mod provider_keys;
-mod providers;
-mod admin_tokens;
+mod admin_metrics;
 mod admin_prices;
-mod token_info;
+mod admin_tokens;
 mod auth;
 mod auth_login;
+mod auth_tui;
+mod cache;
+mod chat;
+mod models;
+mod provider_keys;
+mod providers;
+mod token_info;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         // Auth for Web
+        .route("/auth/tui/challenge", post(auth_tui::challenge))
+        .route("/auth/tui/verify", post(auth_tui::verify))
         .route("/auth/login-codes", post(auth_login::create_login_code))
         .route("/auth/code/redeem", post(auth_login::redeem_code))
         .route("/auth/session", get(auth_login::get_session))
@@ -34,12 +41,25 @@ pub fn routes() -> Router<Arc<AppState>> {
                 .post(provider_keys::add_provider_key)
                 .delete(provider_keys::delete_provider_key),
         )
-        .route("/providers", get(providers::list_providers).post(providers::create_provider))
+        .route(
+            "/providers/{provider}/keys/batch",
+            post(provider_keys::add_provider_keys_batch)
+                .delete(provider_keys::delete_provider_keys_batch),
+        )
+        .route(
+            "/providers",
+            get(providers::list_providers).post(providers::create_provider),
+        )
         .route(
             "/providers/{provider}",
-            get(providers::get_provider).put(providers::update_provider).delete(providers::delete_provider),
+            get(providers::get_provider)
+                .put(providers::update_provider)
+                .delete(providers::delete_provider),
         )
-        .route("/admin/tokens", get(admin_tokens::list_tokens).post(admin_tokens::create_token))
+        .route(
+            "/admin/tokens",
+            get(admin_tokens::list_tokens).post(admin_tokens::create_token),
+        )
         .route(
             "/admin/tokens/{token}",
             get(admin_tokens::get_token).put(admin_tokens::update_token),
@@ -48,8 +68,16 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/admin/tokens/{token}/toggle",
             post(admin_tokens::toggle_token),
         )
-        .route("/admin/model-prices", post(admin_prices::upsert_model_price).get(admin_prices::list_model_prices))
-        .route("/admin/model-prices/{provider}/{model}", get(admin_prices::get_model_price))
+        .route(
+            "/admin/model-prices",
+            post(admin_prices::upsert_model_price).get(admin_prices::list_model_prices),
+        )
+        .route(
+            "/admin/model-prices/{provider}/{model}",
+            get(admin_prices::get_model_price),
+        )
+        .route("/admin/metrics/summary", get(admin_metrics::summary))
+        .route("/admin/metrics/series", get(admin_metrics::series))
         .route("/v1/token/balance", get(token_info::token_balance))
         .route("/v1/token/usage", get(token_info::token_usage))
 }

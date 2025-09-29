@@ -2228,6 +2228,356 @@ Code: xxx
 
 
 
+
+
+
+
+你是一名经验丰富的软件开发工程师，专注于构建高性能、健壮的解决方案。
+你的任务是：**审查、理解并迭代式地改进现有代码库**。
+
+我们之前的讨论内容如下：
+```
+我的提问：
+我们讨论的 ssh 不是连接服务器用的那个 ssh 吧，毕竟我们用的都是 HTTPS 协议。目前的登录流程是不是，本地通过某一个命令启动 TUI 界面，然后和我们的服务器建立连接，然后通过公私钥进行验证，完成登录，从而进入到 TUI 界面。然后这个 TUI 界面也可以完整地实现 web 前端的大部分功能。如果需要登录 web 前端，可以通过 TUI 来生成一个魔法链接完成验证自动跳到管理界面。或者生成一个可调整有效时长的 Token，然后访问前端的登录界面输入 Token 完成登录？对于这个魔法 URL，你觉得有必要吗？安全么？（只考虑本地开发和部署后纯 HTTPS 情况）
+
+你的回答：
+> 方向结论
+
+  - 采用“本地 TUI + 服务器 HTTPS”的公私钥挑战应答登录方案最合适。TUI 完成管理员认证并持有会话；若需登录 Web，TUI 再生成一次性登录凭证（Code 或 Magic URL）。
+  - Magic URL 在纯 HTTPS 环境下可安全使用，但建议“默认提供 Code 输入 + 可选 Magic URL”。Code 更安全（不泄露到 URL/Referer/日志），Magic URL 仅在 HTTPS 且 TTL 极短、单次使用、立即跳转且不记录敏
+  感信息时开启。
+
+  整体架构
+
+  - 密钥认证：服务器保存管理员公钥（只存公钥/指纹）；TUI 持私钥。TUI 与服务器通过 HTTPS 走“挑战-应答”完成登录，换取 TUI 会话 Token（或 Cookie 不需要，TUI 用 Bearer 即可）。
+  - Web 登录：TUI 在已登录前提下向服务器申请一次性登录凭证：
+      - 一次性 Code（推荐）：8–10 位字符，TTL ≤ 60 秒，单次使用。
+      - Magic URL（可选）：{base}/auth/magic/{code}，TTL ≤ 60 秒，单次使用，仅 HTTPS。
+  - 会话：Web 侧使用 Cookie 会话（HttpOnly、SameSite=Strict、HTTPS 下 Secure）。TUI 侧用 Bearer 会话 Token 调 API。
+
+  端到端流程（建议）
+
+  - TUI 登录（公私钥挑战应答）
+      - POST /auth/tui/challenge → 返回 {challenge_id, nonce_b64, alg, expires_at}。
+      - TUI 用私钥对 nonce 签名 → POST /auth/tui/verify {challenge_id, fingerprint, signature}。
+      - 成功 → 返回 {tui_token, expires_in}（JWT 或 opaque），TUI 持此 Token 调用所有管理 API。
+  - 生成 Web 登录凭证
+      - POST /auth/login-codes {ttl_secs?}（需 Authorization: Bearer <tui_token>）→ {code, expires_at, login_url?}。
+      - 登录页（推荐）：输入 code → POST /auth/code/redeem {code} → Set-Cookie: session=... → 302 /admin。
+      - Magic URL（可选）：GET /auth/magic/{code} → 设置 Cookie → 立即 302 /admin。
+  - 会话管理
+      - GET /auth/session 检查是否有效，前端用于首次加载。
+      - POST /auth/logout 清理 Cookie。
+
+  端点设计（建议）
+
+  - 登录与验证
+      - POST /auth/tui/challenge、POST /auth/tui/verify
+      - POST /auth/login-codes（需 TUI 会话）
+      - POST /auth/code/redeem、GET /auth/magic/{code}、GET /auth/session、POST /auth/logout
+  - 密钥管理（可选）
+      - POST /auth/keys {public_key, comment, enabled?}、GET /auth/keys、DELETE /auth/keys/{fingerprint}
+  - 后端校验点
+      - src/server/handlers/auth.rs：扩展 ensure_admin 支持 Cookie 会话（优先 Cookie，其次保留 admin_identity_token 兼容）。
+      - src/server/request_logging.rs：对 /auth/** 请求不记录 code/token/签名，或直接跳过。
+
+  Magic URL 的必要性与安全性
+
+  - 是否必要：不是必须，Code 足够。Magic URL提供“免输入”体验，适合 HTTPS 环境。
+  - 安全性（HTTPS 前提下，且你是单管理员）：
+      - 风险点是 URL 泄露（历史记录、剪贴板、Referer）。可通过以下措施显著降低：
+          - 单次使用 + TTL ≤ 60 秒；兑换后立刻失效。
+          - 立即 302 跳转到不带 code 的页面；响应头 Referrer-Policy: no-referrer。
+          - 服务器对 /auth/magic/** 禁止写访问日志的完整 URL（或完全跳过此类日志）。
+          - 只在 X-Forwarded-Proto=https 时启用；否则仅提供 Code。
+      - 可替代方案：将 code 放在 URL fragment（/#code=xxxx）。服务器不可见 fragment，登录页用 JS 读取后以 POST 提交，这样服务器日志完全不触及 code；但会多一步页面脚本。
+
+  数据与会话
+
+  - 存储
+      - admin_public_keys(fingerprint TEXT PK, user TEXT, public_key TEXT, enabled BOOL, created_at TEXT)
+      - login_codes(code TEXT PK, expires_at TEXT, used BOOL, ip_hint TEXT)（可选 ip 绑定）
+      - tui_sessions(session_id TEXT PK, admin_fingerprint TEXT, expires_at TEXT, revoked BOOL)（如用 opaque）
+  - 配置
+      - server.admin_secret：会话签名密钥（JWT 或 HMAC 生成 opaque）
+      - server.public_base_url：Magic URL 生成用（仅 HTTPS）
+  - Cookie
+      - HttpOnly、SameSite=Strict，HTTPS 环境下 Secure。
+
+  安全措施清单
+
+  - 挑战-应答：alg 统一（优先 ed25519），签名数据明确包含 nonce + audience(gateway) + ts，防重放。
+  - 凭证限制：Code 与 Magic URL 均“单次使用 + 短 TTL”；失败与尝试频率限流（IP 维度）。
+  - 掩码与日志：/auth/** 端点不记录敏感字段；全局 tracing 层对 querystring 打掩码或禁止。
+  - 仅 HTTPS：生产中强制 HTTPS（或在反代后检查 X-Forwarded-Proto=https）。
+  - 最少授权：TUI Token 权限=管理员；如未来细分，可在 Token 内加入权限声明。
+
+  开发步骤（落地顺序）
+
+  - 后端
+      - 增加配置 admin_secret, public_base_url；新增表 admin_public_keys, login_codes。
+      - 实现 /auth/tui/challenge、/auth/tui/verify、/auth/login-codes、/auth/code/redeem、/auth/magic/{code}、/auth/session、/auth/logout。
+      - 扩展 ensure_admin 支持 Cookie 会话；request_logging 对 /auth/** 做掩码/跳过。
+  - TUI
+      - 启动后引导：若无私钥，生成并显示公钥指纹；管理员用一次性 admin_secret 或本地工具把公钥注册到服务器。
+      - 登录流程：挑战-应答换取 tui_token；缓存与刷新；菜单提供“生成 Code / Magic URL”、“查看/吊销会话”等。
+  - Web
+      - 登录页（默认 Code 输入，HTTPS 时显示“Magic URL 登录”说明）。
+      - 管理页共用现有 REST；fetch 开启 credentials: 'include' 使用 Cookie。
+
+  小结
+
+  - 你的理解完全正确：TUI 本地启动，通过 HTTPS 与服务端完成公私钥认证，之后可生成 Code 或 Magic URL 给 Web 前端使用。
+  - Magic URL 在纯 HTTPS 环境下结合单次使用与短 TTL是安全的，作为“便捷选项”很合适；默认仍建议 Code 输入作为基础方式。
+```
+
+而根据之前的讨论，当前项目已完成三大核心组件：
+  1. **后端 AI 网关**：功能完整，支持多供应商、流式传输、图像识别、完整的管理员认证和令牌系统（也就是当前目录）
+  2. **Vue 前端**：基础管理界面已实现，包含认证、路由守卫、会话管理（在 getway 路径下）
+  3. **TUI 管理工具**：界面优化完成，支持 Code/Magic URL 生成、参数配置、复制等功能（在 tui 路径下）
+
+  现在需要你继续完成项目的剩余功能：
+
+  ## 主要任务
+
+  ### 1. TUI 登录功能优化
+  - 目前 TUI 创建的登录码与会话在内存中，TUI 部分对于 Code 的使用次数检测还没有实现；请你将其落库（SQLite/Postgres），并且支持重启不丢失
+  - 实现 API 接口的访问频率限制（TUI 创建 Code 和 Magic URI 要有一定的冷却时间，不能立即创建，对于 Code，至少要在上一个 Code 创建超过 5s 后才可以刷新新 Code，但是只要刷新了，前一个 Code 立即失效，Magic URL 同理）
+
+  ### 2. Vue 前端功能完善
+  - 完善验证 Code 界面，去掉目前的测试内容，改为生产级的登录验证界面
+  - 完善管理后台界面：供应商管理、模型管理、令牌管理、使用统计
+  - 添加实时监控面板：请求统计、错误率、响应时间等
+  - 实现对指定供应商的密钥的批量操作和搜索过滤功能
+
+  ### 3. 安全性增强
+  - 现在还是在使用 Admin Identity Token 生成登录码；建议尽快接入 TUI 挑战-应答会话（/auth/tui/challenge|verify），用 TUI 会话 Token 而非 Admin Token（或者实现我们之前讨论的密钥功能，当应用启动后，控制台输出的不再是当前的登录码，而是私钥，公钥存在数据库中，便于 TUI 进行登录验证，而且再次启动不覆盖，而是只能通过 TUI 进行重置获取新的私钥）。
+
+  在你工作过程中，请你遵循下面的原则：
+  - 时刻关注优雅的架构设计，避免出现以下可能侵蚀我们代码质量的「坏味道」：
+    （1）僵化 (Rigidity): 系统难以变更，任何微小的改动都会引发一连串的连锁修改。
+    （2）冗余 (Redundancy): 同样的代码逻辑在多处重复出现，导致维护困难且容易产生不一致。
+    （3）循环依赖 (Circular Dependency): 两个或多个模块互相纠缠，形成无法解耦的"死结"，导致难以测试与复用。
+    （4）脆弱性 (Fragility): 对代码一处的修改，导致了系统中其他看似无关部分功能的意外损坏。
+    （5）晦涩性 (Obscurity): 代码意图不明，结构混乱，导致阅读者难以理解其功能和设计。
+    （6）数据泥团 (Data Clump): 多个数据项总是一起出现在不同方法的参数中，暗示着它们应该被组合成一个独立的对象。
+    （7）不必要的复杂性 (Needless Complexity): 用"杀牛刀"去解决"杀鸡"的问题，过度设计使系统变得臃肿且难以理解。
+
+  - **简单至上 (KISS):** 追求代码和设计的极致简洁与直观，避免不必要的复杂性。
+  - **精益求精 (YAGNI):** 仅实现当前明确所需的功能，抵制过度设计和不必要的未来特性预留。
+  - **坚实基础 (SOLID):** 遵循单一职责、开放封闭、里氏替换、接口隔离、依赖倒置原则。
+  - **杜绝重复 (DRY):** 识别并消除代码或逻辑中的重复模式，提升复用性。
+
+
+开发日志请你在完成开发后，使用中文精简地写在 docs/GUI2.md 文件中，交代清楚做了什么，然后如何测试，最后下一步该做什么即可，其他的都不必多说。
+在编码的过程中，你一定要善用 context7 mcp，它会给你提供最新的开发文档，减少我们的开发错误并且代码保持最新。如有需要添加的依赖，请告诉我需要添加什么，我来手动添加以保持版本最新。
+最后补充一下，如果有些文件确实需要那么长的代码量才合适，那么就可以不需要去修改，必要的时候，遵循 KISS 准则。
+
+
+
+
+
+
+我和你详细交代我的测试流程和细节，请你进行必要的回答和修复：
+1. 我首先通过 RUST_LOG=debug cargo run 启动了后端，然后控制台输出：
+
+```
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s0: SET search_path TO public
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s0 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s1: SET search_path TO public
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s1 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s2: SET search_path TO public
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s2 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s3: SET search_path TO public
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s3 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s4: CREATE TABLE IF NOT EXISTS request_logs (
+                id SERIAL PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                request_type TEXT NOT NULL,
+                model TEXT,
+                provider TEXT,
+                api_key TEXT,
+                status_code INTEGER NOT NULL,
+                response_time_ms BIGINT NOT NULL,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                total_tokens INTEGER,
+                cached_tokens INTEGER,
+                reasoning_tokens INTEGER,
+                error_message TEXT,
+                client_token TEXT,
+                amount_spent DOUBLE PRECISION
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s4 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "request_logs" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s5: ALTER TABLE request_logs ADD COLUMN amount_spent DOUBLE PRECISION
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s5 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s6: CREATE TABLE IF NOT EXISTS cached_models (
+                id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                object TEXT NOT NULL,
+                created BIGINT NOT NULL,
+                owned_by TEXT NOT NULL,
+                cached_at TEXT NOT NULL,
+                PRIMARY KEY (id, provider)
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s6 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "cached_models" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s7: CREATE TABLE IF NOT EXISTS provider_ops_logs (
+                id SERIAL PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                provider TEXT,
+                details TEXT
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s7 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "provider_ops_logs" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s8: CREATE TABLE IF NOT EXISTS model_prices (
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                prompt_price_per_million DOUBLE PRECISION NOT NULL,
+                completion_price_per_million DOUBLE PRECISION NOT NULL,
+                currency TEXT,
+                PRIMARY KEY (provider, model)
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s8 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "model_prices" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s9: CREATE TABLE IF NOT EXISTS providers (
+                name TEXT PRIMARY KEY,
+                api_type TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                models_endpoint TEXT
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s9 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "providers" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s10: CREATE TABLE IF NOT EXISTS provider_keys (
+                provider TEXT NOT NULL,
+                key_value TEXT NOT NULL,
+                enc BOOLEAN NOT NULL DEFAULT FALSE,
+                active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (provider, key_value)
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s10 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "provider_keys" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s11: CREATE TABLE IF NOT EXISTS admin_public_keys (
+                fingerprint TEXT PRIMARY KEY,
+                public_key BYTEA NOT NULL,
+                comment TEXT,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL,
+                last_used_at TIMESTAMPTZ
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s11 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "admin_public_keys" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s12: CREATE TABLE IF NOT EXISTS tui_sessions (
+                session_id TEXT PRIMARY KEY,
+                fingerprint TEXT NOT NULL REFERENCES admin_public_keys(fingerprint) ON DELETE CASCADE,
+                issued_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                revoked BOOLEAN NOT NULL DEFAULT FALSE,
+                last_code_at TIMESTAMPTZ
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s12 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "tui_sessions" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s13: CREATE TABLE IF NOT EXISTS login_codes (
+                code_hash TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES tui_sessions(session_id) ON DELETE CASCADE,
+                fingerprint TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                max_uses INTEGER NOT NULL,
+                uses INTEGER NOT NULL DEFAULT 0,
+                disabled BOOLEAN NOT NULL DEFAULT FALSE,
+                hint TEXT
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s13 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "login_codes" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s14: CREATE TABLE IF NOT EXISTS web_sessions (
+                session_id TEXT PRIMARY KEY,
+                fingerprint TEXT,
+                created_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                revoked BOOLEAN NOT NULL DEFAULT FALSE,
+                issued_by_code TEXT
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s14 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "web_sessions" already exists, skipping
+2025-09-29 11:45:51  INFO gateway::server: Using PostgreSQL for logs and cache
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s15: SET search_path TO public
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s15 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s16: CREATE TABLE IF NOT EXISTS admin_tokens (
+                token TEXT PRIMARY KEY,
+                allowed_models TEXT,
+                max_tokens BIGINT,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                expires_at TEXT,
+                created_at TEXT NOT NULL,
+                max_amount DOUBLE PRECISION,
+                amount_spent DOUBLE PRECISION DEFAULT 0,
+                prompt_tokens_spent BIGINT DEFAULT 0,
+                completion_tokens_spent BIGINT DEFAULT 0,
+                total_tokens_spent BIGINT DEFAULT 0
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s16 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "admin_tokens" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s17: ALTER TABLE admin_tokens ADD COLUMN max_amount DOUBLE PRECISION
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s17 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s18: ALTER TABLE admin_tokens ADD COLUMN amount_spent DOUBLE PRECISION DEFAULT 0
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s18 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s19: ALTER TABLE admin_tokens ADD COLUMN prompt_tokens_spent BIGINT DEFAULT 0
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s19 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s20: ALTER TABLE admin_tokens ADD COLUMN completion_tokens_spent BIGINT DEFAULT 0
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s20 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s21: ALTER TABLE admin_tokens ADD COLUMN total_tokens_spent BIGINT DEFAULT 0
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s21 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s22: SELECT fingerprint, public_key, comment, enabled, created_at, last_used_at FROM admin_public_keys
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s22 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s23: UPDATE admin_public_keys
+                     SET public_key=$2, comment=$3, enabled=$4, created_at=$5, last_used_at=$6
+                     WHERE fingerprint=$1
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s23 with parameters: ["f19de53efea5550d151e5bf98d1c2d5ddec046c458bb3a64131a62805a36dc7a", [127, 41, 121, 208, 5, 3, 215, 187, 238, 61, 217, 202, 138, 247, 230, 131, 97, 204, 55, 13, 24, 236, 137, 212, 81, 4, 60, 57, 1, 213, 188, 186], Some("generated-on-boot"), true, 2025-09-29T03:45:51.901283878Z, None]
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s24: INSERT INTO admin_public_keys (fingerprint, public_key, comment, enabled, created_at, last_used_at)
+                         VALUES ($1, $2, $3, $4, $5, $6)
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s24 with parameters: ["f19de53efea5550d151e5bf98d1c2d5ddec046c458bb3a64131a62805a36dc7a", [127, 41, 121, 208, 5, 3, 215, 187, 238, 61, 217, 202, 138, 247, 230, 131, 97, 204, 55, 13, 24, 236, 137, 212, 81, 4, 60, 57, 1, 213, 188, 186], Some("generated-on-boot"), true, 2025-09-29T03:45:51.901283878Z, None]
+2025-09-29 11:45:51  WARN gateway::server: 新管理员密钥已生成；指纹=f19de53efea5550d151e5bf98d1c2d5ddec046c458bb3a64131a62805a36dc7a，私钥已写入 data/admin_ed25519.key，请立即妥善备份并加载至 TUI 配置。
+2025-09-29 11:45:51  WARN gateway::server: 一次性私钥（base64）：e39rmlQdBx/7c80IXBZ0wnDjRPSPEK5tUMLTKbPxS8w=
+2025-09-29 11:45:51  INFO gateway::server: Admin Identity Token (use as Bearer): EfsNQYw86WsrLcV1L7TXsMZgqUBRV9EQzYfonNynk7UABbxX8qAL6qYA
+2025-09-29 11:45:51  INFO gateway: Gateway server running on http://0.0.0.0:8080
+```
+
+这些内容，我观察后得知有如下信息：
+1. 新管理员密钥已生成，且显示了指纹信息，而且将密钥自动写入到了 data/admin_ed25519.key 中
+2. 后面又出现了提示：WARN gateway::server: 一次性私钥（base64）：e39rmlQdBx/7c80IXBZ0wnDjRPSPEK5tUMLTKbPxS8w=
+   对于这个提示，我认为是没有必要的，因为密钥已经自动写入到文件了，不需要再在日志中暴露出来。而且“一次性私钥”是什么意思？这个一次性指的是“只会出现这一次”，还是“这个私钥是一次性使用的，下次启动会被替换掉”？我希望是前者，而不是后者，因为既然已经换成公私钥验证了，那么持久化是有必要的。
+3. 而后面还有一个 INFO gateway::server: Admin Identity Token (use as Bearer): EfsNQYw86WsrLcV1L7TXsMZgqUBRV9EQzYfonNynk7UABbxX8qAL6qYA。这个让我很疑惑，我们项目已经改成公私钥验证了，为什么还有这个之前的老的验证 Token 功能？我希望将其移除
+4. 然后我便启动了 TUI 项目，在此之前我已经删掉了旧的 config.toml 文件，所以我在输入了 cargo run 启动之后，终端输出了下面信息：
+
+```
+首次运行：请配置网关地址与管理员私钥（可稍后在 tui/config.toml 修改）
+Gateway API Base URL [http://127.0.0.1:8080]: 
+管理员私钥（base64）: e39rmlQdBx/7c80IXBZ0wnDjRPSPEK5tUMLTKbPxS8w=
+配置已保存。管理员指纹：f19de53efea5550d151e5bf98d1c2d5ddec046c458bb3a64131a62805a36dc7a
+```
+
+我给你的内容包含了我输入的部分，你可以看到，对于 Gateway API Base URL [http://127.0.0.1:8080]:，我是没有输入直接 Enter 使用默认地址的，这个是符合我的预期的。而后面的 管理员私钥（base64）: 这里，我直接粘贴了正确的私钥后，没有任何确认提示，就直接进入了 TUI 界面，这就导致最后的 配置已保存。管理员指纹：f19de53efea5550d151e5bf98d1c2d5ddec046c458bb3a64131a62805a36dc7a 日志，我是完全没有看到的。
+
+我认为这不是很友好，因为首先没有让我粘贴好管理员密钥后，让我使用 Enter 进行确认，其次就是，哪怕后续你添加了 Enter 确认功能后，也应该先确认密钥的有效性（测试一次连接或者测试几次），最后，验证无误，才让我进入到正式的 TUI 界面。
+1. 当我正式进入到 TUI 界面后，我使用按键尝试生成 Code 竟然失败了（补充一下，第一次进入才会失败，因为默认的 Code 配置竟然是空的）。第二次我重新进入之后，我惊讶的发现，Code 的默认配置变成了“过期时间 1s”，而不是之前的默认的“过期时间 30s”。导致第一次管理密钥认证成功后，第一次生成必定会失败（因为没有修改 Code 的生成配置），而第二次进入则因为默认的过短的 Code 有效期而导致让我必须要使用 C 按键打开参数设置菜单进行修改后才可以正常生成。而参数设置菜单的“过期时间”这个配置项只能 +- 10s 每次，这非常影响体验感，我建议允许用户可以实现 1s 的调整颗粒度；并且 Code 的“剩余可用次数”功能还没有实现，请你记得实现。
+2. 对于 Magic URL 功能，我也进行了测试，倒是没有什么问题，但是我希望添加一个功能，就是 Magic URL 目前不是/#/auth/magic?code=eGRwkfpsQTf4tjBTh3rCoSz8M 这样的形式么？我希望前面能够加上服务器的 URL，也就是自动生成好类似  https://xxx/#/auth/magic?code=eGRwkfpsQTf4tjBTh3rCoSz8M  的形式，开发环境同理，自动拼接开发服务器地址（也就是登录进入 TUI 界面的连接服务 URL）；并且我们当前的逻辑不是 Code 和 Magic URL 同时存在，使用 Y 按键则会让用户二次确认复制范围么？但是我希望如果其中一个过期了，那么就默认复制没有过期的，只有两个都没有过期，才需要进行二次确认选择，如果两个都过期了，则提示用户两个凭证都已经过期，请重新生成
+3. 最后我说一下 Vue 管理后台界面，先不说好不好看吧，我只想说登录成功之后，无法与后台数据交互，全都显示的是“无法解析服务器响应”，所以请你也要进行修复
+
+我只测试了上面的这些功能，我一次性说出来了，请你分步骤有条理地修复
+
+
+
+
+
+
+
+
 潜在改进点（可选）
 
   - 安全与持久化

@@ -32,7 +32,7 @@ pub async fn update_provider_cache(
     Json(payload): Json<CacheUpdatePayload>,
 ) -> Result<Response, GatewayError> {
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state) {
+    if let Err(e) = ensure_admin(&headers, &app_state).await {
         let start_time = chrono::Utc::now();
         let path = format!("/models/{}/cache", provider_name);
         // 记录操作日志与请求日志
@@ -193,7 +193,7 @@ pub async fn delete_provider_cache(
     Json(payload): Json<CacheDeletePayload>,
 ) -> Result<Response, GatewayError> {
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state) {
+    if let Err(e) = ensure_admin(&headers, &app_state).await {
         let start_time = chrono::Utc::now();
         let path = format!("/models/{}/cache", provider_name);
         let _ = app_state.log_store.log_provider_op(crate::logging::types::ProviderOpLog {

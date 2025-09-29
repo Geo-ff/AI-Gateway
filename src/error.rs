@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use crate::routing::load_balancer::BalanceError;
-use axum::{http::StatusCode, response::IntoResponse, Json};
+use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde::Serialize;
 
 #[derive(Debug, Error)]
@@ -32,6 +32,9 @@ pub enum GatewayError {
 
     #[error("Not found: {0}")]
     NotFound(String),
+
+    #[error("Rate limited: {0}")]
+    RateLimited(String),
 }
 
 pub type Result<T> = std::result::Result<T, GatewayError>;
@@ -46,10 +49,13 @@ impl GatewayError {
     pub fn status_code(&self) -> StatusCode {
         match self {
             GatewayError::Balance(BalanceError::NoProvidersAvailable)
-            | GatewayError::Balance(BalanceError::NoApiKeysAvailable) => StatusCode::SERVICE_UNAVAILABLE,
+            | GatewayError::Balance(BalanceError::NoApiKeysAvailable) => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             GatewayError::Http(_) => StatusCode::BAD_GATEWAY,
             GatewayError::Config(_) => StatusCode::BAD_REQUEST,
             GatewayError::NotFound(_) => StatusCode::NOT_FOUND,
+            GatewayError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -65,6 +71,7 @@ impl GatewayError {
             GatewayError::TimeParse(_) => "time_parse_error",
             GatewayError::Config(_) => "config_error",
             GatewayError::NotFound(_) => "not_found",
+            GatewayError::RateLimited(_) => "rate_limited",
         }
     }
 }
@@ -72,7 +79,10 @@ impl GatewayError {
 impl IntoResponse for GatewayError {
     fn into_response(self) -> axum::response::Response {
         let status = self.status_code();
-        let body = ErrorBody { code: self.code(), message: self.to_string() };
+        let body = ErrorBody {
+            code: self.code(),
+            message: self.to_string(),
+        };
         (status, Json(body)).into_response()
     }
 }

@@ -48,7 +48,7 @@ pub async fn list_tokens(
 ) -> Result<Json<Vec<AdminTokenOut>>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state) {
+    if let Err(e) = ensure_admin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(&app_state, start_time, "GET", "/admin/tokens", "admin_tokens_list", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
         return Err(e);
@@ -65,7 +65,7 @@ pub async fn get_token(
 ) -> Result<Json<AdminTokenOut>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state) {
+    if let Err(e) = ensure_admin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(&app_state, start_time, "GET", &format!("/admin/tokens/{}", token), "admin_tokens_get", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
         return Err(e);
@@ -88,7 +88,7 @@ pub async fn create_token(
 ) -> Result<(axum::http::StatusCode, Json<AdminTokenOut>), GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state) {
+    if let Err(e) = ensure_admin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(&app_state, start_time, "POST", "/admin/tokens", "admin_tokens_create", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
         return Err(e);
@@ -122,7 +122,7 @@ pub async fn toggle_token(
 ) -> Result<Json<serde_json::Value>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state) {
+    if let Err(e) = ensure_admin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(&app_state, start_time, "POST", &format!("/admin/tokens/{}/toggle", token), "admin_tokens_toggle", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
         return Err(e);
@@ -147,7 +147,7 @@ pub async fn update_token(
 ) -> Result<Json<AdminTokenOut>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state) {
+    if let Err(e) = ensure_admin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(&app_state, start_time, "PUT", &format!("/admin/tokens/{}", token), "admin_tokens_update", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
         return Err(e);

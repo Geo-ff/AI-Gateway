@@ -30,7 +30,7 @@ pub async fn upsert_model_price(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|s| s.to_string());
-    if let Err(e) = ensure_admin(&headers, &app_state) {
+    if let Err(e) = ensure_admin(&headers, &app_state).await {
         // audit + request logs on failure
         let _ = app_state.log_store.log_provider_op(ProviderOpLog {
             id: None,
@@ -93,7 +93,7 @@ pub async fn list_model_prices(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|s| s.to_string());
-    if let Err(e) = ensure_admin(&headers, &app_state) {
+    if let Err(e) = ensure_admin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(&app_state, start_time, "GET", "/admin/model-prices", "model_price_list", None, q.provider.clone(), provided_token.as_deref(), code, Some("auth failed".into())).await;
         return Err(e);
@@ -128,7 +128,7 @@ pub async fn get_model_price(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|s| s.to_string());
-    if let Err(e) = ensure_admin(&headers, &app_state) {
+    if let Err(e) = ensure_admin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(&app_state, start_time, "GET", &format!("/admin/model-prices/{}/{}", provider, model), "model_price_get", Some(model.clone()), Some(provider.clone()), provided_token.as_deref(), code, Some("auth failed".into())).await;
         return Err(e);

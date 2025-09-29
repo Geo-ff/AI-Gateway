@@ -41,7 +41,7 @@ impl From<Provider> for ProviderOut {
 }
 
 pub async fn list_providers(State(app_state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> Result<Json<Vec<ProviderOut>>, GatewayError> {
-    ensure_admin(&headers, &app_state)?;
+    ensure_admin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     let providers = app_state
@@ -67,7 +67,7 @@ pub async fn list_providers(State(app_state): State<Arc<AppState>>, headers: axu
 }
 
 pub async fn get_provider(Path(name): Path<String>, State(app_state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> Result<Json<ProviderOut>, GatewayError> {
-    ensure_admin(&headers, &app_state)?;
+    ensure_admin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     match app_state.providers.get_provider(&name).await.map_err(GatewayError::Db)? {
@@ -92,7 +92,7 @@ pub async fn get_provider(Path(name): Path<String>, State(app_state): State<Arc<
 }
 
 pub async fn create_provider(State(app_state): State<Arc<AppState>>, headers: axum::http::HeaderMap, Json(payload): Json<ProviderCreatePayload>) -> Result<(axum::http::StatusCode, Json<ProviderOut>), GatewayError> {
-    ensure_admin(&headers, &app_state)?;
+    ensure_admin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     if payload.name.trim().is_empty() {
@@ -148,7 +148,7 @@ pub async fn create_provider(State(app_state): State<Arc<AppState>>, headers: ax
 }
 
 pub async fn update_provider(Path(name): Path<String>, State(app_state): State<Arc<AppState>>, headers: axum::http::HeaderMap, Json(payload): Json<ProviderUpdatePayload>) -> Result<(axum::http::StatusCode, Json<ProviderOut>), GatewayError> {
-    ensure_admin(&headers, &app_state)?;
+    ensure_admin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     let existed = app_state.providers.provider_exists(&name).await.map_err(GatewayError::Db)?;
@@ -178,7 +178,7 @@ pub async fn update_provider(Path(name): Path<String>, State(app_state): State<A
 }
 
 pub async fn delete_provider(Path(name): Path<String>, State(app_state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> Result<axum::http::StatusCode, GatewayError> {
-    ensure_admin(&headers, &app_state)?;
+    ensure_admin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     let deleted = app_state.providers.delete_provider(&name).await.map_err(GatewayError::Db)?;

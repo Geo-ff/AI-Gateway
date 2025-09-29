@@ -1,12 +1,406 @@
-use rusqlite::{Connection, Result};
+use crate::logging::time::{parse_beijing_string, to_beijing_string};
+use crate::logging::types::RequestLog;
+use crate::server::storage_traits::{
+    AdminPublicKeyRecord, LoginCodeRecord, TuiSessionRecord, WebSessionRecord,
+};
+use chrono::{DateTime, SecondsFormat, Utc};
+use rusqlite::{Connection, OptionalExtension, Result};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::logging::time::{to_beijing_string, parse_beijing_string};
-use crate::logging::types::RequestLog;
 
 #[derive(Clone)]
 pub struct DatabaseLogger {
     pub(super) connection: Arc<Mutex<Connection>>,
+}
+
+impl crate::server::storage_traits::LoginStore for DatabaseLogger {
+    fn insert_admin_key<'a>(
+        &'a self,
+        key: &'a AdminPublicKeyRecord,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let created = encode_ts(&key.created_at);
+            let last_used_val = key.last_used_at.as_ref().map(|dt| encode_ts(dt));
+            let last_used = last_used_val.as_deref();
+            let comment = key.comment.as_deref();
+            conn.execute(
+                "INSERT OR REPLACE INTO admin_public_keys (fingerprint, public_key, comment, enabled, created_at, last_used_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    &key.fingerprint,
+                    &key.public_key,
+                    comment,
+                    if key.enabled { 1 } else { 0 },
+                    &created,
+                    last_used,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn get_admin_key<'a>(
+        &'a self,
+        fingerprint: &'a str,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<Option<AdminPublicKeyRecord>>>
+    {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let mut stmt = conn.prepare(
+                "SELECT fingerprint, public_key, comment, enabled, created_at, last_used_at FROM admin_public_keys WHERE fingerprint = ?1",
+            )?;
+            let record = stmt
+                .query_row([fingerprint], |row| {
+                    let created_raw: String = row.get(4)?;
+                    let last_used_raw: Option<String> = row.get(5)?;
+                    let created_at = decode_ts(&created_raw)?;
+                    let last_used_at = match last_used_raw {
+                        Some(v) => Some(decode_ts(&v)?),
+                        None => None,
+                    };
+                    Ok(AdminPublicKeyRecord {
+                        fingerprint: row.get(0)?,
+                        public_key: row.get(1)?,
+                        comment: row.get::<_, Option<String>>(2)?,
+                        enabled: row.get::<_, i64>(3)? != 0,
+                        created_at,
+                        last_used_at,
+                    })
+                })
+                .optional()?;
+            Ok(record)
+        })
+    }
+
+    fn touch_admin_key<'a>(
+        &'a self,
+        fingerprint: &'a str,
+        when: DateTime<Utc>,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let when_s = encode_ts(&when);
+            conn.execute(
+                "UPDATE admin_public_keys SET last_used_at = ?2 WHERE fingerprint = ?1",
+                rusqlite::params![fingerprint, &when_s],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn list_admin_keys<'a>(
+        &'a self,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<Vec<AdminPublicKeyRecord>>>
+    {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let mut stmt = conn.prepare(
+                "SELECT fingerprint, public_key, comment, enabled, created_at, last_used_at FROM admin_public_keys",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                let created_raw: String = row.get(4)?;
+                let last_used_raw: Option<String> = row.get(5)?;
+                let created_at = decode_ts(&created_raw)?;
+                let last_used_at = match last_used_raw {
+                    Some(v) => Some(decode_ts(&v)?),
+                    None => None,
+                };
+                Ok(AdminPublicKeyRecord {
+                    fingerprint: row.get(0)?,
+                    public_key: row.get(1)?,
+                    comment: row.get::<_, Option<String>>(2)?,
+                    enabled: row.get::<_, i64>(3)? != 0,
+                    created_at,
+                    last_used_at,
+                })
+            })?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            Ok(out)
+        })
+    }
+
+    fn create_tui_session<'a>(
+        &'a self,
+        session: &'a TuiSessionRecord,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let issued = encode_ts(&session.issued_at);
+            let expires = encode_ts(&session.expires_at);
+            let last_code_val = session.last_code_at.as_ref().map(|dt| encode_ts(dt));
+            let last_code = last_code_val.as_deref();
+            conn.execute(
+                "INSERT INTO tui_sessions (session_id, fingerprint, issued_at, expires_at, revoked, last_code_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    &session.session_id,
+                    &session.fingerprint,
+                    &issued,
+                    &expires,
+                    if session.revoked { 1 } else { 0 },
+                    last_code,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn get_tui_session<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<Option<TuiSessionRecord>>>
+    {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let mut stmt = conn.prepare(
+                "SELECT session_id, fingerprint, issued_at, expires_at, revoked, last_code_at FROM tui_sessions WHERE session_id = ?1",
+            )?;
+            let rec = stmt
+                .query_row([session_id], |row| {
+                    let issued_raw: String = row.get(2)?;
+                    let expires_raw: String = row.get(3)?;
+                    let last_code_raw: Option<String> = row.get(5)?;
+                    Ok(TuiSessionRecord {
+                        session_id: row.get(0)?,
+                        fingerprint: row.get(1)?,
+                        issued_at: decode_ts(&issued_raw)?,
+                        expires_at: decode_ts(&expires_raw)?,
+                        revoked: row.get::<_, i64>(4)? != 0,
+                        last_code_at: match last_code_raw {
+                            Some(v) => Some(decode_ts(&v)?),
+                            None => None,
+                        },
+                    })
+                })
+                .optional()?;
+            Ok(rec)
+        })
+    }
+
+    fn update_tui_session_last_code<'a>(
+        &'a self,
+        session_id: &'a str,
+        when: DateTime<Utc>,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let when_s = encode_ts(&when);
+            conn.execute(
+                "UPDATE tui_sessions SET last_code_at = ?2 WHERE session_id = ?1",
+                rusqlite::params![session_id, &when_s],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn revoke_tui_session<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let affected = conn.execute(
+                "UPDATE tui_sessions SET revoked = 1 WHERE session_id = ?1",
+                rusqlite::params![session_id],
+            )?;
+            Ok(affected > 0)
+        })
+    }
+
+    fn disable_codes_for_session<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            conn.execute(
+                "UPDATE login_codes SET disabled = 1 WHERE session_id = ?1 AND disabled = 0",
+                rusqlite::params![session_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn insert_login_code<'a>(
+        &'a self,
+        code: &'a LoginCodeRecord,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let created = encode_ts(&code.created_at);
+            let expires = encode_ts(&code.expires_at);
+            conn.execute(
+                "INSERT INTO login_codes (code_hash, session_id, fingerprint, created_at, expires_at, max_uses, uses, disabled, hint) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    &code.code_hash,
+                    &code.session_id,
+                    &code.fingerprint,
+                    &created,
+                    &expires,
+                    code.max_uses as i64,
+                    code.uses as i64,
+                    if code.disabled { 1 } else { 0 },
+                    code.hint.as_deref(),
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn redeem_login_code<'a>(
+        &'a self,
+        code_hash: &'a str,
+        now: DateTime<Utc>,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<Option<LoginCodeRecord>>>
+    {
+        Box::pin(async move {
+            let mut conn = self.connection.lock().await;
+            let tx = conn.transaction()?;
+            let record_opt = {
+                let mut stmt = tx.prepare(
+                    "SELECT code_hash, session_id, fingerprint, created_at, expires_at, max_uses, uses, disabled, hint FROM login_codes WHERE code_hash = ?1",
+                )?;
+                stmt.query_row([code_hash], |row| {
+                    let created_raw: String = row.get(3)?;
+                    let expires_raw: String = row.get(4)?;
+                    Ok(LoginCodeRecord {
+                        code_hash: row.get(0)?,
+                        session_id: row.get(1)?,
+                        fingerprint: row.get(2)?,
+                        created_at: decode_ts(&created_raw)?,
+                        expires_at: decode_ts(&expires_raw)?,
+                        max_uses: row.get::<_, i64>(5)? as u32,
+                        uses: row.get::<_, i64>(6)? as u32,
+                        disabled: row.get::<_, i64>(7)? != 0,
+                        hint: row.get::<_, Option<String>>(8)?,
+                    })
+                })
+                .optional()?
+            };
+
+            let mut record = match record_opt {
+                Some(r) => r,
+                None => {
+                    tx.commit()?;
+                    return Ok(None);
+                }
+            };
+
+            let mut should_disable = record.disabled;
+            if record.disabled || now > record.expires_at || record.uses >= record.max_uses {
+                should_disable = true;
+            } else {
+                record.uses += 1;
+                if record.uses >= record.max_uses {
+                    should_disable = true;
+                }
+                if now > record.expires_at {
+                    should_disable = true;
+                }
+            }
+
+            if record.disabled || now > record.expires_at || record.uses > record.max_uses {
+                tx.execute(
+                    "UPDATE login_codes SET disabled = 1 WHERE code_hash = ?1",
+                    rusqlite::params![code_hash],
+                )?;
+                tx.commit()?;
+                return Ok(None);
+            }
+
+            tx.execute(
+                "UPDATE login_codes SET uses = ?2, disabled = ?3 WHERE code_hash = ?1",
+                rusqlite::params![
+                    code_hash,
+                    record.uses as i64,
+                    if should_disable { 1 } else { 0 },
+                ],
+            )?;
+
+            record.disabled = should_disable;
+            tx.commit()?;
+            Ok(Some(record))
+        })
+    }
+
+    fn insert_web_session<'a>(
+        &'a self,
+        session: &'a WebSessionRecord,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let created = encode_ts(&session.created_at);
+            let expires = encode_ts(&session.expires_at);
+            conn.execute(
+                "INSERT INTO web_sessions (session_id, fingerprint, created_at, expires_at, revoked, issued_by_code) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    &session.session_id,
+                    session.fingerprint.as_deref(),
+                    &created,
+                    &expires,
+                    if session.revoked { 1 } else { 0 },
+                    session.issued_by_code.as_deref(),
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn get_web_session<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<Option<WebSessionRecord>>>
+    {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let mut stmt = conn.prepare(
+                "SELECT session_id, fingerprint, created_at, expires_at, revoked, issued_by_code FROM web_sessions WHERE session_id = ?1",
+            )?;
+            let rec = stmt
+                .query_row([session_id], |row| {
+                    let created_raw: String = row.get(2)?;
+                    let expires_raw: String = row.get(3)?;
+                    Ok(WebSessionRecord {
+                        session_id: row.get(0)?,
+                        fingerprint: row.get::<_, Option<String>>(1)?,
+                        created_at: decode_ts(&created_raw)?,
+                        expires_at: decode_ts(&expires_raw)?,
+                        revoked: row.get::<_, i64>(4)? != 0,
+                        issued_by_code: row.get::<_, Option<String>>(5)?,
+                    })
+                })
+                .optional()?;
+            Ok(rec)
+        })
+    }
+
+    fn revoke_web_session<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let affected = conn.execute(
+                "UPDATE web_sessions SET revoked = 1 WHERE session_id = ?1",
+                rusqlite::params![session_id],
+            )?;
+            Ok(affected > 0)
+        })
+    }
+}
+
+fn encode_ts(dt: &DateTime<Utc>) -> String {
+    dt.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn decode_ts(raw: &str) -> rusqlite::Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(raw)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })
 }
 
 impl DatabaseLogger {
@@ -17,7 +411,7 @@ impl DatabaseLogger {
                 if let Err(e) = std::fs::create_dir_all(parent) {
                     return Err(rusqlite::Error::SqliteFailure(
                         rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CANTOPEN),
-                        Some(format!("Failed to create directory: {}", e))
+                        Some(format!("Failed to create directory: {}", e)),
                     ));
                 }
                 tracing::info!("Created database directory: {}", parent.display());
@@ -25,6 +419,7 @@ impl DatabaseLogger {
         }
 
         let conn = Connection::open(database_path)?;
+        conn.execute("PRAGMA foreign_keys = ON", [])?;
         tracing::info!("Database initialized at: {}", database_path);
 
         conn.execute(
@@ -58,8 +453,14 @@ impl DatabaseLogger {
         );
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN api_key TEXT", []);
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN error_message TEXT", []);
-        let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN cached_tokens INTEGER", []);
-        let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN reasoning_tokens INTEGER", []);
+        let _ = conn.execute(
+            "ALTER TABLE request_logs ADD COLUMN cached_tokens INTEGER",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE request_logs ADD COLUMN reasoning_tokens INTEGER",
+            [],
+        );
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS cached_models (
@@ -144,10 +545,7 @@ impl DatabaseLogger {
             [],
         )?;
         // Migration: add max_amount to admin_tokens if missing
-        let _ = conn.execute(
-            "ALTER TABLE admin_tokens ADD COLUMN max_amount REAL",
-            [],
-        );
+        let _ = conn.execute("ALTER TABLE admin_tokens ADD COLUMN max_amount REAL", []);
         let _ = conn.execute(
             "ALTER TABLE admin_tokens ADD COLUMN amount_spent REAL DEFAULT 0",
             [],
@@ -164,6 +562,59 @@ impl DatabaseLogger {
             "ALTER TABLE admin_tokens ADD COLUMN total_tokens_spent INTEGER DEFAULT 0",
             [],
         );
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS admin_public_keys (
+                fingerprint TEXT PRIMARY KEY,
+                public_key BLOB NOT NULL,
+                comment TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                last_used_at TEXT
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tui_sessions (
+                session_id TEXT PRIMARY KEY,
+                fingerprint TEXT NOT NULL,
+                issued_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                revoked INTEGER NOT NULL DEFAULT 0,
+                last_code_at TEXT,
+                FOREIGN KEY(fingerprint) REFERENCES admin_public_keys(fingerprint) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS login_codes (
+                code_hash TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                max_uses INTEGER NOT NULL,
+                uses INTEGER NOT NULL DEFAULT 0,
+                disabled INTEGER NOT NULL DEFAULT 0,
+                hint TEXT,
+                FOREIGN KEY(session_id) REFERENCES tui_sessions(session_id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS web_sessions (
+                session_id TEXT PRIMARY KEY,
+                fingerprint TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                revoked INTEGER NOT NULL DEFAULT 0,
+                issued_by_code TEXT
+            )",
+            [],
+        )?;
 
         Ok(Self {
             connection: Arc::new(Mutex::new(conn)),
@@ -239,14 +690,13 @@ impl DatabaseLogger {
                     client_token, amount_spent
              FROM request_logs
              ORDER BY timestamp DESC
-             LIMIT ?1"
+             LIMIT ?1",
         )?;
 
         let log_iter = stmt.query_map([limit], |row| {
             Ok(RequestLog {
                 id: Some(row.get(0)?),
-                timestamp: parse_beijing_string(&row.get::<_, String>(1)?)
-                    .unwrap(),
+                timestamp: parse_beijing_string(&row.get::<_, String>(1)?).unwrap(),
                 method: row.get(2)?,
                 path: row.get(3)?,
                 request_type: row.get(4)?,
@@ -288,20 +738,23 @@ impl DatabaseLogger {
         }
     }
 
-    pub async fn get_logs_by_client_token(&self, token: &str, limit: i32) -> Result<Vec<RequestLog>> {
+    pub async fn get_logs_by_client_token(
+        &self,
+        token: &str,
+        limit: i32,
+    ) -> Result<Vec<RequestLog>> {
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare(
             "SELECT id, timestamp, method, path, request_type, model, provider,
                     api_key, status_code, response_time_ms, prompt_tokens,
                     completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
                     client_token, amount_spent
-             FROM request_logs WHERE client_token = ?1 ORDER BY id DESC LIMIT ?2"
+             FROM request_logs WHERE client_token = ?1 ORDER BY id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(rusqlite::params![token, limit], |row| {
             Ok(RequestLog {
                 id: Some(row.get(0)?),
-                timestamp: parse_beijing_string(&row.get::<_, String>(1)?)
-                    .unwrap(),
+                timestamp: parse_beijing_string(&row.get::<_, String>(1)?).unwrap(),
                 method: row.get(2)?,
                 path: row.get(3)?,
                 request_type: row.get(4)?,
@@ -321,7 +774,9 @@ impl DatabaseLogger {
             })
         })?;
         let mut out = Vec::new();
-        for r in rows { out.push(r?); }
+        for r in rows {
+            out.push(r?);
+        }
         Ok(out)
     }
 }

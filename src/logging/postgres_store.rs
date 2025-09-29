@@ -1,19 +1,25 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use tokio_postgres::{Client, NoTls};
 
+use crate::config::settings::{KeyLogStrategy, Provider, ProviderType};
 use crate::error::GatewayError;
 use crate::logging::time::{parse_beijing_string, to_beijing_string};
+use crate::logging::types::ProviderOpLog;
 use crate::logging::{CachedModel, RequestLog};
 use crate::providers::openai::Model;
-use crate::server::storage_traits::{BoxFuture, ModelCache, RequestLogStore, ProviderStore};
-use crate::config::settings::{Provider, ProviderType, KeyLogStrategy};
-use crate::logging::types::ProviderOpLog;
+use crate::server::storage_traits::{
+    AdminPublicKeyRecord, BoxFuture, LoginCodeRecord, LoginStore, ModelCache, ProviderStore,
+    RequestLogStore, TuiSessionRecord, WebSessionRecord,
+};
 
 fn pg_err<E: std::fmt::Display>(e: E) -> rusqlite::Error {
-    rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR), Some(format!("{}", e)))
+    rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+        Some(format!("{}", e)),
+    )
 }
 
 struct PgPool {
@@ -22,7 +28,11 @@ struct PgPool {
 }
 
 impl PgPool {
-    async fn connect_many(pg_url: &str, schema: &Option<String>, size: usize) -> Result<Self, GatewayError> {
+    async fn connect_many(
+        pg_url: &str,
+        schema: &Option<String>,
+        size: usize,
+    ) -> Result<Self, GatewayError> {
         let mut clients = Vec::with_capacity(size.max(1));
         for _ in 0..size.max(1) {
             let (client, connection) = tokio_postgres::connect(pg_url, NoTls)
@@ -37,14 +47,19 @@ impl PgPool {
                 client
                     .execute(&format!("SET search_path TO {}", s), &[])
                     .await
-                    .map_err(|e| GatewayError::Config(format!("Failed to set search_path: {}", e)))?;
+                    .map_err(|e| {
+                        GatewayError::Config(format!("Failed to set search_path: {}", e))
+                    })?;
             }
             let client = Arc::new(client);
             // improve: jittered keepalive to avoid herd effects
             crate::db::postgres::spawn_keepalive(Arc::clone(&client), 240, 420);
             clients.push(client);
         }
-        Ok(Self { clients, next: AtomicUsize::new(0) })
+        Ok(Self {
+            clients,
+            next: AtomicUsize::new(0),
+        })
     }
 
     fn pick(&self) -> Arc<Client> {
@@ -59,13 +74,20 @@ pub struct PgLogStore {
 }
 
 impl PgLogStore {
-    pub async fn connect(pg_url: &str, schema: &Option<String>, pool_size: usize) -> Result<Self, GatewayError> {
+    pub async fn connect(
+        pg_url: &str,
+        schema: &Option<String>,
+        pool_size: usize,
+    ) -> Result<Self, GatewayError> {
         let pool = PgPool::connect_many(pg_url, schema, pool_size).await?;
-        let store = Self { pool: Arc::new(pool) };
+        let store = Self {
+            pool: Arc::new(pool),
+        };
         // init tables
         let client = store.pool.pick();
-        client.execute(
-            r#"CREATE TABLE IF NOT EXISTS request_logs (
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS request_logs (
                 id SERIAL PRIMARY KEY,
                 timestamp TEXT NOT NULL,
                 method TEXT NOT NULL,
@@ -85,13 +107,21 @@ impl PgLogStore {
                 client_token TEXT,
                 amount_spent DOUBLE PRECISION
             )"#,
-            &[],
-        ).await.map_err(|e| GatewayError::Config(format!("Failed to init request_logs: {}", e)))?;
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init request_logs: {}", e)))?;
         // best-effort migration for existing deployments
-        let _ = client.execute("ALTER TABLE request_logs ADD COLUMN amount_spent DOUBLE PRECISION", &[]).await;
+        let _ = client
+            .execute(
+                "ALTER TABLE request_logs ADD COLUMN amount_spent DOUBLE PRECISION",
+                &[],
+            )
+            .await;
 
-        client.execute(
-            r#"CREATE TABLE IF NOT EXISTS cached_models (
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS cached_models (
                 id TEXT NOT NULL,
                 provider TEXT NOT NULL,
                 object TEXT NOT NULL,
@@ -100,22 +130,30 @@ impl PgLogStore {
                 cached_at TEXT NOT NULL,
                 PRIMARY KEY (id, provider)
             )"#,
-            &[],
-        ).await.map_err(|e| GatewayError::Config(format!("Failed to init cached_models: {}", e)))?;
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init cached_models: {}", e)))?;
 
-        client.execute(
-            r#"CREATE TABLE IF NOT EXISTS provider_ops_logs (
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS provider_ops_logs (
                 id SERIAL PRIMARY KEY,
                 timestamp TEXT NOT NULL,
                 operation TEXT NOT NULL,
                 provider TEXT,
                 details TEXT
             )"#,
-            &[],
-        ).await.map_err(|e| GatewayError::Config(format!("Failed to init provider_ops_logs: {}", e)))?;
+                &[],
+            )
+            .await
+            .map_err(|e| {
+                GatewayError::Config(format!("Failed to init provider_ops_logs: {}", e))
+            })?;
 
-        client.execute(
-            r#"CREATE TABLE IF NOT EXISTS model_prices (
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS model_prices (
                 provider TEXT NOT NULL,
                 model TEXT NOT NULL,
                 prompt_price_per_million DOUBLE PRECISION NOT NULL,
@@ -123,21 +161,27 @@ impl PgLogStore {
                 currency TEXT,
                 PRIMARY KEY (provider, model)
             )"#,
-            &[],
-        ).await.map_err(|e| GatewayError::Config(format!("Failed to init model_prices: {}", e)))?;
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init model_prices: {}", e)))?;
 
         // Providers & provider_keys tables
-        client.execute(
-            r#"CREATE TABLE IF NOT EXISTS providers (
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS providers (
                 name TEXT PRIMARY KEY,
                 api_type TEXT NOT NULL,
                 base_url TEXT NOT NULL,
                 models_endpoint TEXT
             )"#,
-            &[],
-        ).await.map_err(|e| GatewayError::Config(format!("Failed to init providers: {}", e)))?;
-        client.execute(
-            r#"CREATE TABLE IF NOT EXISTS provider_keys (
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init providers: {}", e)))?;
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS provider_keys (
                 provider TEXT NOT NULL,
                 key_value TEXT NOT NULL,
                 enc BOOLEAN NOT NULL DEFAULT FALSE,
@@ -145,8 +189,72 @@ impl PgLogStore {
                 created_at TEXT NOT NULL,
                 PRIMARY KEY (provider, key_value)
             )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init provider_keys: {}", e)))?;
+
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS admin_public_keys (
+                fingerprint TEXT PRIMARY KEY,
+                public_key BYTEA NOT NULL,
+                comment TEXT,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL,
+                last_used_at TIMESTAMPTZ
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| {
+                GatewayError::Config(format!("Failed to init admin_public_keys: {}", e))
+            })?;
+
+        client.execute(
+            r#"CREATE TABLE IF NOT EXISTS tui_sessions (
+                session_id TEXT PRIMARY KEY,
+                fingerprint TEXT NOT NULL REFERENCES admin_public_keys(fingerprint) ON DELETE CASCADE,
+                issued_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                revoked BOOLEAN NOT NULL DEFAULT FALSE,
+                last_code_at TIMESTAMPTZ
+            )"#,
             &[],
-        ).await.map_err(|e| GatewayError::Config(format!("Failed to init provider_keys: {}", e)))?;
+        ).await.map_err(|e| GatewayError::Config(format!("Failed to init tui_sessions: {}", e)))?;
+
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS login_codes (
+                code_hash TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES tui_sessions(session_id) ON DELETE CASCADE,
+                fingerprint TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                max_uses INTEGER NOT NULL,
+                uses INTEGER NOT NULL DEFAULT 0,
+                disabled BOOLEAN NOT NULL DEFAULT FALSE,
+                hint TEXT
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init login_codes: {}", e)))?;
+
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS web_sessions (
+                session_id TEXT PRIMARY KEY,
+                fingerprint TEXT,
+                created_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                revoked BOOLEAN NOT NULL DEFAULT FALSE,
+                issued_by_code TEXT
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init web_sessions: {}", e)))?;
 
         Ok(store)
     }
@@ -193,7 +301,10 @@ impl RequestLogStore for PgLogStore {
         })
     }
 
-    fn get_recent_logs<'a>(&'a self, limit: i32) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>> {
+    fn get_recent_logs<'a>(
+        &'a self,
+        limit: i32,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>> {
         Box::pin(async move {
             let client = self.pool.pick();
             let lim: i64 = limit as i64;
@@ -208,7 +319,10 @@ impl RequestLogStore for PgLogStore {
         })
     }
 
-    fn sum_total_tokens_by_client_token<'a>(&'a self, token: &'a str) -> BoxFuture<'a, rusqlite::Result<u64>> {
+    fn sum_total_tokens_by_client_token<'a>(
+        &'a self,
+        token: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<u64>> {
         Box::pin(async move {
             let client = self.pool.pick();
             let row = client
@@ -220,7 +334,11 @@ impl RequestLogStore for PgLogStore {
         })
     }
 
-    fn get_logs_by_client_token<'a>(&'a self, token: &'a str, limit: i32) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>> {
+    fn get_logs_by_client_token<'a>(
+        &'a self,
+        token: &'a str,
+        limit: i32,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>> {
         Box::pin(async move {
             let client = self.pool.pick();
             let lim: i64 = limit as i64;
@@ -249,7 +367,14 @@ impl RequestLogStore for PgLogStore {
         })
     }
 
-    fn upsert_model_price<'a>(&'a self, provider: &'a str, model: &'a str, prompt_price_per_million: f64, completion_price_per_million: f64, currency: Option<&'a str>) -> BoxFuture<'a, rusqlite::Result<()>> {
+    fn upsert_model_price<'a>(
+        &'a self,
+        provider: &'a str,
+        model: &'a str,
+        prompt_price_per_million: f64,
+        completion_price_per_million: f64,
+        currency: Option<&'a str>,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
             // 尝试 UPDATE，若未影响行则 INSERT（兼容不支持 ON CONFLICT 的库）
             let client = self.pool.pick();
@@ -274,7 +399,11 @@ impl RequestLogStore for PgLogStore {
         })
     }
 
-    fn get_model_price<'a>(&'a self, provider: &'a str, model: &'a str) -> BoxFuture<'a, rusqlite::Result<Option<(f64, f64, Option<String>)>>> {
+    fn get_model_price<'a>(
+        &'a self,
+        provider: &'a str,
+        model: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<(f64, f64, Option<String>)>>> {
         Box::pin(async move {
             let client = self.pool.pick();
             let row = client
@@ -288,7 +417,10 @@ impl RequestLogStore for PgLogStore {
         })
     }
 
-    fn list_model_prices<'a>(&'a self, provider: Option<&'a str>) -> BoxFuture<'a, rusqlite::Result<Vec<(String, String, f64, f64, Option<String>)>>> {
+    fn list_model_prices<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, String, f64, f64, Option<String>)>>> {
         Box::pin(async move {
             let mut out = Vec::new();
             if let Some(p) = provider {
@@ -300,7 +432,9 @@ impl RequestLogStore for PgLogStore {
                     )
                     .await
                     .map_err(pg_err)?;
-                for r in rows { out.push((r.get(0), r.get(1), r.get(2), r.get(3), r.get(4))); }
+                for r in rows {
+                    out.push((r.get(0), r.get(1), r.get(2), r.get(3), r.get(4)));
+                }
             } else {
                 let client = self.pool.pick();
                 let rows = client
@@ -310,13 +444,18 @@ impl RequestLogStore for PgLogStore {
                     )
                     .await
                     .map_err(pg_err)?;
-                for r in rows { out.push((r.get(0), r.get(1), r.get(2), r.get(3), r.get(4))); }
+                for r in rows {
+                    out.push((r.get(0), r.get(1), r.get(2), r.get(3), r.get(4)));
+                }
             }
             Ok(out)
         })
     }
 
-    fn sum_spent_amount_by_client_token<'a>(&'a self, token: &'a str) -> BoxFuture<'a, rusqlite::Result<f64>> {
+    fn sum_spent_amount_by_client_token<'a>(
+        &'a self,
+        token: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<f64>> {
         Box::pin(async move {
             let client = self.pool.pick();
             let row = client
@@ -334,12 +473,19 @@ impl RequestLogStore for PgLogStore {
 }
 
 impl ModelCache for PgLogStore {
-    fn cache_models<'a>(&'a self, provider: &'a str, models: &'a [Model]) -> BoxFuture<'a, rusqlite::Result<()>> {
+    fn cache_models<'a>(
+        &'a self,
+        provider: &'a str,
+        models: &'a [Model],
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
             let now = Utc::now();
             let client = self.pool.pick();
             client
-                .execute("DELETE FROM cached_models WHERE provider = $1", &[&provider])
+                .execute(
+                    "DELETE FROM cached_models WHERE provider = $1",
+                    &[&provider],
+                )
                 .await
                 .map_err(pg_err)?;
             for m in models {
@@ -356,7 +502,10 @@ impl ModelCache for PgLogStore {
         })
     }
 
-    fn get_cached_models<'a>(&'a self, provider: Option<&'a str>) -> BoxFuture<'a, rusqlite::Result<Vec<CachedModel>>> {
+    fn get_cached_models<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<CachedModel>>> {
         Box::pin(async move {
             let mut out = Vec::new();
             if let Some(p) = provider {
@@ -378,7 +527,8 @@ impl ModelCache for PgLogStore {
                             v as u64
                         },
                         owned_by: r.get(4),
-                        cached_at: parse_beijing_string(&r.get::<usize, String>(5)).unwrap_or(Utc::now()),
+                        cached_at: parse_beijing_string(&r.get::<usize, String>(5))
+                            .unwrap_or(Utc::now()),
                     });
                 }
             } else {
@@ -400,7 +550,8 @@ impl ModelCache for PgLogStore {
                             v as u64
                         },
                         owned_by: r.get(4),
-                        cached_at: parse_beijing_string(&r.get::<usize, String>(5)).unwrap_or(Utc::now()),
+                        cached_at: parse_beijing_string(&r.get::<usize, String>(5))
+                            .unwrap_or(Utc::now()),
                     });
                 }
             }
@@ -408,7 +559,11 @@ impl ModelCache for PgLogStore {
         })
     }
 
-    fn cache_models_append<'a>(&'a self, provider: &'a str, models: &'a [Model]) -> BoxFuture<'a, rusqlite::Result<()>> {
+    fn cache_models_append<'a>(
+        &'a self,
+        provider: &'a str,
+        models: &'a [Model],
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
             let now = Utc::now();
             for m in models {
@@ -436,12 +591,19 @@ impl ModelCache for PgLogStore {
         })
     }
 
-    fn remove_cached_models<'a>(&'a self, provider: &'a str, ids: &'a [String]) -> BoxFuture<'a, rusqlite::Result<()>> {
+    fn remove_cached_models<'a>(
+        &'a self,
+        provider: &'a str,
+        ids: &'a [String],
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
             for id in ids {
                 let client = self.pool.pick();
                 client
-                    .execute("DELETE FROM cached_models WHERE provider = $1 AND id = $2", &[&provider, id])
+                    .execute(
+                        "DELETE FROM cached_models WHERE provider = $1 AND id = $2",
+                        &[&provider, id],
+                    )
                     .await
                     .map_err(pg_err)?;
             }
@@ -451,7 +613,10 @@ impl ModelCache for PgLogStore {
 }
 
 impl ProviderStore for PgLogStore {
-    fn insert_provider<'a>(&'a self, provider: &'a Provider) -> BoxFuture<'a, rusqlite::Result<bool>> {
+    fn insert_provider<'a>(
+        &'a self,
+        provider: &'a Provider,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
         Box::pin(async move {
             let client = self.pool.pick();
             let res = client
@@ -465,7 +630,10 @@ impl ProviderStore for PgLogStore {
         })
     }
 
-    fn upsert_provider<'a>(&'a self, provider: &'a Provider) -> BoxFuture<'a, rusqlite::Result<()>> {
+    fn upsert_provider<'a>(
+        &'a self,
+        provider: &'a Provider,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
             let client = self.pool.pick();
             let updated = client
@@ -500,7 +668,10 @@ impl ProviderStore for PgLogStore {
         })
     }
 
-    fn get_provider<'a>(&'a self, name: &'a str) -> BoxFuture<'a, rusqlite::Result<Option<Provider>>> {
+    fn get_provider<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<Provider>>> {
         Box::pin(async move {
             let client = self.pool.pick();
             let row = client
@@ -521,7 +692,10 @@ impl ProviderStore for PgLogStore {
         Box::pin(async move {
             let client = self.pool.pick();
             let rows = client
-                .query("SELECT name, api_type, base_url, models_endpoint FROM providers ORDER BY name", &[])
+                .query(
+                    "SELECT name, api_type, base_url, models_endpoint FROM providers ORDER BY name",
+                    &[],
+                )
                 .await
                 .map_err(pg_err)?;
             let mut out = Vec::new();
@@ -542,16 +716,29 @@ impl ProviderStore for PgLogStore {
         Box::pin(async move {
             // cascade-like cleanup
             let client = self.pool.pick();
-            client.execute("DELETE FROM provider_keys WHERE provider = $1", &[&name]).await.map_err(pg_err)?;
+            client
+                .execute("DELETE FROM provider_keys WHERE provider = $1", &[&name])
+                .await
+                .map_err(pg_err)?;
             let client = self.pool.pick();
-            client.execute("DELETE FROM cached_models WHERE provider = $1", &[&name]).await.map_err(pg_err)?;
+            client
+                .execute("DELETE FROM cached_models WHERE provider = $1", &[&name])
+                .await
+                .map_err(pg_err)?;
             let client = self.pool.pick();
-            let res = client.execute("DELETE FROM providers WHERE name = $1", &[&name]).await.map_err(pg_err)?;
+            let res = client
+                .execute("DELETE FROM providers WHERE name = $1", &[&name])
+                .await
+                .map_err(pg_err)?;
             Ok(res > 0)
         })
     }
 
-    fn get_provider_keys<'a>(&'a self, provider: &'a str, strategy: &'a Option<KeyLogStrategy>) -> BoxFuture<'a, rusqlite::Result<Vec<String>>> {
+    fn get_provider_keys<'a>(
+        &'a self,
+        provider: &'a str,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<String>>> {
         Box::pin(async move {
             let client = self.pool.pick();
             let rows = client
@@ -562,17 +749,29 @@ impl ProviderStore for PgLogStore {
             for r in rows {
                 let value: String = r.get(0);
                 let enc: Option<bool> = r.get(1);
-                let decrypted = match crate::crypto::unprotect(strategy, provider, &value, enc.unwrap_or(false)) {
+                let decrypted = match crate::crypto::unprotect(
+                    strategy,
+                    provider,
+                    &value,
+                    enc.unwrap_or(false),
+                ) {
                     Ok(v) => v,
                     Err(_) => String::new(),
                 };
-                if !decrypted.is_empty() { out.push(decrypted); }
+                if !decrypted.is_empty() {
+                    out.push(decrypted);
+                }
             }
             Ok(out)
         })
     }
 
-    fn add_provider_key<'a>(&'a self, provider: &'a str, key: &'a str, strategy: &'a Option<KeyLogStrategy>) -> BoxFuture<'a, rusqlite::Result<()>> {
+    fn add_provider_key<'a>(
+        &'a self,
+        provider: &'a str,
+        key: &'a str,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
             let now = to_beijing_string(&Utc::now());
             let (stored, enc) = crate::crypto::protect(strategy, provider, key);
@@ -598,22 +797,361 @@ impl ProviderStore for PgLogStore {
         })
     }
 
-    fn remove_provider_key<'a>(&'a self, provider: &'a str, key: &'a str, strategy: &'a Option<KeyLogStrategy>) -> BoxFuture<'a, rusqlite::Result<bool>> {
+    fn remove_provider_key<'a>(
+        &'a self,
+        provider: &'a str,
+        key: &'a str,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
         Box::pin(async move {
             let (stored, enc) = crate::crypto::protect(strategy, provider, key);
             let client = self.pool.pick();
             let mut affected = client
-                .execute("DELETE FROM provider_keys WHERE provider = $1 AND key_value = $2", &[&provider, &stored])
+                .execute(
+                    "DELETE FROM provider_keys WHERE provider = $1 AND key_value = $2",
+                    &[&provider, &stored],
+                )
                 .await
                 .map_err(pg_err)?;
             if enc {
                 let client = self.pool.pick();
                 affected += client
-                    .execute("DELETE FROM provider_keys WHERE provider = $1 AND key_value = $2", &[&provider, &key])
+                    .execute(
+                        "DELETE FROM provider_keys WHERE provider = $1 AND key_value = $2",
+                        &[&provider, &key],
+                    )
                     .await
                     .map_err(pg_err)?;
             }
             Ok(affected > 0)
+        })
+    }
+}
+
+impl LoginStore for PgLogStore {
+    fn insert_admin_key<'a>(
+        &'a self,
+        key: &'a AdminPublicKeyRecord,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let comment = key.comment.as_ref().map(|s| s.as_str());
+            // 先尝试 UPDATE，兼容不支持 ON CONFLICT 的老版本 Postgres
+            let client = self.pool.pick();
+            let updated = client
+                .execute(
+                    "UPDATE admin_public_keys
+                     SET public_key=$2, comment=$3, enabled=$4, created_at=$5, last_used_at=$6
+                     WHERE fingerprint=$1",
+                    &[&key.fingerprint, &key.public_key, &comment, &key.enabled, &key.created_at, &key.last_used_at],
+                )
+                .await
+                .map_err(pg_err)?;
+
+            if updated == 0 {
+                let client = self.pool.pick();
+                client
+                    .execute(
+                        "INSERT INTO admin_public_keys (fingerprint, public_key, comment, enabled, created_at, last_used_at)
+                         VALUES ($1, $2, $3, $4, $5, $6)",
+                        &[&key.fingerprint, &key.public_key, &comment, &key.enabled, &key.created_at, &key.last_used_at],
+                    )
+                    .await
+                    .map_err(pg_err)?;
+            }
+
+            Ok(())
+        })
+    }
+
+    fn get_admin_key<'a>(
+        &'a self,
+        fingerprint: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<AdminPublicKeyRecord>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "SELECT fingerprint, public_key, comment, enabled, created_at, last_used_at FROM admin_public_keys WHERE fingerprint = $1",
+                    &[&fingerprint],
+                )
+                .await
+                .map_err(pg_err)?;
+            let rec = row.map(|r| AdminPublicKeyRecord {
+                fingerprint: r.get(0),
+                public_key: r.get(1),
+                comment: r.get(2),
+                enabled: r.get(3),
+                created_at: r.get(4),
+                last_used_at: r.get(5),
+            });
+            Ok(rec)
+        })
+    }
+
+    fn touch_admin_key<'a>(
+        &'a self,
+        fingerprint: &'a str,
+        when: DateTime<Utc>,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            client
+                .execute(
+                    "UPDATE admin_public_keys SET last_used_at = $2 WHERE fingerprint = $1",
+                    &[&fingerprint, &when],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(())
+        })
+    }
+
+    fn list_admin_keys<'a>(&'a self) -> BoxFuture<'a, rusqlite::Result<Vec<AdminPublicKeyRecord>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let rows = client
+                .query(
+                    "SELECT fingerprint, public_key, comment, enabled, created_at, last_used_at FROM admin_public_keys",
+                    &[],
+                )
+                .await
+                .map_err(pg_err)?;
+            let mut out = Vec::with_capacity(rows.len());
+            for r in rows {
+                out.push(AdminPublicKeyRecord {
+                    fingerprint: r.get(0),
+                    public_key: r.get(1),
+                    comment: r.get(2),
+                    enabled: r.get(3),
+                    created_at: r.get(4),
+                    last_used_at: r.get(5),
+                });
+            }
+            Ok(out)
+        })
+    }
+
+    fn create_tui_session<'a>(
+        &'a self,
+        session: &'a TuiSessionRecord,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            client
+                .execute(
+                    "INSERT INTO tui_sessions (session_id, fingerprint, issued_at, expires_at, revoked, last_code_at)
+                     VALUES ($1, $2, $3, $4, $5, $6)",
+                    &[&session.session_id, &session.fingerprint, &session.issued_at, &session.expires_at, &session.revoked, &session.last_code_at],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(())
+        })
+    }
+
+    fn get_tui_session<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<TuiSessionRecord>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "SELECT session_id, fingerprint, issued_at, expires_at, revoked, last_code_at FROM tui_sessions WHERE session_id = $1",
+                    &[&session_id],
+                )
+                .await
+                .map_err(pg_err)?;
+            let rec = row.map(|r| TuiSessionRecord {
+                session_id: r.get(0),
+                fingerprint: r.get(1),
+                issued_at: r.get(2),
+                expires_at: r.get(3),
+                revoked: r.get(4),
+                last_code_at: r.get(5),
+            });
+            Ok(rec)
+        })
+    }
+
+    fn update_tui_session_last_code<'a>(
+        &'a self,
+        session_id: &'a str,
+        when: DateTime<Utc>,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            client
+                .execute(
+                    "UPDATE tui_sessions SET last_code_at = $2 WHERE session_id = $1",
+                    &[&session_id, &when],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(())
+        })
+    }
+
+    fn revoke_tui_session<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let rows = client
+                .execute(
+                    "UPDATE tui_sessions SET revoked = TRUE WHERE session_id = $1",
+                    &[&session_id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(rows > 0)
+        })
+    }
+
+    fn disable_codes_for_session<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            client
+                .execute(
+                    "UPDATE login_codes SET disabled = TRUE WHERE session_id = $1 AND disabled = FALSE",
+                    &[&session_id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(())
+        })
+    }
+
+    fn insert_login_code<'a>(
+        &'a self,
+        code: &'a LoginCodeRecord,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let hint = code.hint.as_ref().map(|s| s.as_str());
+            client
+                .execute(
+                    "INSERT INTO login_codes (code_hash, session_id, fingerprint, created_at, expires_at, max_uses, uses, disabled, hint)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                    &[&code.code_hash, &code.session_id, &code.fingerprint, &code.created_at, &code.expires_at, &(code.max_uses as i32), &(code.uses as i32), &code.disabled, &hint],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(())
+        })
+    }
+
+    fn redeem_login_code<'a>(
+        &'a self,
+        code_hash: &'a str,
+        now: DateTime<Utc>,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<LoginCodeRecord>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "UPDATE login_codes
+                     SET uses = uses + 1,
+                         disabled = (uses + 1 >= max_uses) OR (expires_at <= $2)
+                     WHERE code_hash = $1
+                       AND disabled = FALSE
+                       AND expires_at > $2
+                       AND uses < max_uses
+                     RETURNING code_hash, session_id, fingerprint, created_at, expires_at, max_uses, uses, disabled, hint",
+                    &[&code_hash, &now],
+                )
+                .await
+                .map_err(pg_err)?;
+
+            if let Some(r) = row {
+                let record = LoginCodeRecord {
+                    code_hash: r.get(0),
+                    session_id: r.get(1),
+                    fingerprint: r.get(2),
+                    created_at: r.get(3),
+                    expires_at: r.get(4),
+                    max_uses: r.get::<_, i32>(5) as u32,
+                    uses: r.get::<_, i32>(6) as u32,
+                    disabled: r.get(7),
+                    hint: r.get(8),
+                };
+                return Ok(Some(record));
+            }
+
+            client
+                .execute(
+                    "UPDATE login_codes SET disabled = TRUE WHERE code_hash = $1 AND (disabled = FALSE) AND (expires_at <= $2 OR uses >= max_uses)",
+                    &[&code_hash, &now],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(None)
+        })
+    }
+
+    fn insert_web_session<'a>(
+        &'a self,
+        session: &'a WebSessionRecord,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let fingerprint = session.fingerprint.as_ref().map(|s| s.as_str());
+            let issued_by = session.issued_by_code.as_ref().map(|s| s.as_str());
+            client
+                .execute(
+                    "INSERT INTO web_sessions (session_id, fingerprint, created_at, expires_at, revoked, issued_by_code)
+                     VALUES ($1, $2, $3, $4, $5, $6)",
+                    &[&session.session_id, &fingerprint, &session.created_at, &session.expires_at, &session.revoked, &issued_by],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(())
+        })
+    }
+
+    fn get_web_session<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<WebSessionRecord>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "SELECT session_id, fingerprint, created_at, expires_at, revoked, issued_by_code FROM web_sessions WHERE session_id = $1",
+                    &[&session_id],
+                )
+                .await
+                .map_err(pg_err)?;
+            let rec = row.map(|r| WebSessionRecord {
+                session_id: r.get(0),
+                fingerprint: r.get(1),
+                created_at: r.get(2),
+                expires_at: r.get(3),
+                revoked: r.get(4),
+                issued_by_code: r.get(5),
+            });
+            Ok(rec)
+        })
+    }
+
+    fn revoke_web_session<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let rows = client
+                .execute(
+                    "UPDATE web_sessions SET revoked = TRUE WHERE session_id = $1",
+                    &[&session_id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(rows > 0)
         })
     }
 }
