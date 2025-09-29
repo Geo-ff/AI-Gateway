@@ -1,10 +1,10 @@
-use chrono::{DateTime, Utc};
-use crate::logging::RequestLog;
-use crate::logging::types::{REQ_TYPE_CHAT_ONCE};
-use crate::server::util::api_key_hint;
-use crate::providers::openai::types::RawAndTypedChatCompletion;
 use crate::error::GatewayError;
+use crate::logging::RequestLog;
+use crate::logging::types::REQ_TYPE_CHAT_ONCE;
+use crate::providers::openai::types::RawAndTypedChatCompletion;
 use crate::server::AppState;
+use crate::server::util::api_key_hint;
+use chrono::{DateTime, Utc};
 
 // 记录聊天请求日志（包含响应耗时和 token 使用情况）
 pub async fn log_chat_request(
@@ -26,8 +26,14 @@ pub async fn log_chat_request(
         Ok(dual) => {
             let usage = dual.typed.usage.as_ref();
             if let (Some(u), Some(tok)) = (usage, client_token) {
-                if tok == "admin_token" { None } else {
-                    match app_state.log_store.get_model_price(provider_name, model).await {
+                if tok == "admin_token" {
+                    None
+                } else {
+                    match app_state
+                        .log_store
+                        .get_model_price(provider_name, model)
+                        .await
+                    {
                         Ok(Some((p_pm, c_pm, _))) => {
                             let p = u.prompt_tokens as f64 * p_pm / 1_000_000.0;
                             let c = u.completion_tokens as f64 * c_pm / 1_000_000.0;
@@ -36,7 +42,9 @@ pub async fn log_chat_request(
                         _ => None,
                     }
                 }
-            } else { None }
+            } else {
+                None
+            }
         }
         Err(_) => None,
     };
@@ -54,11 +62,32 @@ pub async fn log_chat_request(
         amount_spent,
         status_code: if response.is_ok() { 200 } else { 500 },
         response_time_ms,
-        prompt_tokens: response.as_ref().ok().and_then(|r| r.typed.usage.as_ref().map(|u| u.prompt_tokens)),
-        completion_tokens: response.as_ref().ok().and_then(|r| r.typed.usage.as_ref().map(|u| u.completion_tokens)),
-        total_tokens: response.as_ref().ok().and_then(|r| r.typed.usage.as_ref().map(|u| u.total_tokens)),
-        cached_tokens: response.as_ref().ok().and_then(|r| r.typed.usage.as_ref().and_then(|u| u.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens))),
-        reasoning_tokens: response.as_ref().ok().and_then(|r| r.typed.usage.as_ref().and_then(|u| u.completion_tokens_details.as_ref().and_then(|d| d.reasoning_tokens))),
+        prompt_tokens: response
+            .as_ref()
+            .ok()
+            .and_then(|r| r.typed.usage.as_ref().map(|u| u.prompt_tokens)),
+        completion_tokens: response
+            .as_ref()
+            .ok()
+            .and_then(|r| r.typed.usage.as_ref().map(|u| u.completion_tokens)),
+        total_tokens: response
+            .as_ref()
+            .ok()
+            .and_then(|r| r.typed.usage.as_ref().map(|u| u.total_tokens)),
+        cached_tokens: response.as_ref().ok().and_then(|r| {
+            r.typed.usage.as_ref().and_then(|u| {
+                u.prompt_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.cached_tokens)
+            })
+        }),
+        reasoning_tokens: response.as_ref().ok().and_then(|r| {
+            r.typed.usage.as_ref().and_then(|u| {
+                u.completion_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.reasoning_tokens)
+            })
+        }),
         error_message: response.as_ref().err().map(|e| e.to_string()),
     };
 
@@ -69,14 +98,22 @@ pub async fn log_chat_request(
     // 增量更新 admin_tokens：金额与 tokens（仅非管理员令牌且有 usage/金额时）
     if let Some(tok) = client_token.filter(|t| *t != "admin_token") {
         if let Some(delta) = amount_spent {
-            if let Err(e) = app_state.token_store.add_amount_spent(tok, delta).await { tracing::warn!("Failed to update token spent: {}", e); }
+            if let Err(e) = app_state.token_store.add_amount_spent(tok, delta).await {
+                tracing::warn!("Failed to update token spent: {}", e);
+            }
         }
         if let Ok(r) = response {
             if let Some(u) = r.typed.usage.as_ref() {
                 let prompt = u.prompt_tokens as i64;
                 let completion = u.completion_tokens as i64;
                 let total = u.total_tokens as i64;
-                if let Err(e) = app_state.token_store.add_usage_spent(tok, prompt, completion, total).await { tracing::warn!("Failed to update token tokens: {}", e); }
+                if let Err(e) = app_state
+                    .token_store
+                    .add_usage_spent(tok, prompt, completion, total)
+                    .await
+                {
+                    tracing::warn!("Failed to update token tokens: {}", e);
+                }
             }
         }
     }

@@ -325,6 +325,38 @@ impl crate::server::storage_traits::LoginStore for DatabaseLogger {
         })
     }
 
+    fn get_latest_login_code_for_session<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<Option<LoginCodeRecord>>>
+    {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let mut stmt = conn.prepare(
+                "SELECT code_hash, session_id, fingerprint, created_at, expires_at, max_uses, uses, disabled, hint
+                 FROM login_codes WHERE session_id = ?1 ORDER BY created_at DESC LIMIT 1",
+            )?;
+            let rec = stmt
+                .query_row([session_id], |row| {
+                    let created_raw: String = row.get(3)?;
+                    let expires_raw: String = row.get(4)?;
+                    Ok(LoginCodeRecord {
+                        code_hash: row.get(0)?,
+                        session_id: row.get(1)?,
+                        fingerprint: row.get(2)?,
+                        created_at: decode_ts(&created_raw)?,
+                        expires_at: decode_ts(&expires_raw)?,
+                        max_uses: row.get::<_, i64>(5)? as u32,
+                        uses: row.get::<_, i64>(6)? as u32,
+                        disabled: row.get::<_, i64>(7)? != 0,
+                        hint: row.get::<_, Option<String>>(8)?,
+                    })
+                })
+                .optional()?;
+            Ok(rec)
+        })
+    }
+
     fn insert_web_session<'a>(
         &'a self,
         session: &'a WebSessionRecord,

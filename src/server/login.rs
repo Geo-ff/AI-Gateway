@@ -35,6 +35,16 @@ pub struct LoginCodeEntry {
 }
 
 #[derive(Debug, Clone)]
+pub struct LoginCodeStatus {
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub max_uses: u32,
+    pub uses: u32,
+    pub remaining_uses: u32,
+    pub disabled: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct SessionEntry {
     pub id: String,
     pub created_at: DateTime<Utc>,
@@ -312,6 +322,33 @@ impl LoginManager {
             uses: 0,
             disabled: false,
         })
+    }
+
+    pub async fn current_code_status(
+        &self,
+        session: &TuiSessionRecord,
+    ) -> Result<Option<LoginCodeStatus>, GatewayError> {
+        let record = self
+            .store
+            .get_latest_login_code_for_session(&session.session_id)
+            .await
+            .map_err(GatewayError::Db)?;
+        let Some(record) = record else {
+            return Ok(None);
+        };
+        let expired = Utc::now() > record.expires_at;
+        let mut remaining = record.max_uses.saturating_sub(record.uses);
+        if record.disabled || expired {
+            remaining = 0;
+        }
+        Ok(Some(LoginCodeStatus {
+            created_at: record.created_at,
+            expires_at: record.expires_at,
+            max_uses: record.max_uses,
+            uses: record.uses,
+            remaining_uses: remaining,
+            disabled: record.disabled || expired,
+        }))
     }
 
     pub async fn redeem(&self, code: &str) -> Result<Option<SessionEntry>, GatewayError> {

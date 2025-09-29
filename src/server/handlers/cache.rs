@@ -1,17 +1,20 @@
-use axum::{extract::{Path, State}, response::{IntoResponse, Json, Response}};
+use axum::{
+    extract::{Path, State},
+    response::{IntoResponse, Json, Response},
+};
 use chrono::Utc;
 use serde::Deserialize;
 use std::sync::Arc;
 
+use super::auth::ensure_admin;
 use crate::error::GatewayError;
 use crate::logging::types::{REQ_TYPE_PROVIDER_CACHE_DELETE, REQ_TYPE_PROVIDER_CACHE_UPDATE};
 use crate::providers::openai::{Model, ModelListResponse};
+use crate::server::AppState;
 use crate::server::model_cache::{cache_models_for_provider, get_cached_models_for_provider};
 use crate::server::model_helpers::fetch_provider_models;
 use crate::server::request_logging::log_simple_request;
 use crate::server::util::{bearer_token, token_for_log};
-use super::auth::ensure_admin;
-use crate::server::AppState;
 
 #[derive(Debug, Deserialize, Default)]
 pub struct CacheUpdatePayload {
@@ -36,25 +39,57 @@ pub async fn update_provider_cache(
         let start_time = chrono::Utc::now();
         let path = format!("/models/{}/cache", provider_name);
         // 记录操作日志与请求日志
-        let _ = app_state.log_store.log_provider_op(crate::logging::types::ProviderOpLog {
-            id: None,
-            timestamp: start_time,
-            operation: REQ_TYPE_PROVIDER_CACHE_UPDATE.to_string(),
-            provider: Some(provider_name.clone()),
-            details: Some(e.to_string()),
-        }).await;
+        let _ = app_state
+            .log_store
+            .log_provider_op(crate::logging::types::ProviderOpLog {
+                id: None,
+                timestamp: start_time,
+                operation: REQ_TYPE_PROVIDER_CACHE_UPDATE.to_string(),
+                provider: Some(provider_name.clone()),
+                details: Some(e.to_string()),
+            })
+            .await;
         let code = e.status_code().as_u16();
-        log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name), provided_token.as_deref(), code, Some("auth failed".into())).await;
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &path,
+            REQ_TYPE_PROVIDER_CACHE_UPDATE,
+            None,
+            Some(provider_name),
+            provided_token.as_deref(),
+            code,
+            Some("auth failed".into()),
+        )
+        .await;
         return Err(e);
     }
     let start_time = Utc::now();
     let path = format!("/models/{}/cache", provider_name);
-    let provider = match app_state.providers.get_provider(&provider_name).await.map_err(GatewayError::Db)? {
+    let provider = match app_state
+        .providers
+        .get_provider(&provider_name)
+        .await
+        .map_err(GatewayError::Db)?
+    {
         Some(p) => p,
         None => {
             let ge = GatewayError::NotFound(format!("Provider '{}' not found", provider_name));
             let code = ge.status_code().as_u16();
-            log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), provided_token.as_deref(), code, None).await;
+            log_simple_request(
+                &app_state,
+                start_time,
+                "POST",
+                &path,
+                REQ_TYPE_PROVIDER_CACHE_UPDATE,
+                None,
+                Some(provider_name.clone()),
+                provided_token.as_deref(),
+                code,
+                None,
+            )
+            .await;
             return Err(ge);
         }
     };
@@ -69,9 +104,22 @@ pub async fn update_provider_cache(
     {
         Some(k) => k,
         None => {
-            let ge: GatewayError = crate::routing::load_balancer::BalanceError::NoApiKeysAvailable.into();
+            let ge: GatewayError =
+                crate::routing::load_balancer::BalanceError::NoApiKeysAvailable.into();
             let code = ge.status_code().as_u16();
-            log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), provided_token.as_deref(), code, None).await;
+            log_simple_request(
+                &app_state,
+                start_time,
+                "POST",
+                &path,
+                REQ_TYPE_PROVIDER_CACHE_UPDATE,
+                None,
+                Some(provider_name.clone()),
+                provided_token.as_deref(),
+                code,
+                None,
+            )
+            .await;
             return Err(ge);
         }
     };
@@ -82,9 +130,10 @@ pub async fn update_provider_cache(
     let updated: usize;
     let mut filtered = 0usize;
 
-    let prev = crate::server::model_cache::get_cached_models_for_provider(&app_state, &provider_name)
-        .await
-        .unwrap_or_default();
+    let prev =
+        crate::server::model_cache::get_cached_models_for_provider(&app_state, &provider_name)
+            .await
+            .unwrap_or_default();
 
     match mode {
         "all" => {
@@ -97,24 +146,48 @@ pub async fn update_provider_cache(
                 filtered = before - upstream_models.len();
             }
             use std::collections::{HashMap, HashSet};
-            let prev_map: HashMap<_, _> = prev.iter().map(|m| (m.id.clone(), (m.object.clone(), m.owned_by.clone(), m.created))).collect();
+            let prev_map: HashMap<_, _> = prev
+                .iter()
+                .map(|m| {
+                    (
+                        m.id.clone(),
+                        (m.object.clone(), m.owned_by.clone(), m.created),
+                    )
+                })
+                .collect();
             let new_ids: HashSet<_> = upstream_models.iter().map(|m| m.id.clone()).collect();
             let old_ids: HashSet<_> = prev_map.keys().cloned().collect();
             added = new_ids.difference(&old_ids).count();
             removed = old_ids.difference(&new_ids).count();
-            updated = new_ids.intersection(&old_ids).filter(|id| {
-                let old = prev_map.get(*id).unwrap();
-                let new = upstream_models.iter().find(|m| &m.id == *id).unwrap();
-                old.0 != new.object || old.1 != new.owned_by || old.2 != new.created
-            }).count();
+            updated = new_ids
+                .intersection(&old_ids)
+                .filter(|id| {
+                    let old = prev_map.get(*id).unwrap();
+                    let new = upstream_models.iter().find(|m| &m.id == *id).unwrap();
+                    old.0 != new.object || old.1 != new.owned_by || old.2 != new.created
+                })
+                .count();
             let _ = cache_models_for_provider(&app_state, &provider_name, &upstream_models).await;
         }
         "selected" => {
             let include = payload.include.clone().unwrap_or_default();
             if include.is_empty() {
-                let ge = GatewayError::Config("include cannot be empty for mode=selected".to_string());
+                let ge =
+                    GatewayError::Config("include cannot be empty for mode=selected".to_string());
                 let code = ge.status_code().as_u16();
-                log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), provided_token.as_deref(), code, Some("include cannot be empty for mode=selected".into())).await;
+                log_simple_request(
+                    &app_state,
+                    start_time,
+                    "POST",
+                    &path,
+                    REQ_TYPE_PROVIDER_CACHE_UPDATE,
+                    None,
+                    Some(provider_name.clone()),
+                    provided_token.as_deref(),
+                    code,
+                    Some("include cannot be empty for mode=selected".into()),
+                )
+                .await;
                 return Err(ge);
             }
             use std::collections::{HashMap, HashSet};
@@ -138,45 +211,100 @@ pub async fn update_provider_cache(
                     .cloned()
                     .collect()
             };
-            let prev_map: HashMap<_, _> = prev.iter().map(|m| (m.id.clone(), (m.object.clone(), m.owned_by.clone(), m.created))).collect();
+            let prev_map: HashMap<_, _> = prev
+                .iter()
+                .map(|m| {
+                    (
+                        m.id.clone(),
+                        (m.object.clone(), m.owned_by.clone(), m.created),
+                    )
+                })
+                .collect();
             let sel_ids: HashSet<_> = selected.iter().map(|m| m.id.clone()).collect();
             let prev_ids: HashSet<_> = prev_map.keys().cloned().collect();
             let replace = payload.replace.unwrap_or(false);
             if replace {
                 added = sel_ids.difference(&prev_ids).count();
-                updated = sel_ids.intersection(&prev_ids).filter(|id| {
-                    let old = prev_map.get(*id).unwrap();
-                    let new = selected.iter().find(|m| &m.id == *id).unwrap();
-                    old.0 != new.object || old.1 != new.owned_by || old.2 != new.created
-                }).count();
+                updated = sel_ids
+                    .intersection(&prev_ids)
+                    .filter(|id| {
+                        let old = prev_map.get(*id).unwrap();
+                        let new = selected.iter().find(|m| &m.id == *id).unwrap();
+                        old.0 != new.object || old.1 != new.owned_by || old.2 != new.created
+                    })
+                    .count();
                 removed = prev_ids.difference(&sel_ids).count();
                 let _ = cache_models_for_provider(&app_state, &provider_name, &selected).await;
             } else {
                 added = sel_ids.difference(&prev_ids).count();
-                updated = sel_ids.intersection(&prev_ids).filter(|id| {
-                    let old = prev_map.get(*id).unwrap();
-                    let new = selected.iter().find(|m| &m.id == *id).unwrap();
-                    old.0 != new.object || old.1 != new.owned_by || old.2 != new.created
-                }).count();
-                let _ = crate::server::model_cache::cache_models_for_provider_append(&app_state, &provider_name, &selected).await;
+                updated = sel_ids
+                    .intersection(&prev_ids)
+                    .filter(|id| {
+                        let old = prev_map.get(*id).unwrap();
+                        let new = selected.iter().find(|m| &m.id == *id).unwrap();
+                        old.0 != new.object || old.1 != new.owned_by || old.2 != new.created
+                    })
+                    .count();
+                let _ = crate::server::model_cache::cache_models_for_provider_append(
+                    &app_state,
+                    &provider_name,
+                    &selected,
+                )
+                .await;
             }
         }
         _ => {
             let ge = GatewayError::Config("invalid mode".to_string());
             let code = ge.status_code().as_u16();
-            log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), provided_token.as_deref(), code, Some("invalid mode".into())).await;
+            log_simple_request(
+                &app_state,
+                start_time,
+                "POST",
+                &path,
+                REQ_TYPE_PROVIDER_CACHE_UPDATE,
+                None,
+                Some(provider_name.clone()),
+                provided_token.as_deref(),
+                code,
+                Some("invalid mode".into()),
+            )
+            .await;
             return Err(ge);
         }
     }
 
     let models = get_cached_models_for_provider(&app_state, &provider_name).await?;
-    log_simple_request(&app_state, start_time, "POST", &path, REQ_TYPE_PROVIDER_CACHE_UPDATE, None, Some(provider_name.clone()), token_for_log(provided_token.as_deref(), &app_state.admin_identity_token), 200, None).await;
-    let mut resp = Json(ModelListResponse { object: "list".into(), data: models }).into_response();
+    log_simple_request(
+        &app_state,
+        start_time,
+        "POST",
+        &path,
+        REQ_TYPE_PROVIDER_CACHE_UPDATE,
+        None,
+        Some(provider_name.clone()),
+        token_for_log(provided_token.as_deref()),
+        200,
+        None,
+    )
+    .await;
+    let mut resp = Json(ModelListResponse {
+        object: "list".into(),
+        data: models,
+    })
+    .into_response();
     use axum::http::header::HeaderValue;
-    if let Ok(v) = HeaderValue::from_str(&added.to_string()) { resp.headers_mut().insert("X-Cache-Added", v); }
-    if let Ok(v) = HeaderValue::from_str(&removed.to_string()) { resp.headers_mut().insert("X-Cache-Removed", v); }
-    if let Ok(v) = HeaderValue::from_str(&updated.to_string()) { resp.headers_mut().insert("X-Cache-Updated", v); }
-    if let Ok(v) = HeaderValue::from_str(&filtered.to_string()) { resp.headers_mut().insert("X-Cache-Filtered", v); }
+    if let Ok(v) = HeaderValue::from_str(&added.to_string()) {
+        resp.headers_mut().insert("X-Cache-Added", v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&removed.to_string()) {
+        resp.headers_mut().insert("X-Cache-Removed", v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&updated.to_string()) {
+        resp.headers_mut().insert("X-Cache-Updated", v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&filtered.to_string()) {
+        resp.headers_mut().insert("X-Cache-Filtered", v);
+    }
     Ok(resp)
 }
 
@@ -196,23 +324,55 @@ pub async fn delete_provider_cache(
     if let Err(e) = ensure_admin(&headers, &app_state).await {
         let start_time = chrono::Utc::now();
         let path = format!("/models/{}/cache", provider_name);
-        let _ = app_state.log_store.log_provider_op(crate::logging::types::ProviderOpLog {
-            id: None,
-            timestamp: start_time,
-            operation: REQ_TYPE_PROVIDER_CACHE_DELETE.to_string(),
-            provider: Some(provider_name.clone()),
-            details: Some(e.to_string()),
-        }).await;
+        let _ = app_state
+            .log_store
+            .log_provider_op(crate::logging::types::ProviderOpLog {
+                id: None,
+                timestamp: start_time,
+                operation: REQ_TYPE_PROVIDER_CACHE_DELETE.to_string(),
+                provider: Some(provider_name.clone()),
+                details: Some(e.to_string()),
+            })
+            .await;
         let code = e.status_code().as_u16();
-        log_simple_request(&app_state, start_time, "DELETE", &path, REQ_TYPE_PROVIDER_CACHE_DELETE, None, Some(provider_name), provided_token.as_deref(), code, Some("auth failed".into())).await;
+        log_simple_request(
+            &app_state,
+            start_time,
+            "DELETE",
+            &path,
+            REQ_TYPE_PROVIDER_CACHE_DELETE,
+            None,
+            Some(provider_name),
+            provided_token.as_deref(),
+            code,
+            Some("auth failed".into()),
+        )
+        .await;
         return Err(e);
     }
     let start_time = Utc::now();
     let path = format!("/models/{}/cache", provider_name);
-    if !app_state.providers.provider_exists(&provider_name).await.map_err(GatewayError::Db)? {
+    if !app_state
+        .providers
+        .provider_exists(&provider_name)
+        .await
+        .map_err(GatewayError::Db)?
+    {
         let ge = GatewayError::NotFound(format!("Provider '{}' not found", provider_name));
         let code = ge.status_code().as_u16();
-        log_simple_request(&app_state, start_time, "DELETE", &path, REQ_TYPE_PROVIDER_CACHE_DELETE, None, Some(provider_name.clone()), provided_token.as_deref(), code, Some(format!("Provider '{}' not found", provider_name))).await;
+        log_simple_request(
+            &app_state,
+            start_time,
+            "DELETE",
+            &path,
+            REQ_TYPE_PROVIDER_CACHE_DELETE,
+            None,
+            Some(provider_name.clone()),
+            provided_token.as_deref(),
+            code,
+            Some(format!("Provider '{}' not found", provider_name)),
+        )
+        .await;
         return Err(ge);
     }
 
@@ -222,19 +382,49 @@ pub async fn delete_provider_cache(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
-    let prev = crate::server::model_cache::get_cached_models_for_provider(&app_state, &provider_name)
-        .await
-        .unwrap_or_default();
-    let removed = ids.iter().filter(|id| prev.iter().any(|m| &m.id == *id)).count();
-    let _ = crate::server::model_cache::remove_models_for_provider(&app_state, &provider_name, &ids).await;
+    let prev =
+        crate::server::model_cache::get_cached_models_for_provider(&app_state, &provider_name)
+            .await
+            .unwrap_or_default();
+    let removed = ids
+        .iter()
+        .filter(|id| prev.iter().any(|m| &m.id == *id))
+        .count();
+    let _ =
+        crate::server::model_cache::remove_models_for_provider(&app_state, &provider_name, &ids)
+            .await;
 
     let models = get_cached_models_for_provider(&app_state, &provider_name).await?;
-    log_simple_request(&app_state, start_time, "DELETE", &path, REQ_TYPE_PROVIDER_CACHE_DELETE, None, Some(provider_name.clone()), token_for_log(provided_token.as_deref(), &app_state.admin_identity_token), 200, None).await;
-    let mut resp = Json(ModelListResponse { object: "list".into(), data: models }).into_response();
+    log_simple_request(
+        &app_state,
+        start_time,
+        "DELETE",
+        &path,
+        REQ_TYPE_PROVIDER_CACHE_DELETE,
+        None,
+        Some(provider_name.clone()),
+        token_for_log(provided_token.as_deref()),
+        200,
+        None,
+    )
+    .await;
+    let mut resp = Json(ModelListResponse {
+        object: "list".into(),
+        data: models,
+    })
+    .into_response();
     use axum::http::header::HeaderValue;
-    if let Ok(v) = HeaderValue::from_str(&"0".to_string()) { resp.headers_mut().insert("X-Cache-Added", v); }
-    if let Ok(v) = HeaderValue::from_str(&removed.to_string()) { resp.headers_mut().insert("X-Cache-Removed", v); }
-    if let Ok(v) = HeaderValue::from_str(&"0".to_string()) { resp.headers_mut().insert("X-Cache-Updated", v); }
-    if let Ok(v) = HeaderValue::from_str(&"0".to_string()) { resp.headers_mut().insert("X-Cache-Filtered", v); }
+    if let Ok(v) = HeaderValue::from_str(&"0".to_string()) {
+        resp.headers_mut().insert("X-Cache-Added", v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&removed.to_string()) {
+        resp.headers_mut().insert("X-Cache-Removed", v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&"0".to_string()) {
+        resp.headers_mut().insert("X-Cache-Updated", v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&"0".to_string()) {
+        resp.headers_mut().insert("X-Cache-Filtered", v);
+    }
     Ok(resp)
 }

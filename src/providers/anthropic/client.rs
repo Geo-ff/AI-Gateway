@@ -17,4 +17,3 @@ pub async fn chat_completions(
         .await?;
     Ok(response.json::<anthropic::CreateMessageResponse>().await?)
 }
-

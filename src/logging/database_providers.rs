@@ -1,6 +1,6 @@
-use rusqlite::{Result, OptionalExtension};
+use rusqlite::{OptionalExtension, Result};
 
-use crate::config::settings::{Provider, ProviderType, KeyLogStrategy};
+use crate::config::settings::{KeyLogStrategy, Provider, ProviderType};
 
 use super::database::DatabaseLogger;
 
@@ -45,34 +45,34 @@ impl DatabaseLogger {
         Ok(exists)
     }
 
-    
-
     pub async fn get_provider(&self, name: &str) -> Result<Option<Provider>> {
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare(
             "SELECT name, api_type, base_url, models_endpoint FROM providers WHERE name = ?1 LIMIT 1",
         )?;
-        let provider = stmt.query_row([name], |row| {
-            let name: String = row.get(0)?;
-            let api_type: String = row.get(1)?;
-            let base_url: String = row.get(2)?;
-            let models_endpoint: Option<String> = row.get(3)?;
-            Ok(Provider {
-                name,
-                api_type: provider_type_from_str(&api_type),
-                base_url,
-                api_keys: Vec::new(),
-                models_endpoint,
+        let provider = stmt
+            .query_row([name], |row| {
+                let name: String = row.get(0)?;
+                let api_type: String = row.get(1)?;
+                let base_url: String = row.get(2)?;
+                let models_endpoint: Option<String> = row.get(3)?;
+                Ok(Provider {
+                    name,
+                    api_type: provider_type_from_str(&api_type),
+                    base_url,
+                    api_keys: Vec::new(),
+                    models_endpoint,
+                })
             })
-        }).optional()?;
+            .optional()?;
         Ok(provider)
     }
 
-    
-
     pub async fn list_providers(&self) -> Result<Vec<Provider>> {
         let conn = self.connection.lock().await;
-        let mut stmt = conn.prepare("SELECT name, api_type, base_url, models_endpoint FROM providers ORDER BY name")?;
+        let mut stmt = conn.prepare(
+            "SELECT name, api_type, base_url, models_endpoint FROM providers ORDER BY name",
+        )?;
         let rows = stmt.query_map([], |row| {
             let name: String = row.get(0)?;
             let api_type: String = row.get(1)?;
@@ -87,11 +87,16 @@ impl DatabaseLogger {
             })
         })?;
         let mut out = Vec::new();
-        for r in rows { out.push(r?); }
+        for r in rows {
+            out.push(r?);
+        }
         Ok(out)
     }
 
-    pub async fn list_providers_with_keys(&self, strategy: &Option<KeyLogStrategy>) -> Result<Vec<Provider>> {
+    pub async fn list_providers_with_keys(
+        &self,
+        strategy: &Option<KeyLogStrategy>,
+    ) -> Result<Vec<Provider>> {
         let mut out = self.list_providers().await?;
         for p in &mut out {
             p.api_keys = self.get_provider_keys(&p.name, strategy).await?;

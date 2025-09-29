@@ -47,8 +47,8 @@ impl LoadBalancer {
         let provider = match self.strategy {
             BalanceStrategy::FirstAvailable => &self.providers[0],
             BalanceStrategy::RoundRobin => {
-                let index = self.round_robin_counter.fetch_add(1, Ordering::Relaxed)
-                    % self.providers.len();
+                let index =
+                    self.round_robin_counter.fetch_add(1, Ordering::Relaxed) % self.providers.len();
                 &self.providers[index]
             }
             BalanceStrategy::Random => {
@@ -74,8 +74,8 @@ impl LoadBalancer {
         match self.strategy {
             BalanceStrategy::FirstAvailable => Ok(provider.api_keys[0].clone()),
             BalanceStrategy::RoundRobin => {
-                let index = self.round_robin_counter.load(Ordering::Relaxed)
-                    % provider.api_keys.len();
+                let index =
+                    self.round_robin_counter.load(Ordering::Relaxed) % provider.api_keys.len();
                 Ok(provider.api_keys[index].clone())
             }
             BalanceStrategy::Random => {

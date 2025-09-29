@@ -1,3 +1,3 @@
 pub mod settings;
 
-pub use settings::{Settings, Provider, ProviderType, BalanceStrategy, ModelRedirect};
+pub use settings::{BalanceStrategy, ModelRedirect, Provider, ProviderType, Settings};

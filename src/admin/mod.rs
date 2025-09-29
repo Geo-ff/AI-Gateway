@@ -1,4 +1,3 @@
-
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -13,12 +12,12 @@ pub struct AdminToken {
     pub max_tokens: Option<i64>,             // 兼容旧字段（不再使用）
     pub max_amount: Option<f64>,             // 金额额度（单位自定义，如 USD/CNY）
     pub enabled: bool,
-    pub expires_at: Option<DateTime<Utc>>,   // None 表示不过期
+    pub expires_at: Option<DateTime<Utc>>, // None 表示不过期
     pub created_at: DateTime<Utc>,
-    pub amount_spent: f64,                   // 累计消费金额（默认 0）
-    pub prompt_tokens_spent: i64,            // 累计提示/输入 tokens
-    pub completion_tokens_spent: i64,        // 累计补全/回复 tokens
-    pub total_tokens_spent: i64,             // 累计总 tokens
+    pub amount_spent: f64,            // 累计消费金额（默认 0）
+    pub prompt_tokens_spent: i64,     // 累计提示/输入 tokens
+    pub completion_tokens_spent: i64, // 累计补全/回复 tokens
+    pub total_tokens_spent: i64,      // 累计总 tokens
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -28,40 +27,52 @@ pub struct CreateTokenPayload {
     #[serde(default)]
     pub allowed_models: Option<Vec<String>>, // None 表示不限制
     #[serde(default)]
-    pub max_tokens: Option<i64>,             // 兼容旧字段（忽略）
+    pub max_tokens: Option<i64>, // 兼容旧字段（忽略）
     #[serde(default)]
-    pub max_amount: Option<f64>,             // 金额额度（可选）
+    pub max_amount: Option<f64>, // 金额额度（可选）
     #[serde(default = "default_enabled_true")]
     pub enabled: bool,
     #[serde(default)]
     pub expires_at: Option<String>, // 北京时间字符串，可选
 }
 
-fn default_enabled_true() -> bool { true }
+fn default_enabled_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateTokenPayload {
     #[serde(default)]
     pub allowed_models: Option<Vec<String>>, // None -> 不修改；Some(Some(vec)) -> 设置；Some(None) -> 清空
     #[serde(default)]
-    pub max_tokens: Option<Option<i64>>,     // 兼容旧字段（忽略）
+    pub max_tokens: Option<Option<i64>>, // 兼容旧字段（忽略）
     #[serde(default)]
-    pub max_amount: Option<Option<f64>>,     // None -> 不修改；Some(Some(v)) -> 设置；Some(None) -> 清空
+    pub max_amount: Option<Option<f64>>, // None -> 不修改；Some(Some(v)) -> 设置；Some(None) -> 清空
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
-    pub expires_at: Option<Option<String>>,  // None -> 不修改；Some(Some(s)) -> 设置；Some(None) -> 清空
+    pub expires_at: Option<Option<String>>, // None -> 不修改；Some(Some(s)) -> 设置；Some(None) -> 清空
 }
 
 #[async_trait]
 pub trait TokenStore: Send + Sync {
     async fn create_token(&self, payload: CreateTokenPayload) -> Result<AdminToken, GatewayError>;
-    async fn update_token(&self, token: &str, payload: UpdateTokenPayload) -> Result<Option<AdminToken>, GatewayError>;
+    async fn update_token(
+        &self,
+        token: &str,
+        payload: UpdateTokenPayload,
+    ) -> Result<Option<AdminToken>, GatewayError>;
     async fn set_enabled(&self, token: &str, enabled: bool) -> Result<bool, GatewayError>;
     async fn get_token(&self, token: &str) -> Result<Option<AdminToken>, GatewayError>;
     async fn list_tokens(&self) -> Result<Vec<AdminToken>, GatewayError>;
     async fn add_amount_spent(&self, token: &str, delta: f64) -> Result<(), GatewayError>;
-    async fn add_usage_spent(&self, token: &str, prompt: i64, completion: i64, total: i64) -> Result<(), GatewayError>;
+    async fn add_usage_spent(
+        &self,
+        token: &str,
+        prompt: i64,
+        completion: i64,
+        total: i64,
+    ) -> Result<(), GatewayError>;
 }
 
 // SQLite 的实现由 DatabaseLogger 提供（见 logging/database_admin_tokens.rs）
@@ -78,8 +89,14 @@ fn join_allowed_models(v: &Option<Vec<String>>) -> Option<String> {
 }
 
 fn parse_allowed_models(s: Option<String>) -> Option<Vec<String>> {
-    s.map(|v| v.split(',').filter(|x| !x.trim().is_empty()).map(|x| x.trim().to_string()).collect::<Vec<_>>())
-        .map(|v| if v.is_empty() { None } else { Some(v) }).flatten()
+    s.map(|v| {
+        v.split(',')
+            .filter(|x| !x.trim().is_empty())
+            .map(|x| x.trim().to_string())
+            .collect::<Vec<_>>()
+    })
+    .map(|v| if v.is_empty() { None } else { Some(v) })
+    .flatten()
 }
 
 fn row_to_admin_token(r: &tokio_postgres::Row) -> AdminToken {
@@ -126,8 +143,9 @@ impl PgTokenStore {
                 .await
                 .map_err(|e| GatewayError::Config(format!("Failed to set search_path: {}", e)))?;
         }
-        client.execute(
-            r#"CREATE TABLE IF NOT EXISTS admin_tokens (
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS admin_tokens (
                 token TEXT PRIMARY KEY,
                 allowed_models TEXT,
                 max_tokens BIGINT,
@@ -140,15 +158,44 @@ impl PgTokenStore {
                 completion_tokens_spent BIGINT DEFAULT 0,
                 total_tokens_spent BIGINT DEFAULT 0
             )"#,
-            &[],
-        ).await.map_err(|e| GatewayError::Config(format!("Failed to init admin_tokens: {}", e)))?;
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init admin_tokens: {}", e)))?;
         // Migration
-        let _ = client.execute("ALTER TABLE admin_tokens ADD COLUMN max_amount DOUBLE PRECISION", &[]).await;
-        let _ = client.execute("ALTER TABLE admin_tokens ADD COLUMN amount_spent DOUBLE PRECISION DEFAULT 0", &[]).await;
-        let _ = client.execute("ALTER TABLE admin_tokens ADD COLUMN prompt_tokens_spent BIGINT DEFAULT 0", &[]).await;
-        let _ = client.execute("ALTER TABLE admin_tokens ADD COLUMN completion_tokens_spent BIGINT DEFAULT 0", &[]).await;
-        let _ = client.execute("ALTER TABLE admin_tokens ADD COLUMN total_tokens_spent BIGINT DEFAULT 0", &[]).await;
-        let store = Self { client: std::sync::Arc::new(client) };
+        let _ = client
+            .execute(
+                "ALTER TABLE admin_tokens ADD COLUMN max_amount DOUBLE PRECISION",
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute(
+                "ALTER TABLE admin_tokens ADD COLUMN amount_spent DOUBLE PRECISION DEFAULT 0",
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute(
+                "ALTER TABLE admin_tokens ADD COLUMN prompt_tokens_spent BIGINT DEFAULT 0",
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute(
+                "ALTER TABLE admin_tokens ADD COLUMN completion_tokens_spent BIGINT DEFAULT 0",
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute(
+                "ALTER TABLE admin_tokens ADD COLUMN total_tokens_spent BIGINT DEFAULT 0",
+                &[],
+            )
+            .await;
+        let store = Self {
+            client: std::sync::Arc::new(client),
+        };
         // keepalive（带抖动），降低空闲回收的概率并避免集群齐刷刷触发
         crate::db::postgres::spawn_keepalive(std::sync::Arc::clone(&store.client), 240, 420);
         Ok(store)
@@ -163,7 +210,10 @@ impl TokenStore for PgTokenStore {
             use rand::Rng;
             let rng = rand::rng();
             use rand::distr::Alphanumeric;
-            rng.sample_iter(&Alphanumeric).take(40).map(char::from).collect::<String>()
+            rng.sample_iter(&Alphanumeric)
+                .take(40)
+                .map(char::from)
+                .collect::<String>()
         };
         let now = Utc::now();
         let allowed_models_s = join_allowed_models(&payload.allowed_models);
@@ -182,7 +232,10 @@ impl TokenStore for PgTokenStore {
             max_tokens: payload.max_tokens,
             max_amount: payload.max_amount,
             enabled: payload.enabled,
-            expires_at: match expires_s { Some(s) => Some(parse_beijing_string(&s)?), None => None },
+            expires_at: match expires_s {
+                Some(s) => Some(parse_beijing_string(&s)?),
+                None => None,
+            },
             created_at: now,
             amount_spent: 0.0,
             prompt_tokens_spent: 0,
@@ -191,7 +244,11 @@ impl TokenStore for PgTokenStore {
         })
     }
 
-    async fn update_token(&self, token: &str, payload: UpdateTokenPayload) -> Result<Option<AdminToken>, GatewayError> {
+    async fn update_token(
+        &self,
+        token: &str,
+        payload: UpdateTokenPayload,
+    ) -> Result<Option<AdminToken>, GatewayError> {
         // read existing
         let row = self.client
             .query_opt(
@@ -203,11 +260,21 @@ impl TokenStore for PgTokenStore {
         let Some(r) = row else { return Ok(None) };
         let mut current = row_to_admin_token(&r);
 
-        if let Some(v) = payload.allowed_models { current.allowed_models = Some(v); }
-        if let Some(v) = payload.max_tokens { current.max_tokens = v; }
-        if let Some(v) = payload.max_amount { current.max_amount = v; }
-        if let Some(v) = payload.enabled { current.enabled = v; }
-        if let Some(v) = payload.expires_at { current.expires_at = v.map(|s| parse_beijing_string(&s).ok()).flatten(); }
+        if let Some(v) = payload.allowed_models {
+            current.allowed_models = Some(v);
+        }
+        if let Some(v) = payload.max_tokens {
+            current.max_tokens = v;
+        }
+        if let Some(v) = payload.max_amount {
+            current.max_amount = v;
+        }
+        if let Some(v) = payload.enabled {
+            current.enabled = v;
+        }
+        if let Some(v) = payload.expires_at {
+            current.expires_at = v.map(|s| parse_beijing_string(&s).ok()).flatten();
+        }
 
         self.client
             .execute(
@@ -221,8 +288,12 @@ impl TokenStore for PgTokenStore {
     }
 
     async fn set_enabled(&self, token: &str, enabled: bool) -> Result<bool, GatewayError> {
-        let res = self.client
-            .execute("UPDATE admin_tokens SET enabled = $2 WHERE token = $1", &[&token, &enabled])
+        let res = self
+            .client
+            .execute(
+                "UPDATE admin_tokens SET enabled = $2 WHERE token = $1",
+                &[&token, &enabled],
+            )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         Ok(res > 0)
@@ -236,7 +307,11 @@ impl TokenStore for PgTokenStore {
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
-        if let Some(r) = row { Ok(Some(row_to_admin_token(&r))) } else { Ok(None) }
+        if let Some(r) = row {
+            Ok(Some(row_to_admin_token(&r)))
+        } else {
+            Ok(None)
+        }
     }
 
     async fn list_tokens(&self) -> Result<Vec<AdminToken>, GatewayError> {
@@ -261,7 +336,13 @@ impl TokenStore for PgTokenStore {
         Ok(())
     }
 
-    async fn add_usage_spent(&self, token: &str, prompt: i64, completion: i64, total: i64) -> Result<(), GatewayError> {
+    async fn add_usage_spent(
+        &self,
+        token: &str,
+        prompt: i64,
+        completion: i64,
+        total: i64,
+    ) -> Result<(), GatewayError> {
         self.client
             .execute(
                 "UPDATE admin_tokens SET prompt_tokens_spent = COALESCE(prompt_tokens_spent,0) + $2, completion_tokens_spent = COALESCE(completion_tokens_spent,0) + $3, total_tokens_spent = COALESCE(total_tokens_spent,0) + $4 WHERE token = $1",

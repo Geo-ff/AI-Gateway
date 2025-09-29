@@ -842,7 +842,14 @@ impl LoginStore for PgLogStore {
                     "UPDATE admin_public_keys
                      SET public_key=$2, comment=$3, enabled=$4, created_at=$5, last_used_at=$6
                      WHERE fingerprint=$1",
-                    &[&key.fingerprint, &key.public_key, &comment, &key.enabled, &key.created_at, &key.last_used_at],
+                    &[
+                        &key.fingerprint,
+                        &key.public_key,
+                        &comment,
+                        &key.enabled,
+                        &key.created_at,
+                        &key.last_used_at,
+                    ],
                 )
                 .await
                 .map_err(pg_err)?;
@@ -1090,6 +1097,36 @@ impl LoginStore for PgLogStore {
                 .await
                 .map_err(pg_err)?;
             Ok(None)
+        })
+    }
+
+    fn get_latest_login_code_for_session<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<LoginCodeRecord>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "SELECT code_hash, session_id, fingerprint, created_at, expires_at, max_uses, uses, disabled, hint
+                     FROM login_codes WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1",
+                    &[&session_id],
+                )
+                .await
+                .map_err(pg_err)?;
+
+            let rec = row.map(|r| LoginCodeRecord {
+                code_hash: r.get(0),
+                session_id: r.get(1),
+                fingerprint: r.get(2),
+                created_at: r.get(3),
+                expires_at: r.get(4),
+                max_uses: r.get::<_, i32>(5) as u32,
+                uses: r.get::<_, i32>(6) as u32,
+                disabled: r.get(7),
+                hint: r.get(8),
+            });
+            Ok(rec)
         })
     }
 

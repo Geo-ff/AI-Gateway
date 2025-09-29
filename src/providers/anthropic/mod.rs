@@ -1,20 +1,24 @@
 use crate::providers::openai::ChatCompletionRequest;
-use async_openai::types as oai;
 use anthropic_ai_sdk::types::message as anthropic;
+use async_openai::types as oai;
 
+mod client;
 mod request;
 mod response;
 mod utils;
-mod client;
 
 pub struct AnthropicProvider;
 
 impl AnthropicProvider {
-    pub fn convert_openai_to_anthropic(openai_req: &ChatCompletionRequest) -> anthropic::CreateMessageParams {
+    pub fn convert_openai_to_anthropic(
+        openai_req: &ChatCompletionRequest,
+    ) -> anthropic::CreateMessageParams {
         request::convert_openai_to_anthropic(openai_req)
     }
 
-    pub fn convert_anthropic_to_openai(resp: &anthropic::CreateMessageResponse) -> oai::CreateChatCompletionResponse {
+    pub fn convert_anthropic_to_openai(
+        resp: &anthropic::CreateMessageResponse,
+    ) -> oai::CreateChatCompletionResponse {
         response::convert_anthropic_to_openai(resp)
     }
 
@@ -26,4 +30,3 @@ impl AnthropicProvider {
         client::chat_completions(base_url, api_key, request).await
     }
 }
-

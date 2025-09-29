@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 
 use crate::logging::RequestLog;
 use crate::logging::types::REQ_TYPE_CHAT_STREAM;
-use crate::server::AppState;
 use crate::providers::openai::Usage;
+use crate::server::AppState;
 
 // 统一的流式错误日志记录函数（KISS/DRY）
 pub(super) async fn log_stream_error(
@@ -58,17 +58,25 @@ pub(super) async fn log_stream_success(
     let response_time_ms = (end_time - start_time).num_milliseconds();
     let (prompt, completion, total, cached, reasoning) = usage
         .as_ref()
-        .map(|u| (
-            Some(u.prompt_tokens),
-            Some(u.completion_tokens),
-            Some(u.total_tokens),
-            u.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens),
-            u.completion_tokens_details.as_ref().and_then(|d| d.reasoning_tokens),
-        ))
+        .map(|u| {
+            (
+                Some(u.prompt_tokens),
+                Some(u.completion_tokens),
+                Some(u.total_tokens),
+                u.prompt_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.cached_tokens),
+                u.completion_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.reasoning_tokens),
+            )
+        })
         .unwrap_or((None, None, None, None, None));
     // Compute amount_spent if possible (non-admin tokens only)
     let amount_spent = if let (Some(u), Some(tok)) = (usage.as_ref(), client_token.as_deref()) {
-        if tok == "admin_token" { None } else {
+        if tok == "admin_token" {
+            None
+        } else {
             match app_state.log_store.get_model_price(&provider, &model).await {
                 Ok(Some((p_pm, c_pm, _))) => {
                     let p = u.prompt_tokens as f64 * p_pm / 1_000_000.0;
@@ -78,7 +86,9 @@ pub(super) async fn log_stream_success(
                 _ => None,
             }
         }
-    } else { None };
+    } else {
+        None
+    };
 
     let log = RequestLog {
         id: None,
@@ -107,13 +117,21 @@ pub(super) async fn log_stream_success(
     // 增量更新 admin_tokens：金额与 tokens（仅非管理员令牌）
     if let Some(tok) = client_token.as_deref().filter(|t| *t != "admin_token") {
         if let Some(delta) = amount_spent {
-            if let Err(e) = app_state.token_store.add_amount_spent(tok, delta).await { tracing::warn!("Failed to update token spent: {}", e); }
+            if let Err(e) = app_state.token_store.add_amount_spent(tok, delta).await {
+                tracing::warn!("Failed to update token spent: {}", e);
+            }
         }
         if let Some(u) = usage.as_ref() {
             let prompt = u.prompt_tokens as i64;
             let completion = u.completion_tokens as i64;
             let total = u.total_tokens as i64;
-            if let Err(e) = app_state.token_store.add_usage_spent(tok, prompt, completion, total).await { tracing::warn!("Failed to update token tokens: {}", e); }
+            if let Err(e) = app_state
+                .token_store
+                .add_usage_spent(tok, prompt, completion, total)
+                .await
+            {
+                tracing::warn!("Failed to update token tokens: {}", e);
+            }
         }
     }
 
@@ -121,10 +139,14 @@ pub(super) async fn log_stream_success(
     if let Some(tok) = client_token.as_deref() {
         if let Ok(Some(t)) = app_state.token_store.get_token(tok).await {
             if let Some(max_amount) = t.max_amount {
-                if t.amount_spent > max_amount { let _ = app_state.token_store.set_enabled(tok, false).await; }
+                if t.amount_spent > max_amount {
+                    let _ = app_state.token_store.set_enabled(tok, false).await;
+                }
             }
             if let Some(max_tokens) = t.max_tokens {
-                if t.total_tokens_spent > max_tokens { let _ = app_state.token_store.set_enabled(tok, false).await; }
+                if t.total_tokens_spent > max_tokens {
+                    let _ = app_state.token_store.set_enabled(tok, false).await;
+                }
             }
         }
     }
@@ -134,9 +156,18 @@ pub(super) async fn log_stream_success(
 pub(super) fn parse_usage_from_value(v: &serde_json::Value) -> Option<Usage> {
     use async_openai::types::{CompletionTokensDetails, PromptTokensDetails};
     let u = v.get("usage")?;
-    let prompt = u.get("prompt_tokens").and_then(|x| x.as_u64()).map(|x| x as u32);
-    let completion = u.get("completion_tokens").and_then(|x| x.as_u64()).map(|x| x as u32);
-    let total = u.get("total_tokens").and_then(|x| x.as_u64()).map(|x| x as u32);
+    let prompt = u
+        .get("prompt_tokens")
+        .and_then(|x| x.as_u64())
+        .map(|x| x as u32);
+    let completion = u
+        .get("completion_tokens")
+        .and_then(|x| x.as_u64())
+        .map(|x| x as u32);
+    let total = u
+        .get("total_tokens")
+        .and_then(|x| x.as_u64())
+        .map(|x| x as u32);
     let cached = u
         .get("prompt_tokens_details")
         .and_then(|d| d.get("cached_tokens"))
@@ -147,14 +178,35 @@ pub(super) fn parse_usage_from_value(v: &serde_json::Value) -> Option<Usage> {
         .and_then(|d| d.get("reasoning_tokens"))
         .and_then(|x| x.as_u64())
         .map(|x| x as u32);
-    if prompt.is_none() && completion.is_none() && total.is_none() && cached.is_none() && reasoning.is_none() {
+    if prompt.is_none()
+        && completion.is_none()
+        && total.is_none()
+        && cached.is_none()
+        && reasoning.is_none()
+    {
         return None;
     }
     Some(Usage {
         prompt_tokens: prompt.unwrap_or(0),
         completion_tokens: completion.unwrap_or(0),
         total_tokens: total.unwrap_or(prompt.unwrap_or(0) + completion.unwrap_or(0)),
-        prompt_tokens_details: if cached.is_some() { Some(PromptTokensDetails { cached_tokens: cached, audio_tokens: None }) } else { None },
-        completion_tokens_details: if reasoning.is_some() { Some(CompletionTokensDetails { reasoning_tokens: reasoning, audio_tokens: None, accepted_prediction_tokens: None, rejected_prediction_tokens: None }) } else { None },
+        prompt_tokens_details: if cached.is_some() {
+            Some(PromptTokensDetails {
+                cached_tokens: cached,
+                audio_tokens: None,
+            })
+        } else {
+            None
+        },
+        completion_tokens_details: if reasoning.is_some() {
+            Some(CompletionTokensDetails {
+                reasoning_tokens: reasoning,
+                audio_tokens: None,
+                accepted_prediction_tokens: None,
+                rejected_prediction_tokens: None,
+            })
+        } else {
+            None
+        },
     })
 }

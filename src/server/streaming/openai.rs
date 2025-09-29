@@ -1,4 +1,7 @@
-use std::{convert::Infallible, sync::{Arc, Mutex}};
+use std::{
+    convert::Infallible,
+    sync::{Arc, Mutex},
+};
 
 use axum::response::{IntoResponse, Response, Sse};
 use chrono::{DateTime, Utc};
@@ -27,7 +30,9 @@ pub async fn stream_openai_chat(
     let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
 
     upstream_req.stream = Some(true);
-    upstream_req.stream_options = Some(ChatCompletionStreamOptions { include_usage: true });
+    upstream_req.stream_options = Some(ChatCompletionStreamOptions {
+        include_usage: true,
+    });
 
     let request_builder = client
         .post(&url)
@@ -69,7 +74,8 @@ pub async fn stream_openai_chat(
                     )
                     .await;
                 });
-                let _ = tx.send(axum::response::sse::Event::default().data(format!("error: {}", e)));
+                let _ =
+                    tx.send(axum::response::sse::Event::default().data(format!("error: {}", e)));
                 return;
             }
         };
@@ -107,7 +113,9 @@ pub async fn stream_openai_chat(
 
                     // Primary: try typed parse
                     let mut captured = false;
-                    if let Ok(chunk) = serde_json::from_str::<CreateChatCompletionStreamResponse>(&m.data) {
+                    if let Ok(chunk) =
+                        serde_json::from_str::<CreateChatCompletionStreamResponse>(&m.data)
+                    {
                         if let Some(u) = &chunk.usage {
                             *usage_cell_for_task.lock().unwrap() = Some(u.clone());
                             captured = true;
@@ -148,7 +156,9 @@ pub async fn stream_openai_chat(
                             .await;
                         });
                     }
-                    let _ = tx.send(axum::response::sse::Event::default().data(format!("error: {}", error_msg)));
+                    let _ = tx.send(
+                        axum::response::sse::Event::default().data(format!("error: {}", error_msg)),
+                    );
                     break;
                 }
             }
@@ -185,5 +195,7 @@ pub async fn stream_openai_chat(
         tokio_stream::wrappers::UnboundedReceiverStream::new(rx),
         Ok::<_, Infallible>,
     );
-    Ok(Sse::new(out_stream).keep_alive(axum::response::sse::KeepAlive::default()).into_response())
+    Ok(Sse::new(out_stream)
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response())
 }

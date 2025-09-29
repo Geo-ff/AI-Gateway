@@ -1,14 +1,20 @@
-use axum::{extract::{Path, State}, Json};
+use axum::{
+    Json,
+    extract::{Path, State},
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use super::auth::ensure_admin;
 use crate::config::settings::{Provider, ProviderType};
 use crate::error::GatewayError;
+use crate::logging::types::{
+    ProviderOpLog, REQ_TYPE_PROVIDER_CREATE, REQ_TYPE_PROVIDER_DELETE, REQ_TYPE_PROVIDER_GET,
+    REQ_TYPE_PROVIDER_LIST, REQ_TYPE_PROVIDER_UPDATE,
+};
 use crate::server::AppState;
-use crate::logging::types::{ProviderOpLog, REQ_TYPE_PROVIDER_CREATE, REQ_TYPE_PROVIDER_UPDATE, REQ_TYPE_PROVIDER_DELETE, REQ_TYPE_PROVIDER_GET, REQ_TYPE_PROVIDER_LIST};
 use crate::server::request_logging::log_simple_request;
 use crate::server::util::{bearer_token, token_for_log};
-use super::auth::ensure_admin;
 use chrono::Utc;
 
 #[derive(Debug, Deserialize)]
@@ -36,11 +42,19 @@ pub struct ProviderOut {
 
 impl From<Provider> for ProviderOut {
     fn from(p: Provider) -> Self {
-        Self { name: p.name, api_type: p.api_type, base_url: p.base_url, models_endpoint: p.models_endpoint }
+        Self {
+            name: p.name,
+            api_type: p.api_type,
+            base_url: p.base_url,
+            models_endpoint: p.models_endpoint,
+        }
     }
 }
 
-pub async fn list_providers(State(app_state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> Result<Json<Vec<ProviderOut>>, GatewayError> {
+pub async fn list_providers(
+    State(app_state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<ProviderOut>>, GatewayError> {
     ensure_admin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
@@ -53,54 +67,129 @@ pub async fn list_providers(State(app_state): State<Arc<AppState>>, headers: axu
         .map(ProviderOut::from)
         .collect();
     // audit log
-    let _ = app_state.log_store.log_provider_op(ProviderOpLog {
-        id: None,
-        timestamp: start_time,
-        operation: REQ_TYPE_PROVIDER_LIST.to_string(),
-        provider: None,
-        details: None,
-    }).await;
+    let _ = app_state
+        .log_store
+        .log_provider_op(ProviderOpLog {
+            id: None,
+            timestamp: start_time,
+            operation: REQ_TYPE_PROVIDER_LIST.to_string(),
+            provider: None,
+            details: None,
+        })
+        .await;
     // request log
-    let token_log = token_for_log(provided_token.as_deref(), &app_state.admin_identity_token);
-    log_simple_request(&app_state, start_time, "GET", "/providers", REQ_TYPE_PROVIDER_LIST, None, None, token_log, 200, None).await;
+    let token_log = token_for_log(provided_token.as_deref());
+    log_simple_request(
+        &app_state,
+        start_time,
+        "GET",
+        "/providers",
+        REQ_TYPE_PROVIDER_LIST,
+        None,
+        None,
+        token_log,
+        200,
+        None,
+    )
+    .await;
     Ok(Json(providers))
 }
 
-pub async fn get_provider(Path(name): Path<String>, State(app_state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> Result<Json<ProviderOut>, GatewayError> {
+pub async fn get_provider(
+    Path(name): Path<String>,
+    State(app_state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<ProviderOut>, GatewayError> {
     ensure_admin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    match app_state.providers.get_provider(&name).await.map_err(GatewayError::Db)? {
+    match app_state
+        .providers
+        .get_provider(&name)
+        .await
+        .map_err(GatewayError::Db)?
+    {
         Some(p) => {
-            let _ = app_state.log_store.log_provider_op(ProviderOpLog {
-                id: None,
-                timestamp: start_time,
-                operation: REQ_TYPE_PROVIDER_GET.to_string(),
-                provider: Some(name.clone()),
-                details: None,
-            }).await;
-            let token_log = token_for_log(provided_token.as_deref(), &app_state.admin_identity_token);
-            log_simple_request(&app_state, start_time, "GET", &format!("/providers/{}", name), REQ_TYPE_PROVIDER_GET, None, Some(name), token_log, 200, None).await;
+            let _ = app_state
+                .log_store
+                .log_provider_op(ProviderOpLog {
+                    id: None,
+                    timestamp: start_time,
+                    operation: REQ_TYPE_PROVIDER_GET.to_string(),
+                    provider: Some(name.clone()),
+                    details: None,
+                })
+                .await;
+            let token_log = token_for_log(provided_token.as_deref());
+            log_simple_request(
+                &app_state,
+                start_time,
+                "GET",
+                &format!("/providers/{}", name),
+                REQ_TYPE_PROVIDER_GET,
+                None,
+                Some(name),
+                token_log,
+                200,
+                None,
+            )
+            .await;
             Ok(Json(ProviderOut::from(p)))
         }
         None => {
-            let token_log = token_for_log(provided_token.as_deref(), &app_state.admin_identity_token);
-            log_simple_request(&app_state, start_time, "GET", &format!("/providers/{}", name), REQ_TYPE_PROVIDER_GET, None, Some(name.clone()), token_log, 404, Some("not found".into())).await;
-            Err(GatewayError::NotFound(format!("Provider '{}' not found", name)))
+            let token_log = token_for_log(provided_token.as_deref());
+            log_simple_request(
+                &app_state,
+                start_time,
+                "GET",
+                &format!("/providers/{}", name),
+                REQ_TYPE_PROVIDER_GET,
+                None,
+                Some(name.clone()),
+                token_log,
+                404,
+                Some("not found".into()),
+            )
+            .await;
+            Err(GatewayError::NotFound(format!(
+                "Provider '{}' not found",
+                name
+            )))
         }
     }
 }
 
-pub async fn create_provider(State(app_state): State<Arc<AppState>>, headers: axum::http::HeaderMap, Json(payload): Json<ProviderCreatePayload>) -> Result<(axum::http::StatusCode, Json<ProviderOut>), GatewayError> {
+pub async fn create_provider(
+    State(app_state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<ProviderCreatePayload>,
+) -> Result<(axum::http::StatusCode, Json<ProviderOut>), GatewayError> {
     ensure_admin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     if payload.name.trim().is_empty() {
         return Err(GatewayError::Config("name cannot be empty".into()));
     }
-    if app_state.providers.provider_exists(&payload.name).await.map_err(GatewayError::Db)? {
-    let token_log = token_for_log(provided_token.as_deref(), &app_state.admin_identity_token);
-    log_simple_request(&app_state, start_time, "POST", "/providers", REQ_TYPE_PROVIDER_CREATE, None, Some(payload.name.clone()), token_log, 400, Some("already exists".into())).await;
+    if app_state
+        .providers
+        .provider_exists(&payload.name)
+        .await
+        .map_err(GatewayError::Db)?
+    {
+        let token_log = token_for_log(provided_token.as_deref());
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            "/providers",
+            REQ_TYPE_PROVIDER_CREATE,
+            None,
+            Some(payload.name.clone()),
+            token_log,
+            400,
+            Some("already exists".into()),
+        )
+        .await;
         return Err(GatewayError::Config("provider already exists".into()));
     }
     let p = Provider {
@@ -114,17 +203,32 @@ pub async fn create_provider(State(app_state): State<Arc<AppState>>, headers: ax
         Ok(v) => v,
         Err(e) => {
             // 失败时记录操作审计与请求日志
-            let _ = app_state.log_store.log_provider_op(ProviderOpLog {
-                id: None,
-                timestamp: start_time,
-                operation: REQ_TYPE_PROVIDER_CREATE.to_string(),
-                provider: Some(p.name.clone()),
-                details: Some(format!("error: {}", e)),
-            }).await;
+            let _ = app_state
+                .log_store
+                .log_provider_op(ProviderOpLog {
+                    id: None,
+                    timestamp: start_time,
+                    operation: REQ_TYPE_PROVIDER_CREATE.to_string(),
+                    provider: Some(p.name.clone()),
+                    details: Some(format!("error: {}", e)),
+                })
+                .await;
             let ge = GatewayError::Db(e);
             let code = ge.status_code().as_u16();
-            let token_for_log = provided_token.as_deref().map(|tok| if tok == app_state.admin_identity_token { "admin_token" } else { tok });
-            log_simple_request(&app_state, start_time, "POST", "/providers", REQ_TYPE_PROVIDER_CREATE, None, Some(p.name.clone()), token_for_log, code, Some("db error".into())).await;
+            let token_for_log = provided_token.as_deref();
+            log_simple_request(
+                &app_state,
+                start_time,
+                "POST",
+                "/providers",
+                REQ_TYPE_PROVIDER_CREATE,
+                None,
+                Some(p.name.clone()),
+                token_for_log,
+                code,
+                Some("db error".into()),
+            )
+            .await;
             return Err(ge);
         }
     };
@@ -142,16 +246,37 @@ pub async fn create_provider(State(app_state): State<Arc<AppState>>, headers: ax
             "models_endpoint": p.models_endpoint
         })).unwrap_or_default()),
     }).await;
-    let token_for_log = provided_token.as_deref().map(|tok| if tok == app_state.admin_identity_token { "admin_token" } else { tok });
-    log_simple_request(&app_state, start_time, "POST", "/providers", REQ_TYPE_PROVIDER_CREATE, None, Some(p.name.clone()), token_for_log, 201, None).await;
+    let token_for_log = provided_token.as_deref();
+    log_simple_request(
+        &app_state,
+        start_time,
+        "POST",
+        "/providers",
+        REQ_TYPE_PROVIDER_CREATE,
+        None,
+        Some(p.name.clone()),
+        token_for_log,
+        201,
+        None,
+    )
+    .await;
     Ok((axum::http::StatusCode::CREATED, Json(ProviderOut::from(p))))
 }
 
-pub async fn update_provider(Path(name): Path<String>, State(app_state): State<Arc<AppState>>, headers: axum::http::HeaderMap, Json(payload): Json<ProviderUpdatePayload>) -> Result<(axum::http::StatusCode, Json<ProviderOut>), GatewayError> {
+pub async fn update_provider(
+    Path(name): Path<String>,
+    State(app_state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<ProviderUpdatePayload>,
+) -> Result<(axum::http::StatusCode, Json<ProviderOut>), GatewayError> {
     ensure_admin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    let existed = app_state.providers.provider_exists(&name).await.map_err(GatewayError::Db)?;
+    let existed = app_state
+        .providers
+        .provider_exists(&name)
+        .await
+        .map_err(GatewayError::Db)?;
     let p = Provider {
         name: name.clone(),
         api_type: payload.api_type,
@@ -159,8 +284,16 @@ pub async fn update_provider(Path(name): Path<String>, State(app_state): State<A
         api_keys: Vec::new(),
         models_endpoint: payload.models_endpoint,
     };
-    app_state.providers.upsert_provider(&p).await.map_err(GatewayError::Db)?;
-    let code = if existed { axum::http::StatusCode::OK } else { axum::http::StatusCode::CREATED };
+    app_state
+        .providers
+        .upsert_provider(&p)
+        .await
+        .map_err(GatewayError::Db)?;
+    let code = if existed {
+        axum::http::StatusCode::OK
+    } else {
+        axum::http::StatusCode::CREATED
+    };
     let _ = app_state.log_store.log_provider_op(ProviderOpLog {
         id: None,
         timestamp: start_time,
@@ -172,24 +305,80 @@ pub async fn update_provider(Path(name): Path<String>, State(app_state): State<A
             "models_endpoint": p.models_endpoint
         })).unwrap_or_default()),
     }).await;
-    let token_log = token_for_log(provided_token.as_deref(), &app_state.admin_identity_token);
-    log_simple_request(&app_state, start_time, "PUT", &format!("/providers/{}", p.name), REQ_TYPE_PROVIDER_UPDATE, None, Some(p.name.clone()), token_log, if existed {200} else {201}, None).await;
+    let token_log = token_for_log(provided_token.as_deref());
+    log_simple_request(
+        &app_state,
+        start_time,
+        "PUT",
+        &format!("/providers/{}", p.name),
+        REQ_TYPE_PROVIDER_UPDATE,
+        None,
+        Some(p.name.clone()),
+        token_log,
+        if existed { 200 } else { 201 },
+        None,
+    )
+    .await;
     Ok((code, Json(ProviderOut::from(p))))
 }
 
-pub async fn delete_provider(Path(name): Path<String>, State(app_state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> Result<axum::http::StatusCode, GatewayError> {
+pub async fn delete_provider(
+    Path(name): Path<String>,
+    State(app_state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<axum::http::StatusCode, GatewayError> {
     ensure_admin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    let deleted = app_state.providers.delete_provider(&name).await.map_err(GatewayError::Db)?;
+    let deleted = app_state
+        .providers
+        .delete_provider(&name)
+        .await
+        .map_err(GatewayError::Db)?;
     if deleted {
-        let _ = app_state.log_store.log_provider_op(ProviderOpLog { id: None, timestamp: start_time, operation: REQ_TYPE_PROVIDER_DELETE.to_string(), provider: Some(name.clone()), details: None }).await;
-        let token_log = token_for_log(provided_token.as_deref(), &app_state.admin_identity_token);
-        log_simple_request(&app_state, start_time, "DELETE", &format!("/providers/{}", name), REQ_TYPE_PROVIDER_DELETE, None, Some(name), token_log, 204, None).await;
+        let _ = app_state
+            .log_store
+            .log_provider_op(ProviderOpLog {
+                id: None,
+                timestamp: start_time,
+                operation: REQ_TYPE_PROVIDER_DELETE.to_string(),
+                provider: Some(name.clone()),
+                details: None,
+            })
+            .await;
+        let token_log = token_for_log(provided_token.as_deref());
+        log_simple_request(
+            &app_state,
+            start_time,
+            "DELETE",
+            &format!("/providers/{}", name),
+            REQ_TYPE_PROVIDER_DELETE,
+            None,
+            Some(name),
+            token_log,
+            204,
+            None,
+        )
+        .await;
         Ok(axum::http::StatusCode::NO_CONTENT)
     } else {
-        let token_log = token_for_log(provided_token.as_deref(), &app_state.admin_identity_token);
-        log_simple_request(&app_state, start_time, "DELETE", &format!("/providers/{}", name), REQ_TYPE_PROVIDER_DELETE, None, Some(name.clone()), token_log, 404, Some("not found".into())).await;
-        Err(GatewayError::NotFound(format!("Provider '{}' not found", name)))
+        let token_log = token_for_log(provided_token.as_deref());
+        log_simple_request(
+            &app_state,
+            start_time,
+            "DELETE",
+            &format!("/providers/{}", name),
+            REQ_TYPE_PROVIDER_DELETE,
+            None,
+            Some(name.clone()),
+            token_log,
+            404,
+            Some("not found".into()),
+        )
+        .await;
+        Err(GatewayError::NotFound(format!(
+            "Provider '{}' not found",
+            name
+        )))
     }
 }

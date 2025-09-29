@@ -1,14 +1,14 @@
-mod config;
-mod server;
-mod routing;
-mod providers;
-mod logging;
-mod error;
-mod crypto;
 mod admin;
+mod config;
+mod crypto;
 mod db;
+mod error;
+mod logging;
+mod providers;
+mod routing;
+mod server;
 
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 #[tokio::main]
 async fn main() -> crate::error::Result<()> {

@@ -25,6 +25,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/auth/tui/challenge", post(auth_tui::challenge))
         .route("/auth/tui/verify", post(auth_tui::verify))
         .route("/auth/login-codes", post(auth_login::create_login_code))
+        .route(
+            "/auth/login-codes/status",
+            get(auth_login::current_code_status),
+        )
         .route("/auth/code/redeem", post(auth_login::redeem_code))
         .route("/auth/session", get(auth_login::get_session))
         .route("/auth/logout", post(auth_login::logout))

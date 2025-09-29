@@ -76,7 +76,6 @@ pub struct MetricsSeries {
 
 fn identity_label(identity: &AdminIdentity) -> &'static str {
     match identity {
-        AdminIdentity::LegacyToken => "admin_token",
         AdminIdentity::TuiSession(_) => "tui_session",
         AdminIdentity::WebSession(_) => "web_session",
     }

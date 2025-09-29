@@ -40,8 +40,28 @@ fn default_len() -> usize {
 pub struct CreateCodeResponse {
     pub code: String,
     pub expires_at: String,
+    pub max_uses: u32,
+    pub uses: u32,
+    pub remaining_uses: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub login_url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CodeStatusInfo {
+    pub created_at: String,
+    pub expires_at: String,
+    pub max_uses: u32,
+    pub uses: u32,
+    pub remaining_uses: u32,
+    pub disabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CodeStatusResponse {
+    pub exists: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub info: Option<CodeStatusInfo>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,7 +164,38 @@ pub async fn create_login_code(
     Ok(Json(CreateCodeResponse {
         code: entry.code,
         expires_at: entry.expires_at.to_rfc3339(),
+        max_uses: entry.max_uses,
+        uses: entry.uses,
+        remaining_uses: entry.max_uses.saturating_sub(entry.uses),
         login_url,
+    }))
+}
+
+pub async fn current_code_status(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> AppResult<Json<CodeStatusResponse>> {
+    let identity = ensure_admin(&headers, &app).await?;
+    let session = match identity {
+        AdminIdentity::TuiSession(session) => session,
+        _ => {
+            return Err(GatewayError::Config("仅 TUI 会话可查询登录凭证状态".into()));
+        }
+    };
+
+    let status = app.login_manager.current_code_status(&session).await?;
+    let info = status.map(|s| CodeStatusInfo {
+        created_at: s.created_at.to_rfc3339(),
+        expires_at: s.expires_at.to_rfc3339(),
+        max_uses: s.max_uses,
+        uses: s.uses,
+        remaining_uses: s.remaining_uses,
+        disabled: s.disabled,
+    });
+
+    Ok(Json(CodeStatusResponse {
+        exists: info.is_some(),
+        info,
     }))
 }
 

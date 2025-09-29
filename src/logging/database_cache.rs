@@ -40,7 +40,7 @@ impl DatabaseLogger {
             let mut stmt = conn.prepare(
                 "SELECT id, provider, object, created, owned_by, cached_at
                  FROM cached_models WHERE provider = ?1
-                 ORDER BY id"
+                 ORDER BY id",
             )?;
 
             let model_iter = stmt.query_map([provider], |row| {
@@ -50,19 +50,20 @@ impl DatabaseLogger {
                     object: row.get(2)?,
                     created: row.get(3)?,
                     owned_by: row.get(4)?,
-                    cached_at: parse_beijing_string(&row.get::<_, String>(5)?)
-                        .unwrap(),
+                    cached_at: parse_beijing_string(&row.get::<_, String>(5)?).unwrap(),
                 })
             })?;
 
             let mut models = Vec::new();
-            for model in model_iter { models.push(model?); }
+            for model in model_iter {
+                models.push(model?);
+            }
             Ok(models)
         } else {
             let mut stmt = conn.prepare(
                 "SELECT id, provider, object, created, owned_by, cached_at
                  FROM cached_models
-                 ORDER BY provider, id"
+                 ORDER BY provider, id",
             )?;
 
             let model_iter = stmt.query_map([], |row| {
@@ -72,13 +73,14 @@ impl DatabaseLogger {
                     object: row.get(2)?,
                     created: row.get(3)?,
                     owned_by: row.get(4)?,
-                    cached_at: parse_beijing_string(&row.get::<_, String>(5)?)
-                        .unwrap(),
+                    cached_at: parse_beijing_string(&row.get::<_, String>(5)?).unwrap(),
                 })
             })?;
 
             let mut models = Vec::new();
-            for model in model_iter { models.push(model?); }
+            for model in model_iter {
+                models.push(model?);
+            }
             Ok(models)
         }
     }
@@ -105,7 +107,9 @@ impl DatabaseLogger {
     }
 
     pub async fn remove_cached_models(&self, provider: &str, ids: &[String]) -> Result<()> {
-        if ids.is_empty() { return Ok(()); }
+        if ids.is_empty() {
+            return Ok(());
+        }
         let conn = self.connection.lock().await;
         let tx = conn.unchecked_transaction()?;
         for id in ids {

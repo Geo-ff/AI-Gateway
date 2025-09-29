@@ -1,5 +1,5 @@
-use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use crate::error::GatewayError;
+use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 
 // 北京时间时区 (UTC+8)
 pub const BEIJING_OFFSET: FixedOffset = FixedOffset::east_opt(8 * 3600).unwrap();
@@ -7,7 +7,9 @@ pub const DATETIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
 /// 将 UTC 时间转换为北京时间的人类友好格式
 pub fn to_beijing_string(dt: &DateTime<Utc>) -> String {
-    dt.with_timezone(&BEIJING_OFFSET).format(DATETIME_FORMAT).to_string()
+    dt.with_timezone(&BEIJING_OFFSET)
+        .format(DATETIME_FORMAT)
+        .to_string()
 }
 
 /// 从北京时间字符串解析为 UTC 时间

@@ -1,4 +1,7 @@
-use std::{convert::Infallible, sync::{Arc, Mutex}};
+use std::{
+    convert::Infallible,
+    sync::{Arc, Mutex},
+};
 
 use axum::response::{IntoResponse, Response, Sse};
 use chrono::{DateTime, Utc};
@@ -24,7 +27,10 @@ pub async fn stream_zhipu_chat(
     upstream_req: ChatCompletionRequest,
 ) -> Result<Response, GatewayError> {
     let client = reqwest::Client::new();
-    let url = format!("{}/api/paas/v4/chat/completions", base_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/api/paas/v4/chat/completions",
+        base_url.trim_end_matches('/')
+    );
 
     // 适配请求内容（base64 前缀清洗、top_p 修正）
     let adapted = crate::providers::zhipu::adapt_openai_request_for_zhipu(upstream_req);
@@ -68,7 +74,8 @@ pub async fn stream_zhipu_chat(
                     )
                     .await;
                 });
-                let _ = tx.send(axum::response::sse::Event::default().data(format!("error: {}", e)));
+                let _ =
+                    tx.send(axum::response::sse::Event::default().data(format!("error: {}", e)));
                 return;
             }
         };
@@ -137,7 +144,9 @@ pub async fn stream_zhipu_chat(
                             .await;
                         });
                     }
-                    let _ = tx.send(axum::response::sse::Event::default().data(format!("error: {}", error_msg)));
+                    let _ = tx.send(
+                        axum::response::sse::Event::default().data(format!("error: {}", error_msg)),
+                    );
                     break;
                 }
             }
@@ -174,5 +183,7 @@ pub async fn stream_zhipu_chat(
         tokio_stream::wrappers::UnboundedReceiverStream::new(rx),
         Ok::<_, Infallible>,
     );
-    Ok(Sse::new(out_stream).keep_alive(axum::response::sse::KeepAlive::default()).into_response())
+    Ok(Sse::new(out_stream)
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response())
 }

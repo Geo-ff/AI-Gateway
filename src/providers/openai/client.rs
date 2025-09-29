@@ -26,10 +26,9 @@ impl OpenAIProvider {
         let bytes = response.bytes().await?;
         if bytes.is_empty() {
             // 上游返回空体，作为 JSON 解码失败处理
-            return Err(GatewayError::Json(serde_json::Error::io(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "empty body",
-            ))));
+            return Err(GatewayError::Json(serde_json::Error::io(
+                std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "empty body"),
+            )));
         }
         let raw: serde_json::Value = serde_json::from_slice(&bytes)?;
         let typed = match serde_json::from_slice::<ChatCompletionResponse>(&bytes) {
@@ -63,25 +62,63 @@ fn fallback_response_from_bytes(bytes: &[u8]) -> Result<ChatCompletionResponse, 
     use async_openai::types as oai;
     let v: serde_json::Value = serde_json::from_slice(bytes)?;
 
-    let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
-    let object = v.get("object").and_then(|x| x.as_str()).unwrap_or("chat.completion").to_string();
-    let created = v.get("created").and_then(|x| x.as_u64()).map(|x| x as u32).unwrap_or_else(|| chrono::Utc::now().timestamp() as u32);
-    let model = v.get("model").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let id = v
+        .get("id")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let object = v
+        .get("object")
+        .and_then(|x| x.as_str())
+        .unwrap_or("chat.completion")
+        .to_string();
+    let created = v
+        .get("created")
+        .and_then(|x| x.as_u64())
+        .map(|x| x as u32)
+        .unwrap_or_else(|| chrono::Utc::now().timestamp() as u32);
+    let model = v
+        .get("model")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
 
     // usage（宽松）
     let usage = v.get("usage").map(|u| oai::CompletionUsage {
-        prompt_tokens: u.get("prompt_tokens").and_then(|x| x.as_u64()).map(|x| x as u32).unwrap_or(0),
-        completion_tokens: u.get("completion_tokens").and_then(|x| x.as_u64()).map(|x| x as u32).unwrap_or(0),
-        total_tokens: u.get("total_tokens").and_then(|x| x.as_u64()).map(|x| x as u32).unwrap_or(0),
-        prompt_tokens_details: u.get("prompt_tokens_details").map(|d| oai::PromptTokensDetails {
-            cached_tokens: d.get("cached_tokens").and_then(|x| x.as_u64()).map(|x| x as u32),
-            audio_tokens: None,
-        }),
-        completion_tokens_details: u.get("completion_tokens_details").map(|d| oai::CompletionTokensDetails {
-            reasoning_tokens: d.get("reasoning_tokens").and_then(|x| x.as_u64()).map(|x| x as u32),
-            audio_tokens: None,
-            accepted_prediction_tokens: None,
-            rejected_prediction_tokens: None,
+        prompt_tokens: u
+            .get("prompt_tokens")
+            .and_then(|x| x.as_u64())
+            .map(|x| x as u32)
+            .unwrap_or(0),
+        completion_tokens: u
+            .get("completion_tokens")
+            .and_then(|x| x.as_u64())
+            .map(|x| x as u32)
+            .unwrap_or(0),
+        total_tokens: u
+            .get("total_tokens")
+            .and_then(|x| x.as_u64())
+            .map(|x| x as u32)
+            .unwrap_or(0),
+        prompt_tokens_details: u
+            .get("prompt_tokens_details")
+            .map(|d| oai::PromptTokensDetails {
+                cached_tokens: d
+                    .get("cached_tokens")
+                    .and_then(|x| x.as_u64())
+                    .map(|x| x as u32),
+                audio_tokens: None,
+            }),
+        completion_tokens_details: u.get("completion_tokens_details").map(|d| {
+            oai::CompletionTokensDetails {
+                reasoning_tokens: d
+                    .get("reasoning_tokens")
+                    .and_then(|x| x.as_u64())
+                    .map(|x| x as u32),
+                audio_tokens: None,
+                accepted_prediction_tokens: None,
+                rejected_prediction_tokens: None,
+            }
         }),
     });
 
@@ -89,26 +126,63 @@ fn fallback_response_from_bytes(bytes: &[u8]) -> Result<ChatCompletionResponse, 
     let mut choices: Vec<oai::ChatChoice> = Vec::new();
     if let Some(arr) = v.get("choices").and_then(|x| x.as_array()) {
         for (i, c) in arr.iter().enumerate() {
-            let finish_reason = c.get("finish_reason").and_then(|x| x.as_str()).and_then(|s| match s {
-                "stop" => Some(oai::FinishReason::Stop),
-                "length" => Some(oai::FinishReason::Length),
-                "tool_calls" => Some(oai::FinishReason::ToolCalls),
-                "content_filter" => Some(oai::FinishReason::ContentFilter),
-                _ => None,
-            });
-            let msg = c.get("message").cloned().unwrap_or_else(|| serde_json::json!({}));
-            let role = msg.get("role").and_then(|x| x.as_str()).unwrap_or("assistant");
-            let content = msg.get("content").and_then(|x| x.as_str()).map(|s| s.to_string());
+            let finish_reason =
+                c.get("finish_reason")
+                    .and_then(|x| x.as_str())
+                    .and_then(|s| match s {
+                        "stop" => Some(oai::FinishReason::Stop),
+                        "length" => Some(oai::FinishReason::Length),
+                        "tool_calls" => Some(oai::FinishReason::ToolCalls),
+                        "content_filter" => Some(oai::FinishReason::ContentFilter),
+                        _ => None,
+                    });
+            let msg = c
+                .get("message")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let role = msg
+                .get("role")
+                .and_then(|x| x.as_str())
+                .unwrap_or("assistant");
+            let content = msg
+                .get("content")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string());
             // tool_calls（若存在）
-            let tool_calls = msg.get("tool_calls").and_then(|tc| tc.as_array()).map(|arr| {
-                arr.iter().enumerate().filter_map(|(_idx, t)| {
-                    let id = t.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                    let f = t.get("function").cloned().unwrap_or_else(|| serde_json::json!({}));
-                    let name = f.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                    let arguments = f.get("arguments").and_then(|x| x.as_str()).unwrap_or("{}").to_string();
-                    Some(oai::ChatCompletionMessageToolCall { id, r#type: oai::ChatCompletionToolType::Function, function: oai::FunctionCall { name, arguments } })
-                }).collect::<Vec<_>>()
-            });
+            let tool_calls = msg
+                .get("tool_calls")
+                .and_then(|tc| tc.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .enumerate()
+                        .filter_map(|(_idx, t)| {
+                            let id = t
+                                .get("id")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let f = t
+                                .get("function")
+                                .cloned()
+                                .unwrap_or_else(|| serde_json::json!({}));
+                            let name = f
+                                .get("name")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let arguments = f
+                                .get("arguments")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("{}")
+                                .to_string();
+                            Some(oai::ChatCompletionMessageToolCall {
+                                id,
+                                r#type: oai::ChatCompletionToolType::Function,
+                                function: oai::FunctionCall { name, arguments },
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                });
 
             let message = oai::ChatCompletionResponseMessage {
                 role: match role {
@@ -123,7 +197,16 @@ fn fallback_response_from_bytes(bytes: &[u8]) -> Result<ChatCompletionResponse, 
                 function_call: None,
                 audio: None,
             };
-            choices.push(oai::ChatChoice { index: c.get("index").and_then(|x| x.as_u64()).map(|x| x as u32).unwrap_or(i as u32), message, finish_reason, logprobs: None });
+            choices.push(oai::ChatChoice {
+                index: c
+                    .get("index")
+                    .and_then(|x| x.as_u64())
+                    .map(|x| x as u32)
+                    .unwrap_or(i as u32),
+                message,
+                finish_reason,
+                logprobs: None,
+            });
         }
     }
 

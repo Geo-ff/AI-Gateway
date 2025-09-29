@@ -23,18 +23,33 @@ pub fn extract_system_prompt(openai_req: &ChatCompletionRequest) -> Option<Strin
             oai::ChatCompletionRequestMessage::Developer(dev) => {
                 return match &dev.content {
                     oai::ChatCompletionRequestDeveloperMessageContent::Text(s) => Some(s.clone()),
-                    oai::ChatCompletionRequestDeveloperMessageContent::Array(parts) => Some(parts.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join("\n")),
-                }
+                    oai::ChatCompletionRequestDeveloperMessageContent::Array(parts) => Some(
+                        parts
+                            .iter()
+                            .map(|p| p.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    ),
+                };
             }
             oai::ChatCompletionRequestMessage::System(sys) => {
                 return match &sys.content {
                     oai::ChatCompletionRequestSystemMessageContent::Text(s) => Some(s.clone()),
-                    oai::ChatCompletionRequestSystemMessageContent::Array(parts) => Some(parts.iter().map(|p| match p { oai::ChatCompletionRequestSystemMessageContentPart::Text(t) => t.text.as_str() }).collect::<Vec<_>>().join("\n")),
-                }
+                    oai::ChatCompletionRequestSystemMessageContent::Array(parts) => Some(
+                        parts
+                            .iter()
+                            .map(|p| match p {
+                                oai::ChatCompletionRequestSystemMessageContentPart::Text(t) => {
+                                    t.text.as_str()
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    ),
+                };
             }
             _ => {}
         }
     }
     None
 }
-

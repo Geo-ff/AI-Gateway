@@ -386,8 +386,6 @@
 // criterion_group!(benches, bench_endpoints);
 // criterion_main!(benches);
 
-
 fn main() {
     todo!()
 }
-

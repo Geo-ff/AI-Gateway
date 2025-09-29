@@ -124,13 +124,7 @@ pub async fn add_provider_key(
         REQ_TYPE_PROVIDER_KEY_ADD,
         None,
         Some(provider_name),
-        provided_token.as_deref().map(|tok| {
-            if tok == app_state.admin_identity_token {
-                "admin_token"
-            } else {
-                tok
-            }
-        }),
+        provided_token.as_deref(),
         201,
         None,
     )
@@ -258,13 +252,7 @@ pub async fn add_provider_keys_batch(
         REQ_TYPE_PROVIDER_KEY_ADD,
         None,
         Some(provider_name),
-        provided_token.as_deref().map(|tok| {
-            if tok == app_state.admin_identity_token {
-                "admin_token"
-            } else {
-                tok
-            }
-        }),
+        provided_token.as_deref(),
         200,
         None,
     )
@@ -364,13 +352,7 @@ pub async fn delete_provider_key(
             REQ_TYPE_PROVIDER_KEY_DELETE,
             None,
             Some(provider_name),
-            provided_token.as_deref().map(|tok| {
-                if tok == app_state.admin_identity_token {
-                    "admin_token"
-                } else {
-                    tok
-                }
-            }),
+            provided_token.as_deref(),
             200,
             None,
         )
@@ -389,13 +371,7 @@ pub async fn delete_provider_key(
             REQ_TYPE_PROVIDER_KEY_DELETE,
             None,
             Some(provider_name.clone()),
-            provided_token.as_deref().map(|tok| {
-                if tok == app_state.admin_identity_token {
-                    "admin_token"
-                } else {
-                    tok
-                }
-            }),
+            provided_token.as_deref(),
             404,
             Some("key not found".into()),
         )
@@ -525,13 +501,7 @@ pub async fn delete_provider_keys_batch(
         REQ_TYPE_PROVIDER_KEY_DELETE,
         None,
         Some(provider_name),
-        provided_token.as_deref().map(|tok| {
-            if tok == app_state.admin_identity_token {
-                "admin_token"
-            } else {
-                tok
-            }
-        }),
+        provided_token.as_deref(),
         200,
         None,
     )
@@ -636,13 +606,7 @@ pub async fn list_provider_keys(
         REQ_TYPE_PROVIDER_KEY_LIST,
         None,
         Some(provider_name),
-        provided_token.as_deref().map(|tok| {
-            if tok == app_state.admin_identity_token {
-                "admin_token"
-            } else {
-                tok
-            }
-        }),
+        provided_token.as_deref(),
         200,
         None,
     )

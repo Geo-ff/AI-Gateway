@@ -1,7 +1,7 @@
 use rusqlite::Result;
 
-use crate::logging::types::ProviderOpLog;
 use crate::logging::time::to_beijing_string;
+use crate::logging::types::ProviderOpLog;
 
 use super::database::DatabaseLogger;
 
@@ -21,4 +21,3 @@ impl DatabaseLogger {
         Ok(conn.last_insert_rowid())
     }
 }
-

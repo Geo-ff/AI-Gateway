@@ -34,22 +34,11 @@ pub struct AppState {
     pub model_cache: Arc<dyn ModelCache + Send + Sync>,
     pub providers: Arc<dyn ProviderStore + Send + Sync>,
     pub token_store: Arc<dyn TokenStore + Send + Sync>,
-    pub admin_identity_token: String,
     pub login_manager: Arc<login::LoginManager>,
 }
 
 pub async fn create_app(config: Settings) -> AppResult<Router> {
     // Admin identity token generated per boot
-    let admin_identity_token: String = {
-        use rand::Rng;
-        let rng = rand::rng();
-        use rand::distr::Alphanumeric;
-        rng.sample_iter(&Alphanumeric)
-            .take(56)
-            .map(char::from)
-            .collect()
-    };
-
     // Choose stores based on Postgres availability
     let (log_store_arc, model_cache_arc, provider_store_arc, token_store, login_store_arc): (
         Arc<dyn RequestLogStore + Send + Sync>,
@@ -82,21 +71,16 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
         )
     };
 
-    if let Some((fingerprint, private_b64, path)) =
-        ensure_initial_admin_key(login_store_arc.clone()).await?
-    {
+    if let Some((fingerprint, path)) = ensure_initial_admin_key(login_store_arc.clone()).await? {
         tracing::warn!(
             "新管理员密钥已生成；指纹={}，私钥已写入 {}，请立即妥善备份并加载至 TUI 配置。",
             fingerprint,
             path.display()
         );
-        tracing::warn!("一次性私钥（base64）：{}", private_b64);
+        tracing::warn!(
+            "该密钥仅首次生成，后续启动会复用现有密钥，如需轮换请通过 TUI 管理途径重置。"
+        );
     }
-
-    tracing::info!(
-        "Admin Identity Token (use as Bearer): {}",
-        admin_identity_token
-    );
 
     let app_state = AppState {
         config,
@@ -104,7 +88,6 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
         model_cache: model_cache_arc,
         providers: provider_store_arc,
         token_store,
-        admin_identity_token,
         login_manager: Arc::new(login::LoginManager::new(login_store_arc.clone())),
     };
 
@@ -126,7 +109,7 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
 
 async fn ensure_initial_admin_key(
     login_store: Arc<dyn LoginStore + Send + Sync>,
-) -> Result<Option<(String, String, PathBuf)>, GatewayError> {
+) -> Result<Option<(String, PathBuf)>, GatewayError> {
     let existing = login_store
         .list_admin_keys()
         .await
@@ -154,18 +137,18 @@ async fn ensure_initial_admin_key(
         .await
         .map_err(GatewayError::Db)?;
 
-    let private_b64 = B64_STANDARD.encode(signing_key.to_bytes());
     let path = admin_key_file_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     if !path.exists() {
+        let private_b64 = B64_STANDARD.encode(signing_key.to_bytes());
         std::fs::write(&path, format!("{}\n", private_b64))?;
     } else {
         tracing::warn!("检测到已有管理员私钥文件，未覆盖：{}", path.display());
     }
 
-    Ok(Some((fingerprint, private_b64, path)))
+    Ok(Some((fingerprint, path)))
 }
 
 fn admin_key_file_path() -> PathBuf {

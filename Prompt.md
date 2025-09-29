@@ -2574,6 +2574,203 @@ Gateway API Base URL [http://127.0.0.1:8080]:
 
 
 
+因为一些意外的网络问题，导致我们之前的对话和你的操作被中断了，我将之前最后一次给你的提示再给你发送一次如下：
+```markdown
+我和你详细交代我的测试流程和细节，请你进行必要的回答和修复：
+1. 我首先通过 RUST_LOG=debug cargo run 启动了后端，然后控制台输出：
+
+```
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s0: SET search_path TO public
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s0 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s1: SET search_path TO public
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s1 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s2: SET search_path TO public
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s2 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s3: SET search_path TO public
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s3 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s4: CREATE TABLE IF NOT EXISTS request_logs (
+                id SERIAL PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                request_type TEXT NOT NULL,
+                model TEXT,
+                provider TEXT,
+                api_key TEXT,
+                status_code INTEGER NOT NULL,
+                response_time_ms BIGINT NOT NULL,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                total_tokens INTEGER,
+                cached_tokens INTEGER,
+                reasoning_tokens INTEGER,
+                error_message TEXT,
+                client_token TEXT,
+                amount_spent DOUBLE PRECISION
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s4 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "request_logs" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s5: ALTER TABLE request_logs ADD COLUMN amount_spent DOUBLE PRECISION
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s5 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s6: CREATE TABLE IF NOT EXISTS cached_models (
+                id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                object TEXT NOT NULL,
+                created BIGINT NOT NULL,
+                owned_by TEXT NOT NULL,
+                cached_at TEXT NOT NULL,
+                PRIMARY KEY (id, provider)
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s6 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "cached_models" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s7: CREATE TABLE IF NOT EXISTS provider_ops_logs (
+                id SERIAL PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                provider TEXT,
+                details TEXT
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s7 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "provider_ops_logs" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s8: CREATE TABLE IF NOT EXISTS model_prices (
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                prompt_price_per_million DOUBLE PRECISION NOT NULL,
+                completion_price_per_million DOUBLE PRECISION NOT NULL,
+                currency TEXT,
+                PRIMARY KEY (provider, model)
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s8 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "model_prices" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s9: CREATE TABLE IF NOT EXISTS providers (
+                name TEXT PRIMARY KEY,
+                api_type TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                models_endpoint TEXT
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s9 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "providers" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s10: CREATE TABLE IF NOT EXISTS provider_keys (
+                provider TEXT NOT NULL,
+                key_value TEXT NOT NULL,
+                enc BOOLEAN NOT NULL DEFAULT FALSE,
+                active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (provider, key_value)
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s10 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "provider_keys" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s11: CREATE TABLE IF NOT EXISTS admin_public_keys (
+                fingerprint TEXT PRIMARY KEY,
+                public_key BYTEA NOT NULL,
+                comment TEXT,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL,
+                last_used_at TIMESTAMPTZ
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s11 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "admin_public_keys" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s12: CREATE TABLE IF NOT EXISTS tui_sessions (
+                session_id TEXT PRIMARY KEY,
+                fingerprint TEXT NOT NULL REFERENCES admin_public_keys(fingerprint) ON DELETE CASCADE,
+                issued_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                revoked BOOLEAN NOT NULL DEFAULT FALSE,
+                last_code_at TIMESTAMPTZ
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s12 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "tui_sessions" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s13: CREATE TABLE IF NOT EXISTS login_codes (
+                code_hash TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES tui_sessions(session_id) ON DELETE CASCADE,
+                fingerprint TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                max_uses INTEGER NOT NULL,
+                uses INTEGER NOT NULL DEFAULT 0,
+                disabled BOOLEAN NOT NULL DEFAULT FALSE,
+                hint TEXT
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s13 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "login_codes" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s14: CREATE TABLE IF NOT EXISTS web_sessions (
+                session_id TEXT PRIMARY KEY,
+                fingerprint TEXT,
+                created_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                revoked BOOLEAN NOT NULL DEFAULT FALSE,
+                issued_by_code TEXT
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s14 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "web_sessions" already exists, skipping
+2025-09-29 11:45:51  INFO gateway::server: Using PostgreSQL for logs and cache
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s15: SET search_path TO public
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s15 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s16: CREATE TABLE IF NOT EXISTS admin_tokens (
+                token TEXT PRIMARY KEY,
+                allowed_models TEXT,
+                max_tokens BIGINT,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                expires_at TEXT,
+                created_at TEXT NOT NULL,
+                max_amount DOUBLE PRECISION,
+                amount_spent DOUBLE PRECISION DEFAULT 0,
+                prompt_tokens_spent BIGINT DEFAULT 0,
+                completion_tokens_spent BIGINT DEFAULT 0,
+                total_tokens_spent BIGINT DEFAULT 0
+            )
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s16 with parameters: []
+2025-09-29 11:45:51  INFO tokio_postgres::connection: NOTICE: relation "admin_tokens" already exists, skipping
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s17: ALTER TABLE admin_tokens ADD COLUMN max_amount DOUBLE PRECISION
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s17 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s18: ALTER TABLE admin_tokens ADD COLUMN amount_spent DOUBLE PRECISION DEFAULT 0
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s18 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s19: ALTER TABLE admin_tokens ADD COLUMN prompt_tokens_spent BIGINT DEFAULT 0
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s19 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s20: ALTER TABLE admin_tokens ADD COLUMN completion_tokens_spent BIGINT DEFAULT 0
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s20 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s21: ALTER TABLE admin_tokens ADD COLUMN total_tokens_spent BIGINT DEFAULT 0
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s21 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s22: SELECT fingerprint, public_key, comment, enabled, created_at, last_used_at FROM admin_public_keys
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s22 with parameters: []
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s23: UPDATE admin_public_keys
+                     SET public_key=$2, comment=$3, enabled=$4, created_at=$5, last_used_at=$6
+                     WHERE fingerprint=$1
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s23 with parameters: ["f19de53efea5550d151e5bf98d1c2d5ddec046c458bb3a64131a62805a36dc7a", [127, 41, 121, 208, 5, 3, 215, 187, 238, 61, 217, 202, 138, 247, 230, 131, 97, 204, 55, 13, 24, 236, 137, 212, 81, 4, 60, 57, 1, 213, 188, 186], Some("generated-on-boot"), true, 2025-09-29T03:45:51.901283878Z, None]
+2025-09-29 11:45:51 DEBUG tokio_postgres::prepare: preparing query s24: INSERT INTO admin_public_keys (fingerprint, public_key, comment, enabled, created_at, last_used_at)
+                         VALUES ($1, $2, $3, $4, $5, $6)
+2025-09-29 11:45:51 DEBUG tokio_postgres::query: executing statement s24 with parameters: ["f19de53efea5550d151e5bf98d1c2d5ddec046c458bb3a64131a62805a36dc7a", [127, 41, 121, 208, 5, 3, 215, 187, 238, 61, 217, 202, 138, 247, 230, 131, 97, 204, 55, 13, 24, 236, 137, 212, 81, 4, 60, 57, 1, 213, 188, 186], Some("generated-on-boot"), true, 2025-09-29T03:45:51.901283878Z, None]
+2025-09-29 11:45:51  WARN gateway::server: 新管理员密钥已生成；指纹=f19de53efea5550d151e5bf98d1c2d5ddec046c458bb3a64131a62805a36dc7a，私钥已写入 data/admin_ed25519.key，请立即妥善备份并加载至 TUI 配置。
+2025-09-29 11:45:51  WARN gateway::server: 一次性私钥（base64）：e39rmlQdBx/7c80IXBZ0wnDjRPSPEK5tUMLTKbPxS8w=
+2025-09-29 11:45:51  INFO gateway::server: Admin Identity Token (use as Bearer): EfsNQYw86WsrLcV1L7TXsMZgqUBRV9EQzYfonNynk7UABbxX8qAL6qYA
+2025-09-29 11:45:51  INFO gateway: Gateway server running on http://0.0.0.0:8080
+```
+
+这些内容，我观察后得知有如下信息：
+1. 新管理员密钥已生成，且显示了指纹信息，而且将密钥自动写入到了 data/admin_ed25519.key 中
+2. 后面又出现了提示：WARN gateway::server: 一次性私钥（base64）：e39rmlQdBx/7c80IXBZ0wnDjRPSPEK5tUMLTKbPxS8w=
+   对于这个提示，我认为是没有必要的，因为密钥已经自动写入到文件了，不需要再在日志中暴露出来。而且“一次性私钥”是什么意思？这个一次性指的是“只会出现这一次”，还是“这个私钥是一次性使用的，下次启动会被替换掉”？我希望是前者，而不是后者，因为既然已经换成公私钥验证了，那么持久化是有必要的。
+3. 而后面还有一个 INFO gateway::server: Admin Identity Token (use as Bearer): EfsNQYw86WsrLcV1L7TXsMZgqUBRV9EQzYfonNynk7UABbxX8qAL6qYA。这个让我很疑惑，我们项目已经改成公私钥验证了，为什么还有这个之前的老的验证 Token 功能？我希望将其移除
+4. 然后我便启动了 TUI 项目，在此之前我已经删掉了旧的 config.toml 文件，所以我在输入了 cargo run 启动之后，终端输出了下面信息：
+
+```
+首次运行：请配置网关地址与管理员私钥（可稍后在 tui/config.toml 修改）
+Gateway API Base URL [http://127.0.0.1:8080]: 
+管理员私钥（base64）: e39rmlQdBx/7c80IXBZ0wnDjRPSPEK5tUMLTKbPxS8w=
+配置已保存。管理员指纹：f19de53efea5550d151e5bf98d1c2d5ddec046c458bb3a64131a62805a36dc7a
+```
+
+我给你的内容包含了我输入的部分，你可以看到，对于 Gateway API Base URL [http://127.0.0.1:8080]:，我是没有输入直接 Enter 使用默认地址的，这个是符合我的预期的。而后面的 管理员私钥（base64）: 这里，我直接粘贴了正确的私钥后，没有任何确认提示，就直接进入了 TUI 界面，这就导致最后的 配置已保存。管理员指纹：f19de53efea5550d151e5bf98d1c2d5ddec046c458bb3a64131a62805a36dc7a 日志，我是完全没有看到的。
+
+我认为这不是很友好，因为首先没有让我粘贴好管理员密钥后，让我使用 Enter 进行确认，其次就是，哪怕后续你添加了 Enter 确认功能后，也应该先确认密钥的有效性（测试一次连接或者测试几次），最后，验证无误，才让我进入到正式的 TUI 界面。
+1. 当我正式进入到 TUI 界面后，我使用按键尝试生成 Code 竟然失败了（补充一下，第一次进入才会失败，因为默认的 Code 配置竟然是空的）。第二次我重新进入之后，我惊讶的发现，Code 的默认配置变成了“过期时间 1s”，而不是之前的默认的“过期时间 30s”。导致第一次管理密钥认证成功后，第一次生成必定会失败（因为没有修改 Code 的生成配置），而第二次进入则因为默认的过短的 Code 有效期而导致让我必须要使用 C 按键打开参数设置菜单进行修改后才可以正常生成。而参数设置菜单的“过期时间”这个配置项只能 +- 10s 每次，这非常影响体验感，我建议允许用户可以实现 1s 的调整颗粒度；并且 Code 的“剩余可用次数”功能还没有实现，请你记得实现。
+2. 对于 Magic URL 功能，我也进行了测试，倒是没有什么问题，但是我希望添加一个功能，就是 Magic URL 目前不是/#/auth/magic?code=eGRwkfpsQTf4tjBTh3rCoSz8M 这样的形式么？我希望前面能够加上服务器的 URL，也就是自动生成好类似  https://xxx/#/auth/magic?code=eGRwkfpsQTf4tjBTh3rCoSz8M  的形式，开发环境同理，自动拼接开发服务器地址（也就是登录进入 TUI 界面的连接服务 URL）；并且我们当前的逻辑不是 Code 和 Magic URL 同时存在，使用 Y 按键则会让用户二次确认复制范围么？但是我希望如果其中一个过期了，那么就默认复制没有过期的，只有两个都没有过期，才需要进行二次确认选择，如果两个都过期了，则提示用户两个凭证都已经过期，请重新生成
+3. 最后我说一下 Vue 管理后台界面，先不说好不好看吧，我只想说登录成功之后，无法与后台数据交互，全都显示的是“无法解析服务器响应”，所以请你也要进行修复
+
+我只测试了上面的这些功能，我一次性说出来了，请你分步骤有条理地修复
+```
+请你根据项目的更改情况和我之前给你的要求来恢复你的工作
+
 
 
 

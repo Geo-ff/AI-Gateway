@@ -212,6 +212,10 @@ pub trait LoginStore: Send + Sync {
         code_hash: &'a str,
         now: DateTime<Utc>,
     ) -> BoxFuture<'a, rusqlite::Result<Option<LoginCodeRecord>>>;
+    fn get_latest_login_code_for_session<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<LoginCodeRecord>>>;
 
     fn insert_web_session<'a>(
         &'a self,

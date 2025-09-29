@@ -1,9 +1,17 @@
-use axum::{extract::{Path, State}, http::HeaderMap, Json};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::HeaderMap,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{admin::{AdminToken, CreateTokenPayload, UpdateTokenPayload}, error::GatewayError, server::AppState};
 use crate::server::util::{bearer_token, token_for_log};
+use crate::{
+    admin::{AdminToken, CreateTokenPayload, UpdateTokenPayload},
+    error::GatewayError,
+    server::AppState,
+};
 
 #[derive(Debug, Serialize)]
 pub struct AdminTokenOut {
@@ -32,7 +40,10 @@ impl From<AdminToken> for AdminTokenOut {
             completion_tokens_spent: t.completion_tokens_spent,
             total_tokens_spent: t.total_tokens_spent,
             enabled: t.enabled,
-            expires_at: t.expires_at.as_ref().map(|dt| crate::logging::time::to_beijing_string(dt)),
+            expires_at: t
+                .expires_at
+                .as_ref()
+                .map(|dt| crate::logging::time::to_beijing_string(dt)),
             created_at: crate::logging::time::to_beijing_string(&t.created_at),
         }
     }
@@ -50,11 +61,41 @@ pub async fn list_tokens(
     let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
-        log_simple_request(&app_state, start_time, "GET", "/admin/tokens", "admin_tokens_list", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
+        log_simple_request(
+            &app_state,
+            start_time,
+            "GET",
+            "/admin/tokens",
+            "admin_tokens_list",
+            None,
+            None,
+            provided_token.as_deref(),
+            code,
+            Some(e.to_string()),
+        )
+        .await;
         return Err(e);
     }
-    let tokens = app_state.token_store.list_tokens().await?.into_iter().map(AdminTokenOut::from).collect();
-    log_simple_request(&app_state, start_time, "GET", "/admin/tokens", "admin_tokens_list", None, None, token_for_log(provided_token.as_deref(), &app_state.admin_identity_token), 200, None).await;
+    let tokens = app_state
+        .token_store
+        .list_tokens()
+        .await?
+        .into_iter()
+        .map(AdminTokenOut::from)
+        .collect();
+    log_simple_request(
+        &app_state,
+        start_time,
+        "GET",
+        "/admin/tokens",
+        "admin_tokens_list",
+        None,
+        None,
+        token_for_log(provided_token.as_deref()),
+        200,
+        None,
+    )
+    .await;
     Ok(Json(tokens))
 }
 
@@ -67,7 +108,19 @@ pub async fn get_token(
     let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
-        log_simple_request(&app_state, start_time, "GET", &format!("/admin/tokens/{}", token), "admin_tokens_get", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
+        log_simple_request(
+            &app_state,
+            start_time,
+            "GET",
+            &format!("/admin/tokens/{}", token),
+            "admin_tokens_get",
+            None,
+            None,
+            provided_token.as_deref(),
+            code,
+            Some(e.to_string()),
+        )
+        .await;
         return Err(e);
     }
     match app_state.token_store.get_token(&token).await? {
@@ -75,9 +128,21 @@ pub async fn get_token(
         None => {
             let ge = GatewayError::NotFound("token not found".into());
             let code = ge.status_code().as_u16();
-            log_simple_request(&app_state, start_time, "GET", &format!("/admin/tokens/{}", token), "admin_tokens_get", None, None, provided_token.as_deref(), code, Some(ge.to_string())).await;
+            log_simple_request(
+                &app_state,
+                start_time,
+                "GET",
+                &format!("/admin/tokens/{}", token),
+                "admin_tokens_get",
+                None,
+                None,
+                provided_token.as_deref(),
+                code,
+                Some(ge.to_string()),
+            )
+            .await;
             Err(ge)
-        },
+        }
     }
 }
 
@@ -90,29 +155,69 @@ pub async fn create_token(
     let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
-        log_simple_request(&app_state, start_time, "POST", "/admin/tokens", "admin_tokens_create", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            "/admin/tokens",
+            "admin_tokens_create",
+            None,
+            None,
+            provided_token.as_deref(),
+            code,
+            Some(e.to_string()),
+        )
+        .await;
         return Err(e);
     }
     // 校验 allowed_models 存在性（若提供）
     if let Some(list) = payload.allowed_models.as_ref() {
         if !list.is_empty() {
             use std::collections::HashSet;
-            let cached = crate::server::model_cache::get_cached_models_all(&app_state).await.map_err(GatewayError::Db)?;
+            let cached = crate::server::model_cache::get_cached_models_all(&app_state)
+                .await
+                .map_err(GatewayError::Db)?;
             let set: HashSet<String> = cached.into_iter().map(|m| m.id).collect();
             for m in list {
                 if !set.contains(m) {
-                    return Err(GatewayError::NotFound(format!("model '{}' not found in cache", m)));
+                    return Err(GatewayError::NotFound(format!(
+                        "model '{}' not found in cache",
+                        m
+                    )));
                 }
             }
         }
     }
-    let t = app_state.token_store.create_token(CreateTokenPayload { token: None, ..payload }).await?;
-    log_simple_request(&app_state, start_time, "POST", "/admin/tokens", "admin_tokens_create", None, None, token_for_log(provided_token.as_deref(), &app_state.admin_identity_token), 201, None).await;
-    Ok((axum::http::StatusCode::CREATED, Json(AdminTokenOut::from(t))))
+    let t = app_state
+        .token_store
+        .create_token(CreateTokenPayload {
+            token: None,
+            ..payload
+        })
+        .await?;
+    log_simple_request(
+        &app_state,
+        start_time,
+        "POST",
+        "/admin/tokens",
+        "admin_tokens_create",
+        None,
+        None,
+        token_for_log(provided_token.as_deref()),
+        201,
+        None,
+    )
+    .await;
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(AdminTokenOut::from(t)),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
-pub struct TogglePayload { pub enabled: bool }
+pub struct TogglePayload {
+    pub enabled: bool,
+}
 
 pub async fn toggle_token(
     Path(token): Path<String>,
@@ -124,17 +229,56 @@ pub async fn toggle_token(
     let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
-        log_simple_request(&app_state, start_time, "POST", &format!("/admin/tokens/{}/toggle", token), "admin_tokens_toggle", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &format!("/admin/tokens/{}/toggle", token),
+            "admin_tokens_toggle",
+            None,
+            None,
+            provided_token.as_deref(),
+            code,
+            Some(e.to_string()),
+        )
+        .await;
         return Err(e);
     }
-    let ok = app_state.token_store.set_enabled(&token, payload.enabled).await?;
+    let ok = app_state
+        .token_store
+        .set_enabled(&token, payload.enabled)
+        .await?;
     if ok {
-        log_simple_request(&app_state, start_time, "POST", &format!("/admin/tokens/{}/toggle", token), "admin_tokens_toggle", None, None, token_for_log(provided_token.as_deref(), &app_state.admin_identity_token), 200, None).await;
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &format!("/admin/tokens/{}/toggle", token),
+            "admin_tokens_toggle",
+            None,
+            None,
+            token_for_log(provided_token.as_deref()),
+            200,
+            None,
+        )
+        .await;
         Ok(Json(serde_json::json!({"status":"ok"})))
     } else {
         let ge = GatewayError::NotFound("token not found".into());
         let code = ge.status_code().as_u16();
-        log_simple_request(&app_state, start_time, "POST", &format!("/admin/tokens/{}/toggle", token), "admin_tokens_toggle", None, None, provided_token.as_deref(), code, Some(ge.to_string())).await;
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &format!("/admin/tokens/{}/toggle", token),
+            "admin_tokens_toggle",
+            None,
+            None,
+            provided_token.as_deref(),
+            code,
+            Some(ge.to_string()),
+        )
+        .await;
         Err(ge)
     }
 }
@@ -149,30 +293,71 @@ pub async fn update_token(
     let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
-        log_simple_request(&app_state, start_time, "PUT", &format!("/admin/tokens/{}", token), "admin_tokens_update", None, None, provided_token.as_deref(), code, Some(e.to_string())).await;
+        log_simple_request(
+            &app_state,
+            start_time,
+            "PUT",
+            &format!("/admin/tokens/{}", token),
+            "admin_tokens_update",
+            None,
+            None,
+            provided_token.as_deref(),
+            code,
+            Some(e.to_string()),
+        )
+        .await;
         return Err(e);
     }
     // 若更新了 allowed_models，需要校验
     if let Some(list) = payload.allowed_models.as_ref() {
         use std::collections::HashSet;
-        let cached = crate::server::model_cache::get_cached_models_all(&app_state).await.map_err(GatewayError::Db)?;
+        let cached = crate::server::model_cache::get_cached_models_all(&app_state)
+            .await
+            .map_err(GatewayError::Db)?;
         let set: HashSet<String> = cached.into_iter().map(|m| m.id).collect();
         for m in list {
             if !set.contains(m) {
-                return Err(GatewayError::NotFound(format!("model '{}' not found in cache", m)));
+                return Err(GatewayError::NotFound(format!(
+                    "model '{}' not found in cache",
+                    m
+                )));
             }
         }
     }
     match app_state.token_store.update_token(&token, payload).await? {
         Some(t) => {
-            log_simple_request(&app_state, start_time, "PUT", &format!("/admin/tokens/{}", token), "admin_tokens_update", None, None, token_for_log(provided_token.as_deref(), &app_state.admin_identity_token), 200, None).await;
+            log_simple_request(
+                &app_state,
+                start_time,
+                "PUT",
+                &format!("/admin/tokens/{}", token),
+                "admin_tokens_update",
+                None,
+                None,
+                token_for_log(provided_token.as_deref()),
+                200,
+                None,
+            )
+            .await;
             Ok(Json(AdminTokenOut::from(t)))
-        },
+        }
         None => {
             let ge = GatewayError::NotFound("token not found".into());
             let code = ge.status_code().as_u16();
-            log_simple_request(&app_state, start_time, "PUT", &format!("/admin/tokens/{}", token), "admin_tokens_update", None, None, provided_token.as_deref(), code, Some(ge.to_string())).await;
+            log_simple_request(
+                &app_state,
+                start_time,
+                "PUT",
+                &format!("/admin/tokens/{}", token),
+                "admin_tokens_update",
+                None,
+                None,
+                provided_token.as_deref(),
+                code,
+                Some(ge.to_string()),
+            )
+            .await;
             Err(ge)
-        },
+        }
     }
 }

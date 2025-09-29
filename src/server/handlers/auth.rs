@@ -10,7 +10,6 @@ pub const SESSION_COOKIE: &str = "gw_session";
 pub enum AdminIdentity {
     TuiSession(TuiSessionRecord),
     WebSession(SessionEntry),
-    LegacyToken,
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
@@ -39,9 +38,6 @@ pub async fn ensure_admin(
     app_state: &AppState,
 ) -> Result<AdminIdentity, GatewayError> {
     if let Some(token) = bearer_token(headers) {
-        if token == app_state.admin_identity_token {
-            return Ok(AdminIdentity::LegacyToken);
-        }
         if let Some(session) = app_state.login_manager.validate_tui_token(&token).await? {
             return Ok(AdminIdentity::TuiSession(session));
         }
@@ -62,35 +58,32 @@ pub async fn ensure_admin(
 pub async fn ensure_client(
     headers: &HeaderMap,
     app_state: &AppState,
-) -> Result<bool, GatewayError> {
+) -> Result<String, GatewayError> {
     let provided = bearer_token(headers);
     let Some(tok) = provided else {
         return Err(GatewayError::Config("missing bearer token".into()));
     };
-    if tok == app_state.admin_identity_token {
-        return Ok(true);
-    }
-    if let Some(t) = app_state.token_store.get_token(&tok).await? {
-        if !t.enabled {
-            if let Some(max_amount) = t.max_amount {
-                if let Ok(spent) = app_state
-                    .log_store
-                    .sum_spent_amount_by_client_token(&tok)
-                    .await
-                {
-                    if spent >= max_amount {
-                        return Err(GatewayError::Config("token budget exceeded".into()));
-                    }
+    let Some(t) = app_state.token_store.get_token(&tok).await? else {
+        return Err(GatewayError::Config("invalid token".into()));
+    };
+    if !t.enabled {
+        if let Some(max_amount) = t.max_amount {
+            if let Ok(spent) = app_state
+                .log_store
+                .sum_spent_amount_by_client_token(&tok)
+                .await
+            {
+                if spent >= max_amount {
+                    return Err(GatewayError::Config("token budget exceeded".into()));
                 }
             }
-            return Err(GatewayError::Config("token disabled".into()));
         }
-        if let Some(exp) = t.expires_at {
-            if chrono::Utc::now() > exp {
-                return Err(GatewayError::Config("token expired".into()));
-            }
-        }
-        return Ok(false);
+        return Err(GatewayError::Config("token disabled".into()));
     }
-    Err(GatewayError::Config("invalid token".into()))
+    if let Some(exp) = t.expires_at {
+        if chrono::Utc::now() > exp {
+            return Err(GatewayError::Config("token expired".into()));
+        }
+    }
+    Ok(tok)
 }

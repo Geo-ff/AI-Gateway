@@ -5,8 +5,11 @@ use super::database::DatabaseLogger;
 use crate::config::settings::KeyLogStrategy;
 
 impl DatabaseLogger {
-
-    pub async fn get_provider_keys(&self, provider: &str, strategy: &Option<KeyLogStrategy>) -> Result<Vec<String>> {
+    pub async fn get_provider_keys(
+        &self,
+        provider: &str,
+        strategy: &Option<KeyLogStrategy>,
+    ) -> Result<Vec<String>> {
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare(
             "SELECT key_value, enc FROM provider_keys WHERE provider = ?1 AND active = 1 ORDER BY created_at"
@@ -22,23 +25,38 @@ impl DatabaseLogger {
         })?;
 
         let mut out = Vec::new();
-        for r in rows { let k = r?; if !k.is_empty() { out.push(k); } }
+        for r in rows {
+            let k = r?;
+            if !k.is_empty() {
+                out.push(k);
+            }
+        }
         Ok(out)
     }
 
-    pub async fn add_provider_key(&self, provider: &str, key: &str, strategy: &Option<KeyLogStrategy>) -> Result<()> {
+    pub async fn add_provider_key(
+        &self,
+        provider: &str,
+        key: &str,
+        strategy: &Option<KeyLogStrategy>,
+    ) -> Result<()> {
         let conn = self.connection.lock().await;
         let now = crate::logging::time::to_beijing_string(&Utc::now());
         let (stored, enc) = crate::crypto::protect(strategy, provider, key);
         conn.execute(
             "INSERT OR REPLACE INTO provider_keys (provider, key_value, enc, active, created_at)
              VALUES (?1, ?2, ?3, 1, ?4)",
-            (provider, stored, if enc {1} else {0}, &now),
+            (provider, stored, if enc { 1 } else { 0 }, &now),
         )?;
         Ok(())
     }
 
-    pub async fn remove_provider_key(&self, provider: &str, key: &str, strategy: &Option<KeyLogStrategy>) -> Result<bool> {
+    pub async fn remove_provider_key(
+        &self,
+        provider: &str,
+        key: &str,
+        strategy: &Option<KeyLogStrategy>,
+    ) -> Result<bool> {
         let conn = self.connection.lock().await;
         // 删除明文或密文匹配
         // 优先删除密文匹配

@@ -1,11 +1,11 @@
 use crate::config::ProviderType;
+use crate::error::GatewayError;
 use crate::providers::anthropic::AnthropicProvider;
 use crate::providers::openai::{ChatCompletionRequest, OpenAIProvider, RawAndTypedChatCompletion};
-use crate::providers::zhipu as zhipu;
+use crate::providers::zhipu;
 use crate::routing::{LoadBalancer, SelectedProvider, load_balancer::BalanceError};
 use crate::server::AppState;
 use crate::server::model_parser::ParsedModel;
-use crate::error::GatewayError;
 
 // 基于请求的模型名称选择合适的供应商
 pub async fn select_provider_for_model(
@@ -36,12 +36,17 @@ pub async fn select_provider_for_model(
             }
         } else {
             // 指定供应商不存在
-            return Err(GatewayError::NotFound(format!("Provider '{}' not found", provider_name)));
+            return Err(GatewayError::NotFound(format!(
+                "Provider '{}' not found",
+                provider_name
+            )));
         }
     }
 
     // 没有指定供应商前缀，使用负载均衡策略选择
-    let selected = select_provider(app_state).await.map_err(GatewayError::from)?;
+    let selected = select_provider(app_state)
+        .await
+        .map_err(GatewayError::from)?;
     Ok((selected, parsed_model))
 }
 
@@ -56,7 +61,8 @@ pub async fn select_provider(app_state: &AppState) -> Result<SelectedProvider, B
 
     // 仅保留至少一个可用密钥的供应商
     providers.retain(|p| !p.api_keys.is_empty());
-    let load_balancer = LoadBalancer::new(providers, app_state.config.load_balancing.strategy.clone());
+    let load_balancer =
+        LoadBalancer::new(providers, app_state.config.load_balancing.strategy.clone());
     let selected = load_balancer.select_provider()?;
     Ok(selected)
 }
@@ -85,12 +91,7 @@ async fn call_openai_provider(
     selected: &SelectedProvider,
     request: &ChatCompletionRequest,
 ) -> Result<RawAndTypedChatCompletion, GatewayError> {
-    OpenAIProvider::chat_completions(
-        &selected.provider.base_url,
-        &selected.api_key,
-        request,
-    )
-    .await
+    OpenAIProvider::chat_completions(&selected.provider.base_url, &selected.api_key, request).await
 }
 
 async fn call_anthropic_provider(
@@ -109,7 +110,10 @@ async fn call_anthropic_provider(
 
     Ok(RawAndTypedChatCompletion {
         typed: AnthropicProvider::convert_anthropic_to_openai(&anthropic_response),
-        raw: serde_json::to_value(AnthropicProvider::convert_anthropic_to_openai(&anthropic_response)).unwrap_or(serde_json::json!({})),
+        raw: serde_json::to_value(AnthropicProvider::convert_anthropic_to_openai(
+            &anthropic_response,
+        ))
+        .unwrap_or(serde_json::json!({})),
     })
 }
 
@@ -118,11 +122,7 @@ async fn call_zhipu_provider(
     request: &ChatCompletionRequest,
 ) -> Result<RawAndTypedChatCompletion, GatewayError> {
     let adapted = zhipu::adapt_openai_request_for_zhipu(request.clone());
-    let resp = zhipu::chat_completions(
-        &selected.provider.base_url,
-        &selected.api_key,
-        &adapted,
-    )
-    .await?;
+    let resp =
+        zhipu::chat_completions(&selected.provider.base_url, &selected.api_key, &adapted).await?;
     Ok(resp)
 }

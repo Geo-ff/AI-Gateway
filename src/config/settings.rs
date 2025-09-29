@@ -1,7 +1,7 @@
+use crate::error::{GatewayError, Result as AppResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use crate::error::{GatewayError, Result as AppResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -90,7 +90,9 @@ impl Default for LoggingConfig {
     }
 }
 
-fn default_database_path() -> String { "data/gateway.db".to_string() }
+fn default_database_path() -> String {
+    "data/gateway.db".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
