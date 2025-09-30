@@ -93,6 +93,7 @@ impl DatabaseLogger {
         Ok(out)
     }
 
+    #[allow(dead_code)]
     pub async fn list_providers_with_keys(
         &self,
         strategy: &Option<KeyLogStrategy>,

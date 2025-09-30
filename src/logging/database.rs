@@ -1,9 +1,9 @@
-use crate::logging::time::{parse_beijing_string, to_beijing_string};
+use crate::logging::time::{parse_beijing_string, to_beijing_string, BEIJING_OFFSET, DATETIME_FORMAT};
 use crate::logging::types::RequestLog;
 use crate::server::storage_traits::{
     AdminPublicKeyRecord, LoginCodeRecord, TuiSessionRecord, WebSessionRecord,
 };
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc, TimeZone};
 use rusqlite::{Connection, OptionalExtension, Result};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -21,7 +21,7 @@ impl crate::server::storage_traits::LoginStore for DatabaseLogger {
         Box::pin(async move {
             let conn = self.connection.lock().await;
             let created = encode_ts(&key.created_at);
-            let last_used_val = key.last_used_at.as_ref().map(|dt| encode_ts(dt));
+            let last_used_val = key.last_used_at.as_ref().map(encode_ts);
             let last_used = last_used_val.as_deref();
             let comment = key.comment.as_deref();
             conn.execute(
@@ -122,6 +122,20 @@ impl crate::server::storage_traits::LoginStore for DatabaseLogger {
         })
     }
 
+    fn delete_admin_key<'a>(
+        &'a self,
+        fingerprint: &'a str,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let rows = conn.execute(
+                "DELETE FROM admin_public_keys WHERE fingerprint = ?1",
+                rusqlite::params![fingerprint],
+            )?;
+            Ok(rows > 0)
+        })
+    }
+
     fn create_tui_session<'a>(
         &'a self,
         session: &'a TuiSessionRecord,
@@ -130,7 +144,7 @@ impl crate::server::storage_traits::LoginStore for DatabaseLogger {
             let conn = self.connection.lock().await;
             let issued = encode_ts(&session.issued_at);
             let expires = encode_ts(&session.expires_at);
-            let last_code_val = session.last_code_at.as_ref().map(|dt| encode_ts(dt));
+            let last_code_val = session.last_code_at.as_ref().map(encode_ts);
             let last_code = last_code_val.as_deref();
             conn.execute(
                 "INSERT INTO tui_sessions (session_id, fingerprint, issued_at, expires_at, revoked, last_code_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -206,6 +220,60 @@ impl crate::server::storage_traits::LoginStore for DatabaseLogger {
                 rusqlite::params![session_id],
             )?;
             Ok(affected > 0)
+        })
+    }
+
+    fn list_tui_sessions<'a>(
+        &'a self,
+        fingerprint: Option<&'a str>,
+    ) -> crate::server::storage_traits::BoxFuture<'a, rusqlite::Result<Vec<TuiSessionRecord>>> {
+        Box::pin(async move {
+            let conn = self.connection.lock().await;
+            let mut out = Vec::new();
+            if let Some(fp) = fingerprint {
+                let mut stmt = conn.prepare(
+                    "SELECT session_id, fingerprint, issued_at, expires_at, revoked, last_code_at FROM tui_sessions WHERE fingerprint = ?1 ORDER BY issued_at DESC",
+                )?;
+                let mut rows = stmt.query([fp])?;
+                while let Some(row) = rows.next()? {
+                    let issued_raw: String = row.get(2)?;
+                    let expires_raw: String = row.get(3)?;
+                    let last_raw: Option<String> = row.get(5)?;
+                    out.push(TuiSessionRecord {
+                        session_id: row.get(0)?,
+                        fingerprint: row.get(1)?,
+                        issued_at: decode_ts(&issued_raw)?,
+                        expires_at: decode_ts(&expires_raw)?,
+                        revoked: row.get::<_, i64>(4)? != 0,
+                        last_code_at: match last_raw {
+                            Some(s) => Some(decode_ts(&s)?),
+                            None => None,
+                        },
+                    });
+                }
+            } else {
+                let mut stmt = conn.prepare(
+                    "SELECT session_id, fingerprint, issued_at, expires_at, revoked, last_code_at FROM tui_sessions ORDER BY issued_at DESC",
+                )?;
+                let mut rows = stmt.query([])?;
+                while let Some(row) = rows.next()? {
+                    let issued_raw: String = row.get(2)?;
+                    let expires_raw: String = row.get(3)?;
+                    let last_raw: Option<String> = row.get(5)?;
+                    out.push(TuiSessionRecord {
+                        session_id: row.get(0)?,
+                        fingerprint: row.get(1)?,
+                        issued_at: decode_ts(&issued_raw)?,
+                        expires_at: decode_ts(&expires_raw)?,
+                        revoked: row.get::<_, i64>(4)? != 0,
+                        last_code_at: match last_raw {
+                            Some(s) => Some(decode_ts(&s)?),
+                            None => None,
+                        },
+                    });
+                }
+            }
+            Ok(out)
         })
     }
 
@@ -436,6 +504,7 @@ fn decode_ts(raw: &str) -> rusqlite::Result<DateTime<Utc>> {
 }
 
 impl DatabaseLogger {
+    #[allow(clippy::collapsible_if)]
     pub async fn new(database_path: &str) -> Result<Self> {
         // 确保数据库文件的目录存在
         if let Some(parent) = std::path::Path::new(database_path).parent() {
@@ -713,49 +782,142 @@ impl DatabaseLogger {
 
     #[allow(dead_code)]
     pub async fn get_recent_logs(&self, limit: i32) -> Result<Vec<RequestLog>> {
+        self.get_recent_logs_with_cursor(limit, None).await
+    }
+
+    pub async fn get_recent_logs_with_cursor(
+        &self,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> Result<Vec<RequestLog>> {
         let conn = self.connection.lock().await;
+        let mut stmt = if cursor.is_some() {
+            conn.prepare(
+                "SELECT id, timestamp, method, path, request_type, model, provider,
+                        api_key, status_code, response_time_ms, prompt_tokens,
+                        completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
+                        client_token, amount_spent
+                 FROM request_logs
+                 WHERE id < ?1
+                 ORDER BY id DESC
+                 LIMIT ?2",
+            )?
+        } else {
+            conn.prepare(
+                "SELECT id, timestamp, method, path, request_type, model, provider,
+                        api_key, status_code, response_time_ms, prompt_tokens,
+                        completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
+                        client_token, amount_spent
+                 FROM request_logs
+                 ORDER BY id DESC
+                 LIMIT ?1",
+            )?
+        };
 
-        let mut stmt = conn.prepare(
-            "SELECT id, timestamp, method, path, request_type, model, provider,
-                    api_key, status_code, response_time_ms, prompt_tokens,
-                    completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
-                    client_token, amount_spent
-             FROM request_logs
-             ORDER BY timestamp DESC
-             LIMIT ?1",
-        )?;
-
-        let log_iter = stmt.query_map([limit], |row| {
-            Ok(RequestLog {
-                id: Some(row.get(0)?),
-                timestamp: parse_beijing_string(&row.get::<_, String>(1)?).unwrap(),
-                method: row.get(2)?,
-                path: row.get(3)?,
-                request_type: row.get(4)?,
-                model: row.get(5)?,
-                provider: row.get(6)?,
-                api_key: row.get(7)?,
-                status_code: row.get(8)?,
-                response_time_ms: row.get(9)?,
-                prompt_tokens: row.get(10)?,
-                completion_tokens: row.get(11)?,
-                total_tokens: row.get(12)?,
-                cached_tokens: row.get(13)?,
-                reasoning_tokens: row.get(14)?,
-                error_message: row.get(15)?,
-                client_token: row.get(16)?,
-                amount_spent: row.get(17)?,
-            })
-        })?;
+        let rows = if let Some(cursor_id) = cursor {
+            stmt.query_map(rusqlite::params![cursor_id, limit], map_request_log_row)?
+        } else {
+            stmt.query_map([limit], map_request_log_row)?
+        };
 
         let mut logs = Vec::new();
-        for log in log_iter {
+        for log in rows {
             logs.push(log?);
         }
 
         Ok(logs)
     }
 
+    #[allow(dead_code)]
+    pub async fn get_request_logs(
+        &self,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> Result<Vec<RequestLog>> {
+        let conn = self.connection.lock().await;
+
+        let mut stmt = if cursor.is_some() {
+            conn.prepare(
+                "SELECT id, timestamp, method, path, request_type, model, provider,
+                        api_key, status_code, response_time_ms, prompt_tokens,
+                        completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
+                        client_token, amount_spent
+                 FROM request_logs
+                 WHERE id < ?1
+                 ORDER BY id DESC
+                 LIMIT ?2",
+            )?
+        } else {
+            conn.prepare(
+                "SELECT id, timestamp, method, path, request_type, model, provider,
+                        api_key, status_code, response_time_ms, prompt_tokens,
+                        completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
+                        client_token, amount_spent
+                 FROM request_logs
+                 ORDER BY id DESC
+                 LIMIT ?1",
+            )?
+        };
+
+        let rows = if let Some(cursor_id) = cursor {
+            stmt.query_map(rusqlite::params![cursor_id, limit], map_request_log_row)?
+        } else {
+            stmt.query_map([limit], map_request_log_row)?
+        };
+
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub async fn get_logs_by_method_path(
+        &self,
+        method: &str,
+        path: &str,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> Result<Vec<RequestLog>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = if cursor.is_some() {
+            conn.prepare(
+                "SELECT id, timestamp, method, path, request_type, model, provider,
+                        api_key, status_code, response_time_ms, prompt_tokens,
+                        completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
+                        client_token, amount_spent
+                 FROM request_logs
+                 WHERE method = ?1 AND path = ?2 AND id < ?3
+                 ORDER BY id DESC
+                 LIMIT ?4",
+            )?
+        } else {
+            conn.prepare(
+                "SELECT id, timestamp, method, path, request_type, model, provider,
+                        api_key, status_code, response_time_ms, prompt_tokens,
+                        completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
+                        client_token, amount_spent
+                 FROM request_logs
+                 WHERE method = ?1 AND path = ?2
+                 ORDER BY id DESC
+                 LIMIT ?3",
+            )?
+        };
+
+        let rows = if let Some(cursor_id) = cursor {
+            stmt.query_map(rusqlite::params![method, path, cursor_id, limit], map_request_log_row)?
+        } else {
+            stmt.query_map(rusqlite::params![method, path, limit], map_request_log_row)?
+        };
+
+        let mut logs = Vec::new();
+        for r in rows {
+            logs.push(r?);
+        }
+        Ok(logs)
+    }
+
+    #[allow(dead_code)]
     pub async fn sum_total_tokens_by_client_token(&self, token: &str) -> Result<u64> {
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare(
@@ -811,4 +973,91 @@ impl DatabaseLogger {
         }
         Ok(out)
     }
+
+    pub async fn count_requests_by_client_token(&self) -> Result<Vec<(String, i64)>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT client_token, COUNT(*) as cnt
+             FROM request_logs
+             WHERE client_token IS NOT NULL
+             GROUP BY client_token",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let token: Option<String> = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            match token {
+                Some(t) => Ok(Some((t, count))),
+                None => Ok(None),
+            }
+        })?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            if let Some(entry) = row? {
+                result.push(entry);
+            }
+        }
+        Ok(result)
+    }
+
+    pub async fn request_log_date_range(
+        &self,
+        method: &str,
+        path: &str,
+    ) -> Result<Option<(DateTime<Utc>, DateTime<Utc>)>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT MIN(timestamp), MAX(timestamp) FROM request_logs WHERE method = ?1 AND path = ?2",
+        )?;
+        let mut rows = stmt.query((method, path))?;
+        if let Some(row) = rows.next()? {
+            let min_ts: Option<String> = row.get(0)?;
+            let max_ts: Option<String> = row.get(1)?;
+            match (min_ts, max_ts) {
+                (Some(min_ts), Some(max_ts)) => {
+                    let min = parse_ts(&min_ts)?;
+                    let max = parse_ts(&max_ts)?;
+                    Ok(Some((min, max)))
+                }
+                _ => Ok(None),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+fn map_request_log_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestLog> {
+    let ts: String = row.get(1)?;
+    Ok(RequestLog {
+        id: Some(row.get(0)?),
+        timestamp: parse_beijing_string(&ts).unwrap_or_else(|_| chrono::Utc::now()),
+        method: row.get(2)?,
+        path: row.get(3)?,
+        request_type: row.get(4)?,
+        model: row.get(5)?,
+        provider: row.get(6)?,
+        api_key: row.get(7)?,
+        status_code: row.get(8)?,
+        response_time_ms: row.get(9)?,
+        prompt_tokens: row.get(10)?,
+        completion_tokens: row.get(11)?,
+        total_tokens: row.get(12)?,
+        cached_tokens: row.get(13)?,
+        reasoning_tokens: row.get(14)?,
+        error_message: row.get(15)?,
+        client_token: row.get(16)?,
+        amount_spent: row.get(17)?,
+    })
+}
+
+fn parse_ts(value: &str) -> rusqlite::Result<DateTime<Utc>> {
+    use chrono::NaiveDateTime;
+    let naive = NaiveDateTime::parse_from_str(value, DATETIME_FORMAT)
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+    let local = BEIJING_OFFSET
+        .from_local_datetime(&naive)
+        .single()
+        .ok_or_else(|| rusqlite::Error::ExecuteReturnedResults)?;
+    Ok(local.with_timezone(&Utc))
 }

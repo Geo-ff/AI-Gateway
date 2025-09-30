@@ -1,9 +1,9 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::{IntoResponse, Json, Response},
 };
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::auth::ensure_admin;
@@ -26,6 +26,57 @@ pub struct CacheUpdatePayload {
     pub exclude: Option<Vec<String>>, // 仅 all 使用
     #[serde(default)]
     pub replace: Option<bool>, // selected + include 时覆盖
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct CacheListQuery {
+    #[serde(default)]
+    pub provider: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CachedModelEntry {
+    id: String,
+    provider: String,
+    object: String,
+    created: u64,
+    owned_by: String,
+    cached_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CachedModelsResponse {
+    data: Vec<CachedModelEntry>,
+    total: usize,
+}
+
+pub async fn list_cached_models(
+    State(app_state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<CacheListQuery>,
+) -> Result<Json<CachedModelsResponse>, GatewayError> {
+    ensure_admin(&headers, &app_state).await?;
+    let provider_filter = query.provider.as_deref();
+    let cached = app_state
+        .model_cache
+        .get_cached_models(provider_filter)
+        .await
+        .map_err(GatewayError::Db)?;
+    let data: Vec<CachedModelEntry> = cached
+        .into_iter()
+        .map(|model| CachedModelEntry {
+            id: model.id,
+            provider: model.provider,
+            object: model.object,
+            created: model.created,
+            owned_by: model.owned_by,
+            cached_at: model.cached_at.to_rfc3339(),
+        })
+        .collect();
+    Ok(Json(CachedModelsResponse {
+        total: data.len(),
+        data,
+    }))
 }
 
 pub async fn update_provider_cache(
@@ -386,13 +437,21 @@ pub async fn delete_provider_cache(
         crate::server::model_cache::get_cached_models_for_provider(&app_state, &provider_name)
             .await
             .unwrap_or_default();
-    let removed = ids
+    let ids_to_remove: Vec<String> = if ids.is_empty() {
+        prev.iter().map(|m| m.id.clone()).collect()
+    } else {
+        ids.clone()
+    };
+    let removed = ids_to_remove
         .iter()
         .filter(|id| prev.iter().any(|m| &m.id == *id))
         .count();
-    let _ =
-        crate::server::model_cache::remove_models_for_provider(&app_state, &provider_name, &ids)
-            .await;
+    let _ = crate::server::model_cache::remove_models_for_provider(
+        &app_state,
+        &provider_name,
+        &ids_to_remove,
+    )
+    .await;
 
     let models = get_cached_models_for_provider(&app_state, &provider_name).await?;
     log_simple_request(

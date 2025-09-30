@@ -41,6 +41,12 @@ struct BatchResult {
     message: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct ProviderKeyFullEntry {
+    value: String,
+    masked: String,
+}
+
 pub async fn add_provider_key(
     Path(provider_name): Path<String>,
     State(app_state): State<Arc<AppState>>,
@@ -623,3 +629,112 @@ pub async fn list_provider_keys(
 }
 
 // key_display_hint and mask_key are imported from server::util
+
+pub async fn list_provider_keys_raw(
+    Path(provider_name): Path<String>,
+    Query(query): Query<KeysQuery>,
+    State(app_state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, GatewayError> {
+    let provided_token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
+    if let Err(e) = ensure_admin(&headers, &app_state).await {
+        let start_time = chrono::Utc::now();
+        let _ = app_state
+            .log_store
+            .log_provider_op(ProviderOpLog {
+                id: None,
+                timestamp: start_time,
+                operation: REQ_TYPE_PROVIDER_KEY_LIST.to_string(),
+                provider: Some(provider_name.clone()),
+                details: Some(e.to_string()),
+            })
+            .await;
+        let code = e.status_code().as_u16();
+        log_simple_request(
+            &app_state,
+            start_time,
+            "GET",
+            &format!("/providers/{}/keys/raw", provider_name),
+            REQ_TYPE_PROVIDER_KEY_LIST,
+            None,
+            Some(provider_name),
+            provided_token.as_deref(),
+            code,
+            Some("auth failed".into()),
+        )
+        .await;
+        return Err(e);
+    }
+    if !app_state
+        .providers
+        .provider_exists(&provider_name)
+        .await
+        .map_err(GatewayError::Db)?
+    {
+        return Err(GatewayError::NotFound(format!(
+            "Provider '{}' not found",
+            provider_name
+        )));
+    }
+    let start_time = Utc::now();
+    let keys = app_state
+        .providers
+        .get_provider_keys(&provider_name, &app_state.config.logging.key_log_strategy)
+        .await
+        .map_err(GatewayError::Db)?;
+
+    let total = keys.len();
+    let term = query.q.unwrap_or_default().to_lowercase();
+    let entries: Vec<ProviderKeyFullEntry> = keys
+        .into_iter()
+        .filter(|key| {
+            if term.is_empty() {
+                return true;
+            }
+            let masked = mask_key(key);
+            key.to_lowercase().contains(&term) || masked.to_lowercase().contains(&term)
+        })
+        .map(|value| ProviderKeyFullEntry {
+            masked: mask_key(&value),
+            value,
+        })
+        .collect();
+
+    let _ = app_state
+        .log_store
+        .log_provider_op(ProviderOpLog {
+            id: None,
+            timestamp: start_time,
+            operation: REQ_TYPE_PROVIDER_KEY_LIST.to_string(),
+            provider: Some(provider_name.clone()),
+            details: Some("raw".into()),
+        })
+        .await;
+
+    log_simple_request(
+        &app_state,
+        start_time,
+        "GET",
+        &format!("/providers/{}/keys/raw", provider_name),
+        REQ_TYPE_PROVIDER_KEY_LIST,
+        None,
+        Some(provider_name.clone()),
+        provided_token.as_deref(),
+        200,
+        None,
+    )
+    .await;
+
+    Ok((
+        axum::http::StatusCode::OK,
+        Json(serde_json::json!({
+            "keys": entries,
+            "total": total,
+        })),
+    )
+        .into_response())
+}

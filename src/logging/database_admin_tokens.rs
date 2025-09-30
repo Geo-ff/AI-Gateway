@@ -17,8 +17,7 @@ fn parse_allowed_models(s: Option<String>) -> Option<Vec<String>> {
             .map(|x| x.trim().to_string())
             .collect::<Vec<_>>()
     })
-    .map(|v| if v.is_empty() { None } else { Some(v) })
-    .flatten()
+    .and_then(|v| if v.is_empty() { None } else { Some(v) })
 }
 
 #[async_trait]

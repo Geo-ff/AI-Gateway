@@ -16,6 +16,25 @@ pub trait RequestLogStore: Send + Sync {
         &'a self,
         limit: i32,
     ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>>;
+    fn get_recent_logs_with_cursor<'a>(
+        &'a self,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>>;
+    #[allow(dead_code)]
+    fn get_request_logs<'a>(
+        &'a self,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>>;
+    fn get_logs_by_method_path<'a>(
+        &'a self,
+        method: &'a str,
+        path: &'a str,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>>;
+    #[allow(dead_code)]
     fn sum_total_tokens_by_client_token<'a>(
         &'a self,
         token: &'a str,
@@ -25,8 +44,21 @@ pub trait RequestLogStore: Send + Sync {
         token: &'a str,
         limit: i32,
     ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>>;
+    fn count_requests_by_client_token<'a>(
+        &'a self,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, i64)>>>;
+    fn get_request_log_date_range<'a>(
+        &'a self,
+        method: &'a str,
+        path: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<(DateTime<Utc>, DateTime<Utc>)>>>;
     // provider ops audit log
     fn log_provider_op<'a>(&'a self, op: ProviderOpLog) -> BoxFuture<'a, rusqlite::Result<i64>>;
+    fn get_provider_ops_logs<'a>(
+        &'a self,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<ProviderOpLog>>>;
     // pricing & billing
     fn upsert_model_price<'a>(
         &'a self,
@@ -180,6 +212,10 @@ pub trait LoginStore: Send + Sync {
         when: DateTime<Utc>,
     ) -> BoxFuture<'a, rusqlite::Result<()>>;
     fn list_admin_keys<'a>(&'a self) -> BoxFuture<'a, rusqlite::Result<Vec<AdminPublicKeyRecord>>>;
+    fn delete_admin_key<'a>(
+        &'a self,
+        fingerprint: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>>;
 
     fn create_tui_session<'a>(
         &'a self,
@@ -189,6 +225,10 @@ pub trait LoginStore: Send + Sync {
         &'a self,
         session_id: &'a str,
     ) -> BoxFuture<'a, rusqlite::Result<Option<TuiSessionRecord>>>;
+    fn list_tui_sessions<'a>(
+        &'a self,
+        fingerprint: Option<&'a str>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<TuiSessionRecord>>>;
     fn update_tui_session_last_code<'a>(
         &'a self,
         session_id: &'a str,
@@ -244,6 +284,32 @@ impl RequestLogStore for DatabaseLogger {
         Box::pin(async move { self.get_recent_logs(limit).await })
     }
 
+    fn get_recent_logs_with_cursor<'a>(
+        &'a self,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>> {
+        Box::pin(async move { self.get_recent_logs_with_cursor(limit, cursor).await })
+    }
+
+    fn get_request_logs<'a>(
+        &'a self,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>> {
+        Box::pin(async move { self.get_request_logs(limit, cursor).await })
+    }
+
+    fn get_logs_by_method_path<'a>(
+        &'a self,
+        method: &'a str,
+        path: &'a str,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>> {
+        Box::pin(async move { self.get_logs_by_method_path(method, path, limit, cursor).await })
+    }
+
     fn sum_total_tokens_by_client_token<'a>(
         &'a self,
         token: &'a str,
@@ -259,8 +325,30 @@ impl RequestLogStore for DatabaseLogger {
         Box::pin(async move { self.get_logs_by_client_token(token, limit).await })
     }
 
+    fn count_requests_by_client_token<'a>(
+        &'a self,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, i64)>>> {
+        Box::pin(async move { self.count_requests_by_client_token().await })
+    }
+
+    fn get_request_log_date_range<'a>(
+        &'a self,
+        method: &'a str,
+        path: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<(DateTime<Utc>, DateTime<Utc>)>>> {
+        Box::pin(async move { self.request_log_date_range(method, path).await })
+    }
+
     fn log_provider_op<'a>(&'a self, op: ProviderOpLog) -> BoxFuture<'a, rusqlite::Result<i64>> {
         Box::pin(async move { self.log_provider_op(op).await })
+    }
+
+    fn get_provider_ops_logs<'a>(
+        &'a self,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<ProviderOpLog>>> {
+        Box::pin(async move { self.get_provider_ops_logs(limit, cursor).await })
     }
 
     fn upsert_model_price<'a>(

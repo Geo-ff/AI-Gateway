@@ -30,7 +30,9 @@ pub struct LoginCodeEntry {
     pub expires_at: DateTime<Utc>,
     pub max_uses: u32,
     pub uses: u32,
+    #[allow(dead_code)]
     pub disabled: bool,
+    #[allow(dead_code)]
     pub created_at: DateTime<Utc>,
 }
 
@@ -47,8 +49,11 @@ pub struct LoginCodeStatus {
 #[derive(Debug, Clone)]
 pub struct SessionEntry {
     pub id: String,
+    #[allow(dead_code)]
     pub created_at: DateTime<Utc>,
+    #[allow(dead_code)]
     pub expires_at: DateTime<Utc>,
+    #[allow(dead_code)]
     pub fingerprint: Option<String>,
 }
 
@@ -84,6 +89,34 @@ impl LoginManager {
             store,
             challenges: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    pub async fn list_admin_keys(&self) -> Result<Vec<AdminPublicKeyRecord>, GatewayError> {
+        self.store.list_admin_keys().await.map_err(GatewayError::Db)
+    }
+
+    pub async fn add_admin_key(&self, record: &AdminPublicKeyRecord) -> Result<(), GatewayError> {
+        self.store
+            .insert_admin_key(record)
+            .await
+            .map_err(GatewayError::Db)
+    }
+
+    pub async fn delete_admin_key(&self, fingerprint: &str) -> Result<bool, GatewayError> {
+        self.store
+            .delete_admin_key(fingerprint)
+            .await
+            .map_err(GatewayError::Db)
+    }
+
+    pub async fn list_tui_sessions(
+        &self,
+        fingerprint: Option<&str>,
+    ) -> Result<Vec<TuiSessionRecord>, GatewayError> {
+        self.store
+            .list_tui_sessions(fingerprint)
+            .await
+            .map_err(GatewayError::Db)
     }
 
     fn random_string(len: usize) -> String {

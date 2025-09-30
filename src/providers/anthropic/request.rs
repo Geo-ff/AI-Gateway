@@ -5,6 +5,7 @@ use crate::providers::openai::ChatCompletionRequest;
 
 use super::utils::{extract_system_prompt, image_source_from_url};
 
+#[allow(deprecated)]
 pub fn convert_openai_to_anthropic(
     openai_req: &ChatCompletionRequest,
 ) -> anthropic::CreateMessageParams {
@@ -166,9 +167,9 @@ pub fn convert_openai_to_anthropic(
         max_tokens: openai_req
             .max_completion_tokens
             .or(openai_req.max_tokens)
-            .unwrap_or(1024) as u32,
-        temperature: Some(openai_req.temperature.unwrap_or(1.0) as f32),
-        top_p: Some(openai_req.top_p.unwrap_or(1.0) as f32),
+            .unwrap_or(1024),
+        temperature: Some(openai_req.temperature.unwrap_or(1.0)),
+        top_p: Some(openai_req.top_p.unwrap_or(1.0)),
         stream: Some(openai_req.stream.unwrap_or(false)),
         ..Default::default()
     }

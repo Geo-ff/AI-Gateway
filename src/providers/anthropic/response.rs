@@ -1,6 +1,7 @@
 use anthropic_ai_sdk::types::message as anthropic;
 use async_openai::types as oai;
 
+#[allow(deprecated)]
 pub fn convert_anthropic_to_openai(
     resp: &anthropic::CreateMessageResponse,
 ) -> oai::CreateChatCompletionResponse {

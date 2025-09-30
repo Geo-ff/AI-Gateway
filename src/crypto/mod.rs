@@ -21,6 +21,7 @@ fn to_hex(bytes: &[u8]) -> String {
     s
 }
 
+#[allow(clippy::manual_is_multiple_of)]
 fn from_hex(s: &str) -> AppResult<Vec<u8>> {
     if s.len() % 2 != 0 {
         return Err(GatewayError::Config("Invalid hex length".into()));

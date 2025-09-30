@@ -17,10 +17,8 @@ impl DatabaseLogger {
         let rows = stmt.query_map([provider], |row| {
             let value: String = row.get(0)?;
             let enc: i64 = row.get(1)?;
-            let decrypted = match crate::crypto::unprotect(strategy, provider, &value, enc != 0) {
-                Ok(v) => v,
-                Err(_) => String::new(),
-            };
+            let decrypted = crate::crypto::unprotect(strategy, provider, &value, enc != 0)
+                .unwrap_or_default();
             Ok(decrypted)
         })?;
 

@@ -12,7 +12,7 @@ pub fn bearer_token(headers: &HeaderMap) -> Option<String> {
 }
 
 // Map provided token to a safe value for logging
-pub fn token_for_log<'a>(provided: Option<&'a str>) -> Option<&'a str> {
+pub fn token_for_log(provided: Option<&str>) -> Option<&str> {
     provided
 }
 

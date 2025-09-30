@@ -107,16 +107,17 @@ impl DatabaseLogger {
     }
 
     pub async fn remove_cached_models(&self, provider: &str, ids: &[String]) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
         let conn = self.connection.lock().await;
         let tx = conn.unchecked_transaction()?;
-        for id in ids {
-            tx.execute(
-                "DELETE FROM cached_models WHERE provider = ?1 AND id = ?2",
-                (provider, id),
-            )?;
+        if ids.is_empty() {
+            tx.execute("DELETE FROM cached_models WHERE provider = ?1", [provider])?;
+        } else {
+            for id in ids {
+                tx.execute(
+                    "DELETE FROM cached_models WHERE provider = ?1 AND id = ?2",
+                    (provider, id),
+                )?;
+            }
         }
         tx.commit()?;
         Ok(())

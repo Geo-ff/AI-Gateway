@@ -58,6 +58,7 @@ impl OpenAIProvider {
     // 备注：流式聊天统一由 server/streaming 模块处理（基于 reqwest-eventsource）
 }
 
+#[allow(deprecated)]
 fn fallback_response_from_bytes(bytes: &[u8]) -> Result<ChatCompletionResponse, GatewayError> {
     use async_openai::types as oai;
     let v: serde_json::Value = serde_json::from_slice(bytes)?;
@@ -154,8 +155,7 @@ fn fallback_response_from_bytes(bytes: &[u8]) -> Result<ChatCompletionResponse, 
                 .and_then(|tc| tc.as_array())
                 .map(|arr| {
                     arr.iter()
-                        .enumerate()
-                        .filter_map(|(_idx, t)| {
+                        .map(|t| {
                             let id = t
                                 .get("id")
                                 .and_then(|x| x.as_str())
@@ -175,11 +175,11 @@ fn fallback_response_from_bytes(bytes: &[u8]) -> Result<ChatCompletionResponse, 
                                 .and_then(|x| x.as_str())
                                 .unwrap_or("{}")
                                 .to_string();
-                            Some(oai::ChatCompletionMessageToolCall {
+                            oai::ChatCompletionMessageToolCall {
                                 id,
                                 r#type: oai::ChatCompletionToolType::Function,
                                 function: oai::FunctionCall { name, arguments },
-                            })
+                            }
                         })
                         .collect::<Vec<_>>()
                 });

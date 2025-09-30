@@ -23,6 +23,7 @@ pub struct AdminTokenOut {
     pub prompt_tokens_spent: i64,
     pub completion_tokens_spent: i64,
     pub total_tokens_spent: i64,
+    pub usage_count: i64,
     pub enabled: bool,
     pub expires_at: Option<String>, // 以北京时间字符串返回
     pub created_at: String,
@@ -39,6 +40,7 @@ impl From<AdminToken> for AdminTokenOut {
             prompt_tokens_spent: t.prompt_tokens_spent,
             completion_tokens_spent: t.completion_tokens_spent,
             total_tokens_spent: t.total_tokens_spent,
+            usage_count: 0,
             enabled: t.enabled,
             expires_at: t
                 .expires_at
@@ -76,12 +78,26 @@ pub async fn list_tokens(
         .await;
         return Err(e);
     }
+    use std::collections::HashMap;
+    let usage_counts: HashMap<String, i64> = app_state
+        .log_store
+        .count_requests_by_client_token()
+        .await
+        .map_err(GatewayError::Db)?
+        .into_iter()
+        .collect();
     let tokens = app_state
         .token_store
         .list_tokens()
         .await?
         .into_iter()
-        .map(AdminTokenOut::from)
+        .map(|token| {
+            let mut out = AdminTokenOut::from(token.clone());
+            if let Some(count) = usage_counts.get(&token.token) {
+                out.usage_count = *count;
+            }
+            out
+        })
         .collect();
     log_simple_request(
         &app_state,
@@ -124,7 +140,21 @@ pub async fn get_token(
         return Err(e);
     }
     match app_state.token_store.get_token(&token).await? {
-        Some(t) => Ok(Json(AdminTokenOut::from(t))),
+        Some(t) => {
+            let mut out = AdminTokenOut::from(t.clone());
+            if let Some(count) = app_state
+                .log_store
+                .count_requests_by_client_token()
+                .await
+                .map_err(GatewayError::Db)?
+                .into_iter()
+                .find(|(tok, _)| tok == &token)
+                .map(|(_, c)| c)
+            {
+                out.usage_count = count;
+            }
+            Ok(Json(out))
+        }
         None => {
             let ge = GatewayError::NotFound("token not found".into());
             let code = ge.status_code().as_u16();

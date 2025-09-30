@@ -5,37 +5,33 @@ use async_openai::types as oai;
 // 轻量适配：
 // - 去除 data:image/...;base64, 前缀，只保留逗号后的纯 base64 数据
 // - 若 top_p >= 1，按 Newapi 适配压至 0.99，避免部分上游拒绝等边界
+#[allow(clippy::collapsible_if)]
 pub fn adapt_openai_request_for_zhipu(
     mut req: oai::CreateChatCompletionRequest,
 ) -> oai::CreateChatCompletionRequest {
     // 处理 top_p
-    if let Some(tp) = req.top_p {
-        if tp >= 1.0 {
-            req.top_p = Some(0.99);
-        }
+    if let Some(tp) = req.top_p
+        && tp >= 1.0
+    {
+        req.top_p = Some(0.99);
     }
 
     // 遍历消息，清洗 image_url 的 base64 前缀
     for msg in &mut req.messages {
-        match msg {
-            oai::ChatCompletionRequestMessage::User(m) => {
-                if let oai::ChatCompletionRequestUserMessageContent::Array(parts) = &mut m.content {
-                    for part in parts.iter_mut() {
-                        if let oai::ChatCompletionRequestUserMessageContentPart::ImageUrl(img) =
-                            part
+        if let oai::ChatCompletionRequestMessage::User(m) = msg {
+            if let oai::ChatCompletionRequestUserMessageContent::Array(parts) = &mut m.content {
+                for part in parts.iter_mut() {
+                    if let oai::ChatCompletionRequestUserMessageContentPart::ImageUrl(img) = part {
+                        let url = &mut img.image_url.url;
+                        if url.starts_with("data:image/")
+                            && let Some(idx) = url.find(',')
                         {
-                            let url = &mut img.image_url.url;
-                            if url.starts_with("data:image/") {
-                                if let Some(idx) = url.find(',') {
-                                    let data = url[idx + 1..].to_string();
-                                    *url = data;
-                                }
-                            }
+                            let data = url[idx + 1..].to_string();
+                            *url = data;
                         }
                     }
                 }
             }
-            _ => {}
         }
     }
 
@@ -74,6 +70,7 @@ pub async fn chat_completions(
     Ok(RawAndTypedChatCompletion { typed, raw })
 }
 
+#[allow(deprecated)]
 fn fallback_response_from_bytes(
     bytes: &[u8],
 ) -> Result<oai::CreateChatCompletionResponse, GatewayError> {
@@ -170,7 +167,7 @@ fn fallback_response_from_bytes(
                 .and_then(|tc| tc.as_array())
                 .map(|arr| {
                     arr.iter()
-                        .filter_map(|t| {
+                        .map(|t| {
                             let id = t
                                 .get("id")
                                 .and_then(|x| x.as_str())
@@ -192,11 +189,11 @@ fn fallback_response_from_bytes(
                                     _ => serde_json::to_string(x).unwrap_or("{}".to_string()),
                                 })
                                 .unwrap_or("{}".to_string());
-                            Some(oai::ChatCompletionMessageToolCall {
+                            oai::ChatCompletionMessageToolCall {
                                 id,
                                 r#type: oai::ChatCompletionToolType::Function,
                                 function: oai::FunctionCall { name, arguments },
-                            })
+                            }
                         })
                         .collect::<Vec<_>>()
                 });

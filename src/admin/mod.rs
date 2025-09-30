@@ -23,6 +23,7 @@ pub struct AdminToken {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateTokenPayload {
     #[serde(default)]
+    #[allow(dead_code)]
     pub token: Option<String>,
     #[serde(default)]
     pub allowed_models: Option<Vec<String>>, // None 表示不限制
@@ -95,8 +96,7 @@ fn parse_allowed_models(s: Option<String>) -> Option<Vec<String>> {
             .map(|x| x.trim().to_string())
             .collect::<Vec<_>>()
     })
-    .map(|v| if v.is_empty() { None } else { Some(v) })
-    .flatten()
+    .and_then(|v| if v.is_empty() { None } else { Some(v) })
 }
 
 fn row_to_admin_token(r: &tokio_postgres::Row) -> AdminToken {
@@ -273,13 +273,13 @@ impl TokenStore for PgTokenStore {
             current.enabled = v;
         }
         if let Some(v) = payload.expires_at {
-            current.expires_at = v.map(|s| parse_beijing_string(&s).ok()).flatten();
+            current.expires_at = v.and_then(|s| parse_beijing_string(&s).ok());
         }
 
         self.client
             .execute(
                 "UPDATE admin_tokens SET allowed_models = $2, max_tokens = $3, enabled = $4, expires_at = $5, max_amount = $6 WHERE token = $1",
-                &[&token, &join_allowed_models(&current.allowed_models), &current.max_tokens, &current.enabled, &current.expires_at.as_ref().map(|dt| to_beijing_string(dt)), &current.max_amount],
+                &[&token, &join_allowed_models(&current.allowed_models), &current.max_tokens, &current.enabled, &current.expires_at.as_ref().map(to_beijing_string), &current.max_amount],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;

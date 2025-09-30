@@ -7,6 +7,7 @@ use crate::server::storage_traits::TuiSessionRecord;
 
 pub const SESSION_COOKIE: &str = "gw_session";
 
+#[allow(dead_code)]
 pub enum AdminIdentity {
     TuiSession(TuiSessionRecord),
     WebSession(SessionEntry),

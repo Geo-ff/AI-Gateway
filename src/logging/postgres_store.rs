@@ -22,7 +22,7 @@ fn pg_err<E: std::fmt::Display>(e: E) -> rusqlite::Error {
     )
 }
 
-struct PgPool {
+pub struct PgPool {
     clients: Vec<Arc<Client>>,
     next: AtomicUsize,
 }
@@ -62,7 +62,7 @@ impl PgPool {
         })
     }
 
-    fn pick(&self) -> Arc<Client> {
+    pub fn pick(&self) -> Arc<Client> {
         let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.clients.len().max(1);
         Arc::clone(&self.clients[idx])
     }
@@ -70,7 +70,7 @@ impl PgPool {
 
 #[derive(Clone)]
 pub struct PgLogStore {
-    pool: Arc<PgPool>,
+    pub pool: Arc<PgPool>,
 }
 
 impl PgLogStore {
@@ -319,6 +319,98 @@ impl RequestLogStore for PgLogStore {
         })
     }
 
+    fn get_recent_logs_with_cursor<'a>(
+        &'a self,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let lim: i64 = limit as i64;
+            let rows = if let Some(cursor_id) = cursor {
+                let cursor_i32 = cursor_id as i32;
+                client
+                    .query(
+                        "SELECT id, timestamp, method, path, request_type, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs WHERE id < $1 ORDER BY id DESC LIMIT $2",
+                        &[&cursor_i32, &lim],
+                    )
+                    .await
+                    .map_err(pg_err)?
+            } else {
+                client
+                    .query(
+                        "SELECT id, timestamp, method, path, request_type, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs ORDER BY id DESC LIMIT $1",
+                        &[&lim],
+                    )
+                    .await
+                    .map_err(pg_err)?
+            };
+            Ok(rows.into_iter().map(Self::row_to_request_log).collect())
+        })
+    }
+
+    fn get_request_logs<'a>(
+        &'a self,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let lim: i64 = limit as i64;
+            let rows = if let Some(cursor_id) = cursor {
+                let cursor_i32 = cursor_id as i32;
+                client
+                    .query(
+                        "SELECT id, timestamp, method, path, request_type, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs WHERE id < $1 ORDER BY id DESC LIMIT $2",
+                        &[&cursor_i32, &lim],
+                    )
+                    .await
+                    .map_err(pg_err)?
+            } else {
+                client
+                    .query(
+                        "SELECT id, timestamp, method, path, request_type, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs ORDER BY id DESC LIMIT $1",
+                        &[&lim],
+                    )
+                    .await
+                    .map_err(pg_err)?
+            };
+            Ok(rows.into_iter().map(Self::row_to_request_log).collect())
+        })
+    }
+
+    fn get_logs_by_method_path<'a>(
+        &'a self,
+        method: &'a str,
+        path: &'a str,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let lim: i64 = limit as i64;
+            let rows = if let Some(cursor_id) = cursor {
+                let cursor_i32 = cursor_id as i32;
+                client
+                    .query(
+                        "SELECT id, timestamp, method, path, request_type, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs WHERE method = $1 AND path = $2 AND id < $3 ORDER BY id DESC LIMIT $4",
+                        &[&method, &path, &cursor_i32, &lim],
+                    )
+                    .await
+                    .map_err(pg_err)?
+            } else {
+                client
+                    .query(
+                        "SELECT id, timestamp, method, path, request_type, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs WHERE method = $1 AND path = $2 ORDER BY id DESC LIMIT $3",
+                        &[&method, &path, &lim],
+                    )
+                    .await
+                    .map_err(pg_err)?
+            };
+            Ok(rows.into_iter().map(Self::row_to_request_log).collect())
+        })
+    }
+
     fn sum_total_tokens_by_client_token<'a>(
         &'a self,
         token: &'a str,
@@ -353,6 +445,60 @@ impl RequestLogStore for PgLogStore {
         })
     }
 
+    fn count_requests_by_client_token<'a>(
+        &'a self,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, i64)>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let rows = client
+                .query(
+                    "SELECT client_token, COUNT(*) AS cnt FROM request_logs WHERE client_token IS NOT NULL GROUP BY client_token",
+                    &[],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(rows
+                .into_iter()
+                .filter_map(|row| {
+                    let token: Option<String> = row.get(0);
+                    let count: i64 = row.get(1);
+                    token.map(|t| (t, count))
+                })
+                .collect())
+        })
+    }
+
+    fn get_request_log_date_range<'a>(
+        &'a self,
+        method: &'a str,
+        path: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<(DateTime<Utc>, DateTime<Utc>)>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "SELECT MIN(timestamp), MAX(timestamp) FROM request_logs WHERE method = $1 AND path = $2",
+                    &[&method, &path],
+                )
+                .await
+                .map_err(pg_err)?;
+            if let Some(row) = row {
+                let min_ts: Option<String> = row.get(0);
+                let max_ts: Option<String> = row.get(1);
+                match (min_ts, max_ts) {
+                    (Some(min_ts), Some(max_ts)) => {
+                        let min = parse_beijing_string(&min_ts).map_err(pg_err)?;
+                        let max = parse_beijing_string(&max_ts).map_err(pg_err)?;
+                        Ok(Some((min, max)))
+                    }
+                    _ => Ok(None),
+                }
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
     fn log_provider_op<'a>(&'a self, op: ProviderOpLog) -> BoxFuture<'a, rusqlite::Result<i64>> {
         Box::pin(async move {
             let client = self.pool.pick();
@@ -364,6 +510,46 @@ impl RequestLogStore for PgLogStore {
                 .await
                 .map_err(pg_err)?;
             Ok(res as i64)
+        })
+    }
+
+    fn get_provider_ops_logs<'a>(
+        &'a self,
+        limit: i32,
+        cursor: Option<i64>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<ProviderOpLog>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let lim: i64 = limit as i64;
+            let rows = if let Some(cursor_id) = cursor {
+                let cursor_i32 = cursor_id as i32;
+                client
+                    .query(
+                        "SELECT id, timestamp, operation, provider, details FROM provider_ops_logs WHERE id < $1 ORDER BY id DESC LIMIT $2",
+                        &[&cursor_i32, &lim],
+                    )
+                    .await
+                    .map_err(pg_err)?
+            } else {
+                client
+                    .query(
+                        "SELECT id, timestamp, operation, provider, details FROM provider_ops_logs ORDER BY id DESC LIMIT $1",
+                        &[&lim],
+                    )
+                    .await
+                    .map_err(pg_err)?
+            };
+            Ok(rows
+                .into_iter()
+                .map(|row| ProviderOpLog {
+                    id: Some(row.get(0)),
+                    timestamp: parse_beijing_string(&row.get::<usize, String>(1))
+                        .unwrap_or_else(|_| chrono::Utc::now()),
+                    operation: row.get(2),
+                    provider: row.get(3),
+                    details: row.get(4),
+                })
+                .collect())
         })
     }
 
@@ -597,15 +783,25 @@ impl ModelCache for PgLogStore {
         ids: &'a [String],
     ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
-            for id in ids {
-                let client = self.pool.pick();
+            let client = self.pool.pick();
+            if ids.is_empty() {
                 client
                     .execute(
-                        "DELETE FROM cached_models WHERE provider = $1 AND id = $2",
-                        &[&provider, id],
+                        "DELETE FROM cached_models WHERE provider = $1",
+                        &[&provider],
                     )
                     .await
                     .map_err(pg_err)?;
+            } else {
+                for id in ids {
+                    client
+                        .execute(
+                            "DELETE FROM cached_models WHERE provider = $1 AND id = $2",
+                            &[&provider, id],
+                        )
+                        .await
+                        .map_err(pg_err)?;
+                }
             }
             Ok(())
         })
@@ -749,15 +945,13 @@ impl ProviderStore for PgLogStore {
             for r in rows {
                 let value: String = r.get(0);
                 let enc: Option<bool> = r.get(1);
-                let decrypted = match crate::crypto::unprotect(
+                let decrypted = crate::crypto::unprotect(
                     strategy,
                     provider,
                     &value,
                     enc.unwrap_or(false),
-                ) {
-                    Ok(v) => v,
-                    Err(_) => String::new(),
-                };
+                )
+                .unwrap_or_default();
                 if !decrypted.is_empty() {
                     out.push(decrypted);
                 }
@@ -834,7 +1028,7 @@ impl LoginStore for PgLogStore {
         key: &'a AdminPublicKeyRecord,
     ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
-            let comment = key.comment.as_ref().map(|s| s.as_str());
+            let comment = key.comment.as_deref();
             // 先尝试 UPDATE，兼容不支持 ON CONFLICT 的老版本 Postgres
             let client = self.pool.pick();
             let updated = client
@@ -938,6 +1132,23 @@ impl LoginStore for PgLogStore {
         })
     }
 
+    fn delete_admin_key<'a>(
+        &'a self,
+        fingerprint: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let rows = client
+                .execute(
+                    "DELETE FROM admin_public_keys WHERE fingerprint = $1",
+                    &[&fingerprint],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(rows > 0)
+        })
+    }
+
     fn create_tui_session<'a>(
         &'a self,
         session: &'a TuiSessionRecord,
@@ -978,6 +1189,47 @@ impl LoginStore for PgLogStore {
                 last_code_at: r.get(5),
             });
             Ok(rec)
+        })
+    }
+
+    fn list_tui_sessions<'a>(
+        &'a self,
+        fingerprint: Option<&'a str>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<TuiSessionRecord>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let rows = match fingerprint {
+                Some(fp) => {
+                    client
+                        .query(
+                            "SELECT session_id, fingerprint, issued_at, expires_at, revoked, last_code_at FROM tui_sessions WHERE fingerprint = $1 ORDER BY issued_at DESC",
+                            &[&fp],
+                        )
+                        .await
+                        .map_err(pg_err)?
+                }
+                None => {
+                    client
+                        .query(
+                            "SELECT session_id, fingerprint, issued_at, expires_at, revoked, last_code_at FROM tui_sessions ORDER BY issued_at DESC",
+                            &[],
+                        )
+                        .await
+                        .map_err(pg_err)?
+                }
+            };
+            let mut out = Vec::with_capacity(rows.len());
+            for r in rows {
+                out.push(TuiSessionRecord {
+                    session_id: r.get(0),
+                    fingerprint: r.get(1),
+                    issued_at: r.get(2),
+                    expires_at: r.get(3),
+                    revoked: r.get(4),
+                    last_code_at: r.get(5),
+                });
+            }
+            Ok(out)
         })
     }
 
@@ -1039,7 +1291,7 @@ impl LoginStore for PgLogStore {
     ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
             let client = self.pool.pick();
-            let hint = code.hint.as_ref().map(|s| s.as_str());
+            let hint = code.hint.as_deref();
             client
                 .execute(
                     "INSERT INTO login_codes (code_hash, session_id, fingerprint, created_at, expires_at, max_uses, uses, disabled, hint)
@@ -1136,8 +1388,8 @@ impl LoginStore for PgLogStore {
     ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
             let client = self.pool.pick();
-            let fingerprint = session.fingerprint.as_ref().map(|s| s.as_str());
-            let issued_by = session.issued_by_code.as_ref().map(|s| s.as_str());
+            let fingerprint = session.fingerprint.as_deref();
+            let issued_by = session.issued_by_code.as_deref();
             client
                 .execute(
                     "INSERT INTO web_sessions (session_id, fingerprint, created_at, expires_at, revoked, issued_by_code)

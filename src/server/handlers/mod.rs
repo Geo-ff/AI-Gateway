@@ -1,17 +1,20 @@
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use std::sync::Arc;
 
 use crate::server::AppState;
 
+mod admin_logs;
 mod admin_metrics;
 mod admin_prices;
 mod admin_tokens;
 mod auth;
+mod auth_keys;
 mod auth_login;
 mod auth_tui;
+mod auth_tui_admin;
 mod cache;
 mod chat;
 mod models;
@@ -24,6 +27,18 @@ pub fn routes() -> Router<Arc<AppState>> {
         // Auth for Web
         .route("/auth/tui/challenge", post(auth_tui::challenge))
         .route("/auth/tui/verify", post(auth_tui::verify))
+        // Admin key management
+        .route(
+            "/auth/keys",
+            get(auth_keys::list_keys).post(auth_keys::add_key),
+        )
+        .route("/auth/keys/{fingerprint}", delete(auth_keys::delete_key))
+        // TUI sessions management
+        .route("/auth/tui/sessions", get(auth_tui_admin::list_tui_sessions))
+        .route(
+            "/auth/tui/sessions/{session_id}/revoke",
+            post(auth_tui_admin::revoke_tui_session),
+        )
         .route("/auth/login-codes", post(auth_login::create_login_code))
         .route(
             "/auth/login-codes/status",
@@ -39,11 +54,16 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/models/{provider}/cache",
             post(cache::update_provider_cache).delete(cache::delete_provider_cache),
         )
+        .route("/admin/models/cache", get(cache::list_cached_models))
         .route(
             "/providers/{provider}/keys",
             get(provider_keys::list_provider_keys)
                 .post(provider_keys::add_provider_key)
                 .delete(provider_keys::delete_provider_key),
+        )
+        .route(
+            "/providers/{provider}/keys/raw",
+            get(provider_keys::list_provider_keys_raw),
         )
         .route(
             "/providers/{provider}/keys/batch",
@@ -82,6 +102,23 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/admin/metrics/summary", get(admin_metrics::summary))
         .route("/admin/metrics/series", get(admin_metrics::series))
+        .route(
+            "/admin/metrics/models-distribution",
+            get(admin_metrics::models_distribution),
+        )
+        .route(
+            "/admin/metrics/series-models",
+            get(admin_metrics::series_models),
+        )
+        .route("/admin/logs/requests", get(admin_logs::list_request_logs))
+        .route(
+            "/admin/logs/chat-completions",
+            get(admin_logs::list_chat_completion_logs),
+        )
+        .route(
+            "/admin/logs/operations",
+            get(admin_logs::list_operation_logs),
+        )
         .route("/v1/token/balance", get(token_info::token_balance))
         .route("/v1/token/usage", get(token_info::token_usage))
 }
