@@ -945,13 +945,9 @@ impl ProviderStore for PgLogStore {
             for r in rows {
                 let value: String = r.get(0);
                 let enc: Option<bool> = r.get(1);
-                let decrypted = crate::crypto::unprotect(
-                    strategy,
-                    provider,
-                    &value,
-                    enc.unwrap_or(false),
-                )
-                .unwrap_or_default();
+                let decrypted =
+                    crate::crypto::unprotect(strategy, provider, &value, enc.unwrap_or(false))
+                        .unwrap_or_default();
                 if !decrypted.is_empty() {
                     out.push(decrypted);
                 }

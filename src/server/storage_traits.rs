@@ -307,7 +307,10 @@ impl RequestLogStore for DatabaseLogger {
         limit: i32,
         cursor: Option<i64>,
     ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>> {
-        Box::pin(async move { self.get_logs_by_method_path(method, path, limit, cursor).await })
+        Box::pin(async move {
+            self.get_logs_by_method_path(method, path, limit, cursor)
+                .await
+        })
     }
 
     fn sum_total_tokens_by_client_token<'a>(

@@ -189,7 +189,8 @@ pub async fn list_request_logs(
         || query.path.is_some();
 
     let (raw_logs, next_cursor) = if has_filters {
-        let (logs, next_cur) = get_logs_matching_query(&app_state, limit as i32, query.cursor, &query).await?;
+        let (logs, next_cur) =
+            get_logs_matching_query(&app_state, limit as i32, query.cursor, &query).await?;
         (logs, next_cur)
     } else {
         let logs = app_state
@@ -197,7 +198,10 @@ pub async fn list_request_logs(
             .get_recent_logs_with_cursor(limit as i32, query.cursor)
             .await
             .map_err(GatewayError::Db)?;
-        let next_cur = logs.last().and_then(|l| l.id).filter(|_| logs.len() as usize == limit);
+        let next_cur = logs
+            .last()
+            .and_then(|l| l.id)
+            .filter(|_| logs.len() as usize == limit);
         (logs, next_cur)
     };
 
@@ -292,7 +296,10 @@ pub async fn list_chat_completion_logs(
         })
         .collect();
 
-    let next_cursor = raw_logs.last().and_then(|l| l.id).filter(|_| raw_logs.len() as i32 == limit);
+    let next_cursor = raw_logs
+        .last()
+        .and_then(|l| l.id)
+        .filter(|_| raw_logs.len() as i32 == limit);
 
     log_simple_request(
         &app_state,

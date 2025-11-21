@@ -1,9 +1,11 @@
-use crate::logging::time::{parse_beijing_string, to_beijing_string, BEIJING_OFFSET, DATETIME_FORMAT};
+use crate::logging::time::{
+    BEIJING_OFFSET, DATETIME_FORMAT, parse_beijing_string, to_beijing_string,
+};
 use crate::logging::types::RequestLog;
 use crate::server::storage_traits::{
     AdminPublicKeyRecord, LoginCodeRecord, TuiSessionRecord, WebSessionRecord,
 };
-use chrono::{DateTime, SecondsFormat, Utc, TimeZone};
+use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension, Result};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -905,7 +907,10 @@ impl DatabaseLogger {
         };
 
         let rows = if let Some(cursor_id) = cursor {
-            stmt.query_map(rusqlite::params![method, path, cursor_id, limit], map_request_log_row)?
+            stmt.query_map(
+                rusqlite::params![method, path, cursor_id, limit],
+                map_request_log_row,
+            )?
         } else {
             stmt.query_map(rusqlite::params![method, path, limit], map_request_log_row)?
         };
@@ -1053,8 +1058,9 @@ fn map_request_log_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestLog> 
 
 fn parse_ts(value: &str) -> rusqlite::Result<DateTime<Utc>> {
     use chrono::NaiveDateTime;
-    let naive = NaiveDateTime::parse_from_str(value, DATETIME_FORMAT)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+    let naive = NaiveDateTime::parse_from_str(value, DATETIME_FORMAT).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+    })?;
     let local = BEIJING_OFFSET
         .from_local_datetime(&naive)
         .single()

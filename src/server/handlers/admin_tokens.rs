@@ -313,6 +313,66 @@ pub async fn toggle_token(
     }
 }
 
+pub async fn delete_token(
+    Path(token): Path<String>,
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<axum::http::StatusCode, GatewayError> {
+    let start_time = Utc::now();
+    let provided_token = bearer_token(&headers);
+    if let Err(e) = ensure_admin(&headers, &app_state).await {
+        let code = e.status_code().as_u16();
+        log_simple_request(
+            &app_state,
+            start_time,
+            "DELETE",
+            &format!("/admin/tokens/{}", token),
+            "admin_tokens_delete",
+            None,
+            None,
+            provided_token.as_deref(),
+            code,
+            Some(e.to_string()),
+        )
+        .await;
+        return Err(e);
+    }
+    let deleted = app_state.token_store.delete_token(&token).await?;
+    if deleted {
+        log_simple_request(
+            &app_state,
+            start_time,
+            "DELETE",
+            &format!("/admin/tokens/{}", token),
+            "admin_tokens_delete",
+            None,
+            None,
+            token_for_log(provided_token.as_deref()),
+            204,
+            None,
+        )
+        .await;
+        Ok(axum::http::StatusCode::NO_CONTENT)
+    } else {
+        let ge = GatewayError::NotFound("token not found".into());
+        let code = ge.status_code().as_u16();
+        log_simple_request(
+            &app_state,
+            start_time,
+            "DELETE",
+            &format!("/admin/tokens/{}", token),
+            "admin_tokens_delete",
+            None,
+            None,
+            provided_token.as_deref(),
+            code,
+            Some(ge.to_string()),
+        )
+        .await;
+        Err(ge)
+    }
+}
+
 pub async fn update_token(
     Path(token): Path<String>,
     State(app_state): State<Arc<AppState>>,

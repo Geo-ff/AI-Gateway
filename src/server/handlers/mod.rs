@@ -86,7 +86,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/admin/tokens/{token}",
-            get(admin_tokens::get_token).put(admin_tokens::update_token),
+            get(admin_tokens::get_token)
+                .put(admin_tokens::update_token)
+                .delete(admin_tokens::delete_token),
         )
         .route(
             "/admin/tokens/{token}/toggle",

@@ -74,6 +74,7 @@ pub trait TokenStore: Send + Sync {
         completion: i64,
         total: i64,
     ) -> Result<(), GatewayError>;
+    async fn delete_token(&self, token: &str) -> Result<bool, GatewayError>;
 }
 
 // SQLite 的实现由 DatabaseLogger 提供（见 logging/database_admin_tokens.rs）
@@ -323,6 +324,15 @@ impl TokenStore for PgTokenStore {
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         Ok(rows.into_iter().map(|r| row_to_admin_token(&r)).collect())
+    }
+
+    async fn delete_token(&self, token: &str) -> Result<bool, GatewayError> {
+        let res = self
+            .client
+            .execute("DELETE FROM admin_tokens WHERE token = $1", &[&token])
+            .await
+            .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
+        Ok(res > 0)
     }
 
     async fn add_amount_spent(&self, token: &str, delta: f64) -> Result<(), GatewayError> {

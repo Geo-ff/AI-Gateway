@@ -307,4 +307,10 @@ impl TokenStore for DatabaseLogger {
         )?;
         Ok(())
     }
+
+    async fn delete_token(&self, token: &str) -> Result<bool, GatewayError> {
+        let conn = self.connection.lock().await;
+        let affected = conn.execute("DELETE FROM admin_tokens WHERE token = ?1", (token,))?;
+        Ok(affected > 0)
+    }
 }

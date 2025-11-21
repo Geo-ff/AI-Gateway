@@ -6,7 +6,7 @@ use axum::{
     extract::{Query, State},
     http::HeaderMap,
 };
-use chrono::{DateTime, Duration, NaiveDate, Utc, TimeZone};
+use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::auth::{AdminIdentity, ensure_admin};
@@ -451,7 +451,10 @@ pub async fn models_distribution(
     )
     .await;
 
-    Ok(Json(ModelsDistributionResponse { items, generated_at: Utc::now().to_rfc3339() }))
+    Ok(Json(ModelsDistributionResponse {
+        items,
+        generated_at: Utc::now().to_rfc3339(),
+    }))
 }
 
 #[derive(Debug, Deserialize)]
