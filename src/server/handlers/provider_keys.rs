@@ -628,8 +628,6 @@ pub async fn list_provider_keys(
         .into_response())
 }
 
-// key_display_hint and mask_key are imported from server::util
-
 pub async fn list_provider_keys_raw(
     Path(provider_name): Path<String>,
     Query(query): Query<KeysQuery>,

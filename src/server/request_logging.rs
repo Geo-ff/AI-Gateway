@@ -97,31 +97,28 @@ pub async fn log_chat_request(
 
     // 增量更新 admin_tokens：金额与 tokens（仅非管理员令牌且有 usage/金额时）
     if let Some(tok) = client_token.filter(|t| *t != "admin_token") {
-        if let Some(delta) = amount_spent {
-            if let Err(e) = app_state.token_store.add_amount_spent(tok, delta).await {
-                tracing::warn!("Failed to update token spent: {}", e);
-            }
+        if let Some(delta) = amount_spent
+            && let Err(e) = app_state.token_store.add_amount_spent(tok, delta).await
+        {
+            tracing::warn!("Failed to update token spent: {}", e);
         }
-        if let Ok(r) = response {
-            if let Some(u) = r.typed.usage.as_ref() {
-                let prompt = u.prompt_tokens as i64;
-                let completion = u.completion_tokens as i64;
-                let total = u.total_tokens as i64;
-                if let Err(e) = app_state
-                    .token_store
-                    .add_usage_spent(tok, prompt, completion, total)
-                    .await
-                {
-                    tracing::warn!("Failed to update token tokens: {}", e);
-                }
+        if let Ok(r) = response && let Some(u) = r.typed.usage.as_ref() {
+            let prompt = u.prompt_tokens as i64;
+            let completion = u.completion_tokens as i64;
+            let total = u.total_tokens as i64;
+            if let Err(e) = app_state
+                .token_store
+                .add_usage_spent(tok, prompt, completion, total)
+                .await
+            {
+                tracing::warn!("Failed to update token tokens: {}", e);
             }
         }
     }
 }
 
-// api_key_hint imported from server::util
-
 // 记录普通请求（不含 tokens）
+#[allow(clippy::too_many_arguments)]
 pub async fn log_simple_request(
     app_state: &AppState,
     start_time: DateTime<Utc>,

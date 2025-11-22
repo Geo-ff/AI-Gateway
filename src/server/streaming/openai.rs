@@ -16,6 +16,11 @@ use crate::server::AppState;
 
 use super::api_key_hint;
 
+/// 面向 OpenAI 兼容上游的流式聊天实现：
+/// - 将请求改写为 SSE 流式接口并启用 usage 回传
+/// - 持续消费 EventSource 事件，解析 usage 并通过 common 模块记录日志与计费
+/// - 将原始 SSE 数据透传给网关调用方（含 [DONE] 事件与错误信息）
+#[allow(clippy::too_many_arguments)]
 pub async fn stream_openai_chat(
     app_state: Arc<AppState>,
     start_time: DateTime<Utc>,
@@ -115,19 +120,17 @@ pub async fn stream_openai_chat(
                     let mut captured = false;
                     if let Ok(chunk) =
                         serde_json::from_str::<CreateChatCompletionStreamResponse>(&m.data)
+                        && let Some(u) = &chunk.usage
                     {
-                        if let Some(u) = &chunk.usage {
-                            *usage_cell_for_task.lock().unwrap() = Some(u.clone());
-                            captured = true;
-                        }
+                        *usage_cell_for_task.lock().unwrap() = Some(u.clone());
+                        captured = true;
                     }
                     // Fallback: Value parse to extract usage (tolerate vendor extensions)
-                    if !captured {
-                        if let Ok(v) = serde_json::from_str::<Value>(&m.data) {
-                            if let Some(usage) = super::common::parse_usage_from_value(&v) {
-                                *usage_cell_for_task.lock().unwrap() = Some(usage);
-                            }
-                        }
+                    if !captured
+                        && let Ok(v) = serde_json::from_str::<Value>(&m.data)
+                        && let Some(usage) = super::common::parse_usage_from_value(&v)
+                    {
+                        *usage_cell_for_task.lock().unwrap() = Some(usage);
                     }
 
                     let _ = tx.send(axum::response::sse::Event::default().data(m.data));

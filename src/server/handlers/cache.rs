@@ -473,16 +473,16 @@ pub async fn delete_provider_cache(
     })
     .into_response();
     use axum::http::header::HeaderValue;
-    if let Ok(v) = HeaderValue::from_str(&"0".to_string()) {
+    if let Ok(v) = HeaderValue::from_str("0") {
         resp.headers_mut().insert("X-Cache-Added", v);
     }
     if let Ok(v) = HeaderValue::from_str(&removed.to_string()) {
         resp.headers_mut().insert("X-Cache-Removed", v);
     }
-    if let Ok(v) = HeaderValue::from_str(&"0".to_string()) {
+    if let Ok(v) = HeaderValue::from_str("0") {
         resp.headers_mut().insert("X-Cache-Updated", v);
     }
-    if let Ok(v) = HeaderValue::from_str(&"0".to_string()) {
+    if let Ok(v) = HeaderValue::from_str("0") {
         resp.headers_mut().insert("X-Cache-Filtered", v);
     }
     Ok(resp)

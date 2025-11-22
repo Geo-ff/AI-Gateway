@@ -45,7 +45,7 @@ impl From<AdminToken> for AdminTokenOut {
             expires_at: t
                 .expires_at
                 .as_ref()
-                .map(|dt| crate::logging::time::to_beijing_string(dt)),
+                .map(crate::logging::time::to_beijing_string),
             created_at: crate::logging::time::to_beijing_string(&t.created_at),
         }
     }
@@ -201,20 +201,18 @@ pub async fn create_token(
         return Err(e);
     }
     // 校验 allowed_models 存在性（若提供）
-    if let Some(list) = payload.allowed_models.as_ref() {
-        if !list.is_empty() {
-            use std::collections::HashSet;
-            let cached = crate::server::model_cache::get_cached_models_all(&app_state)
-                .await
-                .map_err(GatewayError::Db)?;
-            let set: HashSet<String> = cached.into_iter().map(|m| m.id).collect();
-            for m in list {
-                if !set.contains(m) {
-                    return Err(GatewayError::NotFound(format!(
-                        "model '{}' not found in cache",
-                        m
-                    )));
-                }
+    if let Some(list) = payload.allowed_models.as_ref() && !list.is_empty() {
+        use std::collections::HashSet;
+        let cached = crate::server::model_cache::get_cached_models_all(&app_state)
+            .await
+            .map_err(GatewayError::Db)?;
+        let set: HashSet<String> = cached.into_iter().map(|m| m.id).collect();
+        for m in list {
+            if !set.contains(m) {
+                return Err(GatewayError::NotFound(format!(
+                    "model '{}' not found in cache",
+                    m
+                )));
             }
         }
     }

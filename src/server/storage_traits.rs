@@ -9,6 +9,13 @@ use chrono::{DateTime, Utc};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+type DateRangeFuture<'a> =
+    BoxFuture<'a, rusqlite::Result<Option<(DateTime<Utc>, DateTime<Utc>)>>>;
+type ModelPriceFuture<'a> =
+    BoxFuture<'a, rusqlite::Result<Option<(f64, f64, Option<String>)>>>;
+type ModelPriceListFuture<'a> =
+    BoxFuture<'a, rusqlite::Result<Vec<(String, String, f64, f64, Option<String>)>>>;
+
 // 日志存储抽象（可由 SQLite、Postgres 等实现）
 pub trait RequestLogStore: Send + Sync {
     fn log_request<'a>(&'a self, log: RequestLog) -> BoxFuture<'a, rusqlite::Result<i64>>;
@@ -51,7 +58,7 @@ pub trait RequestLogStore: Send + Sync {
         &'a self,
         method: &'a str,
         path: &'a str,
-    ) -> BoxFuture<'a, rusqlite::Result<Option<(DateTime<Utc>, DateTime<Utc>)>>>;
+    ) -> DateRangeFuture<'a>;
     // provider ops audit log
     fn log_provider_op<'a>(&'a self, op: ProviderOpLog) -> BoxFuture<'a, rusqlite::Result<i64>>;
     fn get_provider_ops_logs<'a>(
@@ -72,11 +79,11 @@ pub trait RequestLogStore: Send + Sync {
         &'a self,
         provider: &'a str,
         model: &'a str,
-    ) -> BoxFuture<'a, rusqlite::Result<Option<(f64, f64, Option<String>)>>>;
+    ) -> ModelPriceFuture<'a>;
     fn list_model_prices<'a>(
         &'a self,
         provider: Option<&'a str>,
-    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, String, f64, f64, Option<String>)>>>;
+    ) -> ModelPriceListFuture<'a>;
     fn sum_spent_amount_by_client_token<'a>(
         &'a self,
         token: &'a str,

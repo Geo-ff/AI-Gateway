@@ -8,14 +8,17 @@ use chrono::{DateTime, Utc};
 use reqwest_eventsource::{Event, RequestBuilderExt};
 use serde_json::Value;
 
-// no direct async_openai usage here
-
 use crate::error::GatewayError;
 use crate::providers::openai::{ChatCompletionRequest, Usage};
 use crate::server::AppState;
 
 use super::api_key_hint;
 
+/// 面向智谱 API 的流式聊天实现：
+/// - 先将 OpenAI 风格请求适配为智谱专用格式（base64 清洗、top_p 调整等）
+/// - 通过 SSE 消费上游流式响应，宽松提取 usage 并记录日志/计费
+/// - 将原始 SSE 数据透传给网关调用方，保证与 OpenAI 路径一致的体验
+#[allow(clippy::too_many_arguments)]
 pub async fn stream_zhipu_chat(
     app_state: Arc<AppState>,
     start_time: DateTime<Utc>,
@@ -112,10 +115,10 @@ pub async fn stream_zhipu_chat(
                     }
 
                     // 捕获 usage（Zhipu：宽松提取）
-                    if let Ok(v) = serde_json::from_str::<Value>(&m.data) {
-                        if let Some(usage) = super::common::parse_usage_from_value(&v) {
-                            *usage_cell_for_task.lock().unwrap() = Some(usage);
-                        }
+                    if let Ok(v) = serde_json::from_str::<Value>(&m.data)
+                        && let Some(usage) = super::common::parse_usage_from_value(&v)
+                    {
+                        *usage_cell_for_task.lock().unwrap() = Some(usage);
                     }
 
                     let _ = tx.send(axum::response::sse::Event::default().data(m.data));

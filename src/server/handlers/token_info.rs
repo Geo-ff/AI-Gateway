@@ -31,10 +31,8 @@ async fn ensure_active_token(
         if !t.enabled {
             return Err(GatewayError::Config("token disabled".into()));
         }
-        if let Some(exp) = t.expires_at {
-            if chrono::Utc::now() > exp {
-                return Err(GatewayError::Config("token expired".into()));
-            }
+        if let Some(exp) = t.expires_at && chrono::Utc::now() > exp {
+            return Err(GatewayError::Config("token expired".into()));
         }
         Ok(tok)
     } else {

@@ -17,6 +17,11 @@ use crate::server::{
     AppState, model_redirect::apply_model_redirects, request_logging::log_chat_request,
 };
 
+/// Chat Completions 主处理入口：
+/// - 根据 `stream` 标志分流到流式或一次性请求路径
+/// - 校验并加载客户端令牌，检查额度/过期/模型白名单等限制
+/// - 根据模型选择具体 Provider，校验价格配置并调用上游
+/// - 记录详细请求日志与 usage，用于后续统计和自动禁用超限令牌
 pub async fn chat_completions(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -81,31 +86,29 @@ pub async fn chat_completions(
         };
 
         if !token.enabled {
-            if let Some(max_amount) = token.max_amount {
-                if let Ok(spent) = app_state
+            if let Some(max_amount) = token.max_amount
+                && let Ok(spent) = app_state
                     .log_store
                     .sum_spent_amount_by_client_token(token_str)
                     .await
-                {
-                    if spent >= max_amount {
-                        let ge = GatewayError::Config("token budget exceeded".into());
-                        let code = ge.status_code().as_u16();
-                        crate::server::request_logging::log_simple_request(
-                            &app_state,
-                            start_time,
-                            "POST",
-                            "/v1/chat/completions",
-                            crate::logging::types::REQ_TYPE_CHAT_ONCE,
-                            Some(request.model.clone()),
-                            None,
-                            client_token.as_deref(),
-                            code,
-                            Some(ge.to_string()),
-                        )
-                        .await;
-                        return Err(ge);
-                    }
-                }
+                && spent >= max_amount
+            {
+                let ge = GatewayError::Config("token budget exceeded".into());
+                let code = ge.status_code().as_u16();
+                crate::server::request_logging::log_simple_request(
+                    &app_state,
+                    start_time,
+                    "POST",
+                    "/v1/chat/completions",
+                    crate::logging::types::REQ_TYPE_CHAT_ONCE,
+                    Some(request.model.clone()),
+                    None,
+                    client_token.as_deref(),
+                    code,
+                    Some(ge.to_string()),
+                )
+                .await;
+                return Err(ge);
             }
             let ge = GatewayError::Config("token disabled".into());
             let code = ge.status_code().as_u16();
@@ -125,49 +128,43 @@ pub async fn chat_completions(
             return Err(ge);
         }
 
-        if let Some(exp) = token.expires_at {
-            if Utc::now() > exp {
-                return Err(GatewayError::Config("token expired".into()));
-            }
+        if let Some(exp) = token.expires_at && Utc::now() > exp {
+            return Err(GatewayError::Config("token expired".into()));
         }
 
-        if let Some(allow) = token.allowed_models.as_ref() {
-            if !allow.iter().any(|m| m == &request.model) {
-                return Err(GatewayError::Config("model not allowed for token".into()));
-            }
+        if let Some(allow) = token.allowed_models.as_ref()
+            && !allow.iter().any(|m| m == &request.model)
+        {
+            return Err(GatewayError::Config("model not allowed for token".into()));
         }
 
-        if let Some(max_tokens) = token.max_tokens {
-            if token.total_tokens_spent >= max_tokens {
-                let ge = GatewayError::Config("token tokens exceeded".into());
-                let code = ge.status_code().as_u16();
-                crate::server::request_logging::log_simple_request(
-                    &app_state,
-                    start_time,
-                    "POST",
-                    "/v1/chat/completions",
-                    crate::logging::types::REQ_TYPE_CHAT_ONCE,
-                    Some(request.model.clone()),
-                    None,
-                    client_token.as_deref(),
-                    code,
-                    Some(ge.to_string()),
-                )
-                .await;
-                return Err(ge);
-            }
+        if let Some(max_tokens) = token.max_tokens && token.total_tokens_spent >= max_tokens {
+            let ge = GatewayError::Config("token tokens exceeded".into());
+            let code = ge.status_code().as_u16();
+            crate::server::request_logging::log_simple_request(
+                &app_state,
+                start_time,
+                "POST",
+                "/v1/chat/completions",
+                crate::logging::types::REQ_TYPE_CHAT_ONCE,
+                Some(request.model.clone()),
+                None,
+                client_token.as_deref(),
+                code,
+                Some(ge.to_string()),
+            )
+            .await;
+            return Err(ge);
         }
 
-        if let Some(max_amount) = token.max_amount {
-            if let Ok(spent) = app_state
+        if let Some(max_amount) = token.max_amount
+            && let Ok(spent) = app_state
                 .log_store
                 .sum_spent_amount_by_client_token(token_str)
                 .await
-            {
-                if spent > max_amount {
-                    return Err(GatewayError::Config("token budget exceeded".into()));
-                }
-            }
+            && spent > max_amount
+        {
+            return Err(GatewayError::Config("token budget exceeded".into()));
         }
 
         let (selected, parsed_model) =
@@ -213,18 +210,14 @@ pub async fn chat_completions(
         .await;
 
         // Auto-disable token when exceeding budget (post-check)
-        if let Some(tok) = client_token.as_deref() {
-            if let Some(t) = app_state.token_store.get_token(tok).await? {
-                if let Some(max_amount) = t.max_amount {
-                    if t.amount_spent > max_amount {
-                        let _ = app_state.token_store.set_enabled(tok, false).await;
-                    }
-                }
-                if let Some(max_tokens) = t.max_tokens {
-                    if t.total_tokens_spent > max_tokens {
-                        let _ = app_state.token_store.set_enabled(tok, false).await;
-                    }
-                }
+        if let Some(tok) = client_token.as_deref()
+            && let Some(t) = app_state.token_store.get_token(tok).await?
+        {
+            if let Some(max_amount) = t.max_amount && t.amount_spent > max_amount {
+                let _ = app_state.token_store.set_enabled(tok, false).await;
+            }
+            if let Some(max_tokens) = t.max_tokens && t.total_tokens_spent > max_tokens {
+                let _ = app_state.token_store.set_enabled(tok, false).await;
             }
         }
 

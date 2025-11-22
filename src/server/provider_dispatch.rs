@@ -84,9 +84,6 @@ pub async fn call_provider_with_parsed_model(
     }
 }
 
-// 根据选中的供应商调用对应的聊天补全接口（保留原有逻辑）
-// 旧的通用调用函数已移除（不再使用）
-
 async fn call_openai_provider(
     selected: &SelectedProvider,
     request: &ChatCompletionRequest,
@@ -105,8 +102,7 @@ async fn call_anthropic_provider(
         &selected.api_key,
         &anthropic_request,
     )
-    .await
-    .map_err(GatewayError::from)?;
+    .await?;
 
     Ok(RawAndTypedChatCompletion {
         typed: AnthropicProvider::convert_anthropic_to_openai(&anthropic_response),

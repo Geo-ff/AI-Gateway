@@ -85,10 +85,8 @@ fn parse_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
     let cookie = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
     for part in cookie.split(';') {
         let kv = part.trim();
-        if let Some((k, v)) = kv.split_once('=') {
-            if k.trim() == name {
-                return Some(v.trim().to_string());
-            }
+        if let Some((k, v)) = kv.split_once('=') && k.trim() == name {
+            return Some(v.trim().to_string());
         }
     }
     None
@@ -135,8 +133,8 @@ pub async fn create_login_code(
     if payload.length < 25 || payload.length > 64 {
         return Err(GatewayError::Config("code length must be 25..=64".into()));
     }
-    let ttl = payload.ttl_secs.max(1).min(24 * 60 * 60);
-    let max_uses = payload.max_uses.max(1).min(1000);
+    let ttl = payload.ttl_secs.clamp(1, 24 * 60 * 60);
+    let max_uses = payload.max_uses.clamp(1, 1000);
     tracing::info!(
         ttl_secs = ttl,
         max_uses = max_uses,

@@ -27,6 +27,14 @@ use rand::Rng;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+type StoreTuple = (
+    Arc<dyn RequestLogStore + Send + Sync>,
+    Arc<dyn ModelCache + Send + Sync>,
+    Arc<dyn ProviderStore + Send + Sync>,
+    Arc<dyn TokenStore + Send + Sync>,
+    Arc<dyn LoginStore + Send + Sync>,
+);
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: Settings,
@@ -37,16 +45,15 @@ pub struct AppState {
     pub login_manager: Arc<login::LoginManager>,
 }
 
+/// 创建 HTTP 应用：
+/// - 根据配置选择日志/缓存/令牌存储（Postgres 或本地 SQLite）
+/// - 确保存在至少一把管理员登录密钥（首次启动自动生成并落盘提示）
+/// - 构建带全局状态和 CORS 中间件的 Axum 路由
 pub async fn create_app(config: Settings) -> AppResult<Router> {
     // Admin identity token generated per boot
     // Choose stores based on Postgres availability
-    let (log_store_arc, model_cache_arc, provider_store_arc, token_store, login_store_arc): (
-        Arc<dyn RequestLogStore + Send + Sync>,
-        Arc<dyn ModelCache + Send + Sync>,
-        Arc<dyn ProviderStore + Send + Sync>,
-        Arc<dyn TokenStore + Send + Sync>,
-        Arc<dyn LoginStore + Send + Sync>,
-    ) = if let Some(pg_url) = &config.logging.pg_url {
+    let (log_store_arc, model_cache_arc, provider_store_arc, token_store, login_store_arc): StoreTuple =
+        if let Some(pg_url) = &config.logging.pg_url {
         // Strict Postgres-only mode (no SQLite fallback)
         let pool_size = config.logging.pg_pool_size.unwrap_or(4);
         let pglog = PgLogStore::connect(pg_url, &config.logging.pg_schema, pool_size).await?;

@@ -57,16 +57,14 @@ pub async fn list_models(
     }
     let mut cached_models = get_cached_models_all(&app_state).await?;
     // 若令牌有限制，仅返回该令牌允许的模型
-    if !is_admin {
-        if let Some(tok) = token_for_limits.as_deref() {
-            if let Some(t) = app_state.token_store.get_token(tok).await? {
-                if let Some(allow) = t.allowed_models.as_ref() {
-                    use std::collections::HashSet;
-                    let allow_set: HashSet<&str> = allow.iter().map(|s| s.as_str()).collect();
-                    cached_models.retain(|m| allow_set.contains(m.id.as_str()));
-                }
-            }
-        }
+    if !is_admin
+        && let Some(tok) = token_for_limits.as_deref()
+        && let Some(t) = app_state.token_store.get_token(tok).await?
+        && let Some(allow) = t.allowed_models.as_ref()
+    {
+        use std::collections::HashSet;
+        let allow_set: HashSet<&str> = allow.iter().map(|s| s.as_str()).collect();
+        cached_models.retain(|m| allow_set.contains(m.id.as_str()));
     }
     let path = uri
         .path_and_query()
@@ -113,24 +111,24 @@ pub async fn list_provider_models(
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| format!("/models/{}", provider_name));
 
-    if ensure_admin(&headers, &app_state).await.is_err() {
-        if let Err(e) = ensure_client(&headers, &app_state).await {
-            let code = e.status_code().as_u16();
-            log_simple_request(
-                &app_state,
-                start_time,
-                "GET",
-                &full_path,
-                REQ_TYPE_PROVIDER_MODELS_LIST,
-                None,
-                Some(provider_name.clone()),
-                provided_token.as_deref(),
-                code,
-                Some(e.to_string()),
-            )
-            .await;
-            return Err(e);
-        }
+    if ensure_admin(&headers, &app_state).await.is_err()
+        && let Err(e) = ensure_client(&headers, &app_state).await
+    {
+        let code = e.status_code().as_u16();
+        log_simple_request(
+            &app_state,
+            start_time,
+            "GET",
+            &full_path,
+            REQ_TYPE_PROVIDER_MODELS_LIST,
+            None,
+            Some(provider_name.clone()),
+            provided_token.as_deref(),
+            code,
+            Some(e.to_string()),
+        )
+        .await;
+        return Err(e);
     }
 
     let provider = match app_state

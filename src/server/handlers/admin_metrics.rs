@@ -183,8 +183,8 @@ fn filter_logs(
         .filter(|log| {
             log.method.eq_ignore_ascii_case(TARGET_METHOD)
                 && log.path.as_str() == TARGET_PATH
-                && since.map_or(true, |start| log.timestamp >= start)
-                && until.map_or(true, |end| log.timestamp < end)
+                && since.is_none_or(|start| log.timestamp >= start)
+                && until.is_none_or(|end| log.timestamp < end)
         })
         .collect()
 }
@@ -349,16 +349,7 @@ fn build_series(
 fn normalize_model_label(provider: Option<&str>, model: Option<&str>) -> String {
     let provider = provider.unwrap_or("");
     let model = model.unwrap_or("未知模型");
-    if model.contains('/') {
-        // 如果 model 已带前缀，且与 provider 重复，则保持原样，避免重复前缀
-        let mut parts = model.splitn(2, '/');
-        let first = parts.next().unwrap_or("");
-        if !provider.is_empty() && first.eq_ignore_ascii_case(provider) {
-            model.to_string()
-        } else {
-            model.to_string()
-        }
-    } else if provider.is_empty() {
+    if model.contains('/') || provider.is_empty() {
         model.to_string()
     } else {
         format!("{}/{}", provider, model)

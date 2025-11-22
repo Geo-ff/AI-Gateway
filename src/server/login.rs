@@ -306,10 +306,10 @@ impl LoginManager {
         length: usize,
     ) -> Result<LoginCodeEntry, GatewayError> {
         let now = Utc::now();
-        if let Some(last) = session.last_code_at {
-            if now - last < Duration::seconds(CODE_COOLDOWN_SECS) {
-                return Err(GatewayError::RateLimited("生成频率过快，请稍后再试".into()));
-            }
+        if let Some(last) = session.last_code_at
+            && now - last < Duration::seconds(CODE_COOLDOWN_SECS)
+        {
+            return Err(GatewayError::RateLimited("生成频率过快，请稍后再试".into()));
         }
         self.store
             .disable_codes_for_session(&session.session_id)

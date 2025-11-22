@@ -38,16 +38,16 @@ pub async fn ensure_admin(
     headers: &HeaderMap,
     app_state: &AppState,
 ) -> Result<AdminIdentity, GatewayError> {
-    if let Some(token) = bearer_token(headers) {
-        if let Some(session) = app_state.login_manager.validate_tui_token(&token).await? {
-            return Ok(AdminIdentity::TuiSession(session));
-        }
+    if let Some(token) = bearer_token(headers)
+        && let Some(session) = app_state.login_manager.validate_tui_token(&token).await?
+    {
+        return Ok(AdminIdentity::TuiSession(session));
     }
 
-    if let Some(session_id) = cookie_value(headers, SESSION_COOKIE) {
-        if let Some(session) = app_state.login_manager.get_session(&session_id).await? {
-            return Ok(AdminIdentity::WebSession(session));
-        }
+    if let Some(session_id) = cookie_value(headers, SESSION_COOKIE)
+        && let Some(session) = app_state.login_manager.get_session(&session_id).await?
+    {
+        return Ok(AdminIdentity::WebSession(session));
     }
 
     Err(GatewayError::Config("管理员认证失败".into()))
@@ -68,23 +68,19 @@ pub async fn ensure_client(
         return Err(GatewayError::Config("invalid token".into()));
     };
     if !t.enabled {
-        if let Some(max_amount) = t.max_amount {
-            if let Ok(spent) = app_state
+        if let Some(max_amount) = t.max_amount
+            && let Ok(spent) = app_state
                 .log_store
                 .sum_spent_amount_by_client_token(&tok)
                 .await
-            {
-                if spent >= max_amount {
-                    return Err(GatewayError::Config("token budget exceeded".into()));
-                }
-            }
+            && spent >= max_amount
+        {
+            return Err(GatewayError::Config("token budget exceeded".into()));
         }
         return Err(GatewayError::Config("token disabled".into()));
     }
-    if let Some(exp) = t.expires_at {
-        if chrono::Utc::now() > exp {
-            return Err(GatewayError::Config("token expired".into()));
-        }
+    if let Some(exp) = t.expires_at && chrono::Utc::now() > exp {
+        return Err(GatewayError::Config("token expired".into()));
     }
     Ok(tok)
 }

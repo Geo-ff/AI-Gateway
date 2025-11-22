@@ -116,10 +116,10 @@ pub(super) async fn log_stream_success(
 
     // 增量更新 admin_tokens：金额与 tokens（仅非管理员令牌）
     if let Some(tok) = client_token.as_deref().filter(|t| *t != "admin_token") {
-        if let Some(delta) = amount_spent {
-            if let Err(e) = app_state.token_store.add_amount_spent(tok, delta).await {
-                tracing::warn!("Failed to update token spent: {}", e);
-            }
+        if let Some(delta) = amount_spent
+            && let Err(e) = app_state.token_store.add_amount_spent(tok, delta).await
+        {
+            tracing::warn!("Failed to update token spent: {}", e);
         }
         if let Some(u) = usage.as_ref() {
             let prompt = u.prompt_tokens as i64;
@@ -136,18 +136,14 @@ pub(super) async fn log_stream_success(
     }
 
     // Auto-disable token when exceeding budget (streaming)
-    if let Some(tok) = client_token.as_deref() {
-        if let Ok(Some(t)) = app_state.token_store.get_token(tok).await {
-            if let Some(max_amount) = t.max_amount {
-                if t.amount_spent > max_amount {
-                    let _ = app_state.token_store.set_enabled(tok, false).await;
-                }
-            }
-            if let Some(max_tokens) = t.max_tokens {
-                if t.total_tokens_spent > max_tokens {
-                    let _ = app_state.token_store.set_enabled(tok, false).await;
-                }
-            }
+    if let Some(tok) = client_token.as_deref()
+        && let Ok(Some(t)) = app_state.token_store.get_token(tok).await
+    {
+        if let Some(max_amount) = t.max_amount && t.amount_spent > max_amount {
+            let _ = app_state.token_store.set_enabled(tok, false).await;
+        }
+        if let Some(max_tokens) = t.max_tokens && t.total_tokens_spent > max_tokens {
+            let _ = app_state.token_store.set_enabled(tok, false).await;
         }
     }
 }
