@@ -1,10 +1,3 @@
 /target
-/ai-gateway
-/helicone
-/.zed
-/data
-/docs
-/new-api
-/getway
-/tui/target
-Prompt.md
+/frontend_tui/target
+.DS_Store

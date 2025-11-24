@@ -1,0 +1,5 @@
+api_base_url = "http://127.0.0.1:8080"
+private_key_b64 = "ib+8UBzF5bygv1qjZIxfqE3AiMnjDNMjNKuTEcyvji0="
+ttl_secs = 40
+max_uses = 2
+length = 30

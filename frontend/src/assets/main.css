@@ -1,0 +1,180 @@
+/* Global Reset & Base Styles */
+:root {
+  --el-color-primary: #4f46e5; /* Indigo 600 */
+  --el-color-primary-light-3: #6366f1;
+  --el-color-primary-light-5: #818cf8;
+  --el-color-primary-light-7: #a5b4fc;
+  --el-color-primary-light-8: #c7d2fe;
+  --el-color-primary-light-9: #e0e7ff;
+  --el-color-primary-dark-2: #4338ca;
+  
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 4px;
+  --el-border-radius-round: 20px;
+  
+  --app-bg-color: #f9fafb; /* Gray 50 */
+  --app-text-color: #1f2937; /* Gray 800 */
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--app-bg-color);
+  color: var(--app-text-color);
+  line-height: 1.5;
+}
+
+/* Custom Notification Styles */
+.el-notification.custom-notification {
+  border: none !important;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05) !important;
+  border-radius: 12px !important;
+  padding: 16px 20px !important;
+  min-width: 320px !important;
+  background-color: #ffffff; /* Default background */
+}
+
+.custom-notification .el-notification__title {
+  font-weight: 600;
+  font-size: 16px;
+  color: #111827;
+  margin-bottom: 4px;
+}
+
+.custom-notification .el-notification__content {
+  font-size: 14px;
+  color: #4b5563;
+  margin: 0;
+}
+
+/* Success Type - target the modifier class added by Element Plus */
+.el-notification.custom-notification.right.success,
+.el-notification.custom-notification.el-notification--success {
+  background-color: #f0fdf4 !important;
+  border-left: 4px solid #22c55e !important;
+}
+.el-notification.custom-notification.el-notification--success .el-notification__icon {
+  color: #22c55e;
+}
+
+/* Info Type */
+.el-notification.custom-notification.right.info,
+.el-notification.custom-notification.el-notification--info {
+  background-color: #eff6ff !important;
+  border-left: 4px solid #3b82f6 !important;
+}
+.el-notification.custom-notification.el-notification--info .el-notification__icon {
+  color: #3b82f6;
+}
+
+/* Warning Type */
+.el-notification.custom-notification.right.warning,
+.el-notification.custom-notification.el-notification--warning {
+  background-color: #fefce8 !important;
+  border-left: 4px solid #eab308 !important;
+}
+.el-notification.custom-notification.el-notification--warning .el-notification__icon {
+  color: #eab308;
+}
+
+/* Error Type */
+.el-notification.custom-notification.right.error,
+.el-notification.custom-notification.el-notification--error {
+  background-color: #fef2f2 !important;
+  border-left: 4px solid #ef4444 !important;
+}
+.el-notification.custom-notification.el-notification--error .el-notification__icon {
+  color: #ef4444;
+}
+
+/* Layout Helpers */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.page-header {
+  margin-bottom: 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.page-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+/* Card Styling Overrides */
+.el-card {
+  border: none !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
+  border-radius: 12px !important;
+  transition: all 0.3s ease;
+}
+
+.el-card:hover {
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05) !important;
+}
+
+.el-card__header {
+  padding: 16px 20px !important;
+  border-bottom: 1px solid #f3f4f6 !important;
+  font-weight: 600;
+  color: #374151;
+}
+
+.el-card__body {
+  padding: 20px !important;
+}
+
+/* Button Styling Overrides */
+.el-button {
+  font-weight: 500 !important;
+  border-radius: 8px !important;
+  padding: 8px 16px !important;
+  height: auto !important;
+  min-height: 32px;
+}
+
+.el-button--primary {
+  box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.2), 0 2px 4px -1px rgba(79, 70, 229, 0.1);
+}
+
+.el-button--primary:hover {
+  box-shadow: 0 6px 8px -1px rgba(79, 70, 229, 0.3), 0 3px 6px -1px rgba(79, 70, 229, 0.15);
+}
+
+/* Input Styling Overrides */
+.el-input__wrapper {
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important;
+  border: 1px solid #e5e7eb !important;
+  padding: 4px 11px !important;
+  border-radius: 8px !important;
+}
+
+.el-input__wrapper:hover {
+  border-color: var(--el-color-primary-light-3) !important;
+}
+
+.el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 1px var(--el-color-primary) !important;
+  border-color: var(--el-color-primary) !important;
+}
+
+/* Table Styling */
+.el-table {
+  border-radius: 8px;
+  overflow: hidden;
+  --el-table-header-bg-color: #f9fafb;
+}
+
+.el-table th.el-table__cell {
+  background-color: #f9fafb !important;
+  color: #4b5563;
+  font-weight: 600;
+}
