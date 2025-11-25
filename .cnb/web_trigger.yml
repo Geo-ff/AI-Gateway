@@ -1,0 +1,7 @@
+# .cnb/web_trigger.yml
+branch:
+  - buttons:
+      - name: 构建开发镜像
+        description: 构建并推送 Rust 开发环境镜像
+        event: web_trigger_build_image
+        isDefault: true
