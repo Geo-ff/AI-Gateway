@@ -1,9 +1,11 @@
 # .cnb.yml
 
-# 手动触发构建并推送镜像到制品库
-build-dev-image:
-  api_trigger:
+# 手动触发：构建并推送镜像到制品库
+$:
+  web_trigger_build_image:
     - name: build-and-push
+      runner:
+        cpus: 8
       services:
         - docker
       stages:
@@ -12,14 +14,12 @@ build-dev-image:
         - name: push image
           script: docker push docker.cnb.cool/yueweix/gateway_zero/rust-dev:latest
 
-# 日常使用：直接用制品库的镜像启动开发环境
-$:
+  # 日常使用：直接用制品库的镜像启动开发环境
   vscode:
     - name: rust-dev
       runner:
         cpus: 8
       docker:
-        # 使用制品库的镜像
         image: docker.cnb.cool/yueweix/gateway_zero/rust-dev:latest
       services:
         - vscode
