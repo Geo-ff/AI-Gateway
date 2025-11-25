@@ -4,7 +4,7 @@ RUN sed -i 's@deb.debian.org@mirrors.cloud.tencent.com@g' /etc/apt/sources.list.
 
 # Install additional development tools and dependencies
 RUN apt-get update && \
-    apt-get install -ycmake clang llvm-dev libclang-dev \
+    apt-get install -y cmake clang llvm-dev libclang-dev \
             protobuf-compiler \
             wget unzip lsof nload htop net-tools dnsutils openssh-server vim && \
     apt-get clean && \
