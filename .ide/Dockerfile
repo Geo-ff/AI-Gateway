@@ -1,3 +1,4 @@
+# .ide/Dockerfile
 FROM rust:1.91.1
 
 RUN sed -i 's@deb.debian.org@mirrors.cloud.tencent.com@g' /etc/apt/sources.list.d/debian.sources
@@ -10,17 +11,14 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Install fnm and Node.js 22
-RUN curl -o- https://fnm.vercel.app/install | bash && \
-    export PATH="/root/.local/share/fnm:$PATH" && \
-    eval "$(fnm env)" && \
-    fnm install 22 && \
-    fnm use 22 && \
-    npm install -g @openai/codex @anthropic-ai/claude-code @cometix/ccline
-
-# Make fnm and node available in all shells
-ENV PATH="/root/.local/share/fnm:$PATH"
-RUN echo 'eval "$(fnm env)"' >> /root/.bashrc
+# Install nvm and Node.js 22
+ENV NVM_DIR=/root/.nvm
+ENV NVM_NODEJS_ORG_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/nodejs-release/
+RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && \
+    . "$NVM_DIR/nvm.sh" && \
+    nvm install 22 && \
+    npm install -g @openai/codex @anthropic-ai/claude-code @cometix/ccline && \
+    ln -s "$NVM_DIR/versions/node/$(nvm current)/bin/"* /usr/local/bin/
 
 # Install Rust development VS Code extensions for code-server
 RUN curl -fsSL https://code-server.dev/install.sh | sh \
