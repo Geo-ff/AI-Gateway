@@ -7,6 +7,7 @@ mod logging;
 mod providers;
 mod routing;
 mod server;
+mod users;
 
 use tracing_subscriber::{EnvFilter, fmt};
 

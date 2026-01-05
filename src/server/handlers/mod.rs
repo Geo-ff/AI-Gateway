@@ -10,6 +10,7 @@ mod admin_logs;
 mod admin_metrics;
 mod admin_prices;
 mod admin_tokens;
+mod admin_users;
 mod auth;
 mod auth_keys;
 mod auth_login;
@@ -93,6 +94,16 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/admin/tokens/{token}/toggle",
             post(admin_tokens::toggle_token),
+        )
+        .route(
+            "/admin/users",
+            get(admin_users::list_users).post(admin_users::create_user),
+        )
+        .route(
+            "/admin/users/{id}",
+            get(admin_users::get_user)
+                .put(admin_users::update_user)
+                .delete(admin_users::delete_user),
         )
         .route(
             "/admin/model-prices",

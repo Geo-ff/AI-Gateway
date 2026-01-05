@@ -178,6 +178,111 @@ components:
         - completion_tokens_spent
         - total_tokens_spent
 
+    # 用户
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          description: 用户ID
+        first_name:
+          type: string
+          description: 名
+        last_name:
+          type: string
+          description: 姓
+        username:
+          type: string
+          description: 用户名
+        email:
+          type: string
+          description: 邮箱
+        phone_number:
+          type: string
+          description: 电话号码
+        status:
+          type: string
+          enum: [active, inactive, invited, suspended]
+          description: 用户状态
+        role:
+          type: string
+          enum: [superadmin, admin, cashier, manager]
+          description: 用户角色
+        created_at:
+          type: string
+          format: date-time
+          description: 创建时间
+        updated_at:
+          type: string
+          format: date-time
+          description: 更新时间
+      required:
+        - id
+        - first_name
+        - last_name
+        - username
+        - email
+        - phone_number
+        - status
+        - role
+        - created_at
+        - updated_at
+
+    CreateUserRequest:
+      type: object
+      properties:
+        first_name:
+          type: string
+          nullable: true
+        last_name:
+          type: string
+          nullable: true
+        username:
+          type: string
+          nullable: true
+        email:
+          type: string
+        phone_number:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [active, inactive, invited, suspended]
+          default: invited
+        role:
+          type: string
+          enum: [superadmin, admin, cashier, manager]
+          default: admin
+      required:
+        - email
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        first_name:
+          type: string
+          nullable: true
+        last_name:
+          type: string
+          nullable: true
+        username:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        phone_number:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [active, inactive, invited, suspended]
+          nullable: true
+        role:
+          type: string
+          enum: [superadmin, admin, cashier, manager]
+          nullable: true
+
     # 创建令牌请求
     CreateTokenRequest:
       type: object
@@ -650,6 +755,155 @@ paths:
                     type: boolean
         '404':
           description: 令牌不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /admin/users:
+    get:
+      summary: 获取用户列表
+      description: 获取所有用户列表
+      operationId: listAdminUsers
+      tags:
+        - Admin
+      security:
+        - AdminToken: []
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      summary: 创建用户
+      description: 创建新用户
+      operationId: createAdminUser
+      tags:
+        - Admin
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /admin/users/{id}:
+    get:
+      summary: 获取用户详情
+      description: 获取指定用户信息
+      operationId: getAdminUser
+      tags:
+        - Admin
+      security:
+        - AdminToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 用户ID
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: 用户不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    put:
+      summary: 更新用户
+      description: 更新指定用户信息（部分字段可选）
+      operationId: updateAdminUser
+      tags:
+        - Admin
+      security:
+        - AdminToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 用户ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: 用户不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      summary: 删除用户
+      description: 删除指定用户
+      operationId: deleteAdminUser
+      tags:
+        - Admin
+      security:
+        - AdminToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 用户ID
+      responses:
+        '204':
+          description: 删除成功
+        '404':
+          description: 用户不存在
           content:
             application/json:
               schema:

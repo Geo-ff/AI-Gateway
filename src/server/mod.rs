@@ -18,6 +18,7 @@ use crate::logging::postgres_store::PgLogStore;
 use crate::server::storage_traits::{
     AdminPublicKeyRecord, LoginStore, ModelCache, ProviderStore, RequestLogStore,
 };
+use crate::users::UserStore;
 use axum::Router;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64_STANDARD;
@@ -33,6 +34,7 @@ type StoreTuple = (
     Arc<dyn ProviderStore + Send + Sync>,
     Arc<dyn TokenStore + Send + Sync>,
     Arc<dyn LoginStore + Send + Sync>,
+    Arc<dyn UserStore + Send + Sync>,
 );
 
 #[derive(Clone)]
@@ -43,6 +45,7 @@ pub struct AppState {
     pub providers: Arc<dyn ProviderStore + Send + Sync>,
     pub token_store: Arc<dyn TokenStore + Send + Sync>,
     pub login_manager: Arc<login::LoginManager>,
+    pub user_store: Arc<dyn UserStore + Send + Sync>,
 }
 
 /// 创建 HTTP 应用：
@@ -52,7 +55,14 @@ pub struct AppState {
 pub async fn create_app(config: Settings) -> AppResult<Router> {
     // Admin identity token generated per boot
     // Choose stores based on Postgres availability
-    let (log_store_arc, model_cache_arc, provider_store_arc, token_store, login_store_arc): StoreTuple =
+    let (
+        log_store_arc,
+        model_cache_arc,
+        provider_store_arc,
+        token_store,
+        login_store_arc,
+        user_store_arc,
+    ): StoreTuple =
         if let Some(pg_url) = &config.logging.pg_url {
         // Strict Postgres-only mode (no SQLite fallback)
         let pool_size = config.logging.pg_pool_size.unwrap_or(4);
@@ -66,10 +76,12 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
             log_cache.clone(),
             Arc::new(ts),
             log_cache.clone(),
+            log_cache.clone(),
         )
     } else {
         let db_logger = Arc::new(DatabaseLogger::new(&config.logging.database_path).await?);
         (
+            db_logger.clone(),
             db_logger.clone(),
             db_logger.clone(),
             db_logger.clone(),
@@ -96,6 +108,7 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
         providers: provider_store_arc,
         token_store,
         login_manager: Arc::new(login::LoginManager::new(login_store_arc.clone())),
+        user_store: user_store_arc,
     };
 
     let mut app = handlers::routes().with_state(Arc::new(app_state));
@@ -104,7 +117,13 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
     use axum::http::{Method, header};
     use tower_http::cors::{AllowOrigin, CorsLayer};
     let cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
         // 反射请求来源（便于 dev server 代理转发携带 Cookie）
         .allow_origin(AllowOrigin::mirror_request())

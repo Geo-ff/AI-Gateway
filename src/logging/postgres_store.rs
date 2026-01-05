@@ -256,6 +256,25 @@ impl PgLogStore {
             .await
             .map_err(|e| GatewayError::Config(format!("Failed to init web_sessions: {}", e)))?;
 
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                first_name TEXT NOT NULL,
+                last_name TEXT NOT NULL,
+                username TEXT NOT NULL UNIQUE,
+                email TEXT NOT NULL UNIQUE,
+                phone_number TEXT NOT NULL,
+                status TEXT NOT NULL,
+                role TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init users: {}", e)))?;
+
         Ok(store)
     }
 }

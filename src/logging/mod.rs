@@ -5,7 +5,9 @@ pub mod database_keys;
 pub mod database_pricing;
 pub mod database_provider_ops;
 pub mod database_providers;
+pub mod database_users;
 pub mod postgres_store;
+pub mod postgres_users;
 pub mod time;
 pub mod types;
 

@@ -632,6 +632,22 @@ impl DatabaseLogger {
             [],
         )?;
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                first_name TEXT NOT NULL,
+                last_name TEXT NOT NULL,
+                username TEXT NOT NULL UNIQUE,
+                email TEXT NOT NULL UNIQUE,
+                phone_number TEXT NOT NULL,
+                status TEXT NOT NULL,
+                role TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+
         // Schema migrations for request_logs: client_token + amount_spent columns
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN client_token TEXT", []);
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN amount_spent REAL", []);
