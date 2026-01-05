@@ -1,0 +1,1212 @@
+openapi: 3.0.3
+info:
+  title: Gateway Zero API
+  description: |
+    Gateway Zero 是一个基于 Rust 和 Axum 框架开发的 AI API 网关系统。
+    它提供统一的 OpenAI 兼容接口，支持多个 AI 提供商（OpenAI、Anthropic、智谱 AI 等），
+    并具备负载均衡、令牌管理、用量统计等企业级功能。
+  version: 0.1.0
+  contact:
+    name: Gateway Zero Team
+
+servers:
+  - url: http://localhost:8080
+    description: 本地开发服务器
+  - url: https://api.example.com
+    description: 生产环境服务器
+
+security:
+  - BearerAuth: []
+  - AdminToken: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: TUI Session Token 认证
+
+    AdminToken:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: Admin Token 认证 (格式: Bearer <token>)
+
+  schemas:
+    # 错误响应
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: 错误信息
+      required:
+        - error
+
+    # 请求日志
+    RequestLog:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: 日志ID
+        timestamp:
+          type: string
+          format: date-time
+          description: 请求时间戳
+        method:
+          type: string
+          description: HTTP 方法
+        path:
+          type: string
+          description: 请求路径
+        request_type:
+          type: string
+          description: 请求类型
+        model:
+          type: string
+          nullable: true
+          description: 使用的模型
+        provider:
+          type: string
+          nullable: true
+          description: 提供商名称
+        api_key:
+          type: string
+          nullable: true
+          description: API Key (可能被脱敏)
+        client_token:
+          type: string
+          nullable: true
+          description: 客户端令牌
+        amount_spent:
+          type: number
+          format: double
+          nullable: true
+          description: 本次请求消耗的金额
+        status_code:
+          type: integer
+          description: HTTP 状态码
+        response_time_ms:
+          type: integer
+          format: int64
+          description: 响应时间(毫秒)
+        prompt_tokens:
+          type: integer
+          nullable: true
+          description: 提示词 tokens
+        completion_tokens:
+          type: integer
+          nullable: true
+          description: 补全 tokens
+        total_tokens:
+          type: integer
+          nullable: true
+          description: 总 tokens
+        cached_tokens:
+          type: integer
+          nullable: true
+          description: 缓存 tokens
+        reasoning_tokens:
+          type: integer
+          nullable: true
+          description: 推理 tokens
+        error_message:
+          type: string
+          nullable: true
+          description: 错误信息
+
+    # 管理员令牌
+    AdminToken:
+      type: object
+      properties:
+        token:
+          type: string
+          description: 令牌字符串
+        allowed_models:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: 允许使用的模型列表 (null 表示不限制)
+        max_tokens:
+          type: integer
+          format: int64
+          nullable: true
+          description: 最大 tokens 限制 (已废弃)
+        max_amount:
+          type: number
+          format: double
+          nullable: true
+          description: 最大金额限制
+        enabled:
+          type: boolean
+          description: 是否启用
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: 过期时间 (null 表示不过期)
+        created_at:
+          type: string
+          format: date-time
+          description: 创建时间
+        amount_spent:
+          type: number
+          format: double
+          description: 累计消费金额
+        prompt_tokens_spent:
+          type: integer
+          format: int64
+          description: 累计提示词 tokens
+        completion_tokens_spent:
+          type: integer
+          format: int64
+          description: 累计补全 tokens
+        total_tokens_spent:
+          type: integer
+          format: int64
+          description: 累计总 tokens
+      required:
+        - token
+        - enabled
+        - created_at
+        - amount_spent
+        - prompt_tokens_spent
+        - completion_tokens_spent
+        - total_tokens_spent
+
+    # 创建令牌请求
+    CreateTokenRequest:
+      type: object
+      properties:
+        allowed_models:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: 允许使用的模型列表
+        max_amount:
+          type: number
+          format: double
+          nullable: true
+          description: 最大金额限制
+        enabled:
+          type: boolean
+          default: true
+          description: 是否启用
+        expires_at:
+          type: string
+          nullable: true
+          description: 过期时间 (北京时间字符串)
+
+    # 更新令牌请求
+    UpdateTokenRequest:
+      type: object
+      properties:
+        allowed_models:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: 允许使用的模型列表
+        max_amount:
+          type: number
+          format: double
+          nullable: true
+          description: 最大金额限制
+        enabled:
+          type: boolean
+          nullable: true
+          description: 是否启用
+        expires_at:
+          type: string
+          nullable: true
+          description: 过期时间 (北京时间字符串)
+
+    # 提供商
+    Provider:
+      type: object
+      properties:
+        name:
+          type: string
+          description: 提供商名称
+        api_type:
+          type: string
+          enum: [openai, anthropic, zhipu]
+          description: 提供商类型
+        base_url:
+          type: string
+          description: API 基础 URL
+        api_keys:
+          type: array
+          items:
+            type: string
+          description: API Keys 列表
+        models_endpoint:
+          type: string
+          nullable: true
+          description: 模型列表端点
+      required:
+        - name
+        - api_type
+        - base_url
+        - api_keys
+
+    # 模型
+    Model:
+      type: object
+      properties:
+        id:
+          type: string
+          description: 模型ID
+        object:
+          type: string
+          description: 对象类型
+        created:
+          type: integer
+          format: int64
+          description: 创建时间戳
+        owned_by:
+          type: string
+          description: 所有者
+      required:
+        - id
+        - object
+        - created
+        - owned_by
+
+    # 模型列表响应
+    ModelsResponse:
+      type: object
+      properties:
+        object:
+          type: string
+          default: list
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Model'
+      required:
+        - object
+        - data
+
+    # 聊天补全请求
+    ChatCompletionRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          description: 模型名称 (格式: provider/model 或 model)
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              role:
+                type: string
+                enum: [system, user, assistant]
+              content:
+                type: string
+          description: 消息列表
+        stream:
+          type: boolean
+          default: false
+          description: 是否使用流式响应
+        temperature:
+          type: number
+          format: float
+          nullable: true
+          description: 温度参数
+        max_tokens:
+          type: integer
+          nullable: true
+          description: 最大生成 tokens
+        top_p:
+          type: number
+          format: float
+          nullable: true
+          description: Top-p 采样参数
+      required:
+        - model
+        - messages
+
+    # 聊天补全响应
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: 响应ID
+        object:
+          type: string
+          default: chat.completion
+        created:
+          type: integer
+          format: int64
+          description: 创建时间戳
+        model:
+          type: string
+          description: 使用的模型
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              message:
+                type: object
+                properties:
+                  role:
+                    type: string
+                  content:
+                    type: string
+              finish_reason:
+                type: string
+        usage:
+          type: object
+          properties:
+            prompt_tokens:
+              type: integer
+            completion_tokens:
+              type: integer
+            total_tokens:
+              type: integer
+
+    # 令牌余额响应
+    TokenBalanceResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: 令牌字符串
+        enabled:
+          type: boolean
+          description: 是否启用
+        max_amount:
+          type: number
+          format: double
+          nullable: true
+          description: 最大金额限制
+        amount_spent:
+          type: number
+          format: double
+          description: 已消费金额
+        amount_remaining:
+          type: number
+          format: double
+          nullable: true
+          description: 剩余金额
+        total_tokens_spent:
+          type: integer
+          format: int64
+          description: 累计总 tokens
+
+paths:
+  # ==================== OpenAI 兼容接口 ====================
+  /v1/chat/completions:
+    post:
+      summary: 聊天补全
+      description: 创建聊天补全请求，支持流式和非流式响应
+      operationId: createChatCompletion
+      tags:
+        - Chat
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponse'
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE 流式响应
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务器错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/models:
+    get:
+      summary: 获取模型列表
+      description: 获取所有可用的模型列表
+      operationId: listModels
+      tags:
+        - Models
+      security:
+        - AdminToken: []
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsResponse'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/token/balance:
+    get:
+      summary: 获取令牌余额
+      description: 获取当前令牌的余额和使用情况
+      operationId: getTokenBalance
+      tags:
+        - Token
+      security:
+        - AdminToken: []
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenBalanceResponse'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ==================== 管理员接口 ====================
+  /admin/tokens:
+    get:
+      summary: 获取令牌列表
+      description: 获取所有管理员令牌列表
+      operationId: listAdminTokens
+      tags:
+        - Admin
+      security:
+        - AdminToken: []
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdminToken'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      summary: 创建令牌
+      description: 创建新的管理员令牌
+      operationId: createAdminToken
+      tags:
+        - Admin
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTokenRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminToken'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /admin/tokens/{token}:
+    get:
+      summary: 获取令牌详情
+      description: 获取指定令牌的详细信息
+      operationId: getAdminToken
+      tags:
+        - Admin
+      security:
+        - AdminToken: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 令牌字符串
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminToken'
+        '404':
+          description: 令牌不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    patch:
+      summary: 更新令牌
+      description: 更新指定令牌的配置
+      operationId: updateAdminToken
+      tags:
+        - Admin
+      security:
+        - AdminToken: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 令牌字符串
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTokenRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminToken'
+        '404':
+          description: 令牌不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      summary: 删除令牌
+      description: 删除指定的管理员令牌
+      operationId: deleteAdminToken
+      tags:
+        - Admin
+      security:
+        - AdminToken: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 令牌字符串
+      responses:
+        '200':
+          description: 成功删除
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '404':
+          description: 令牌不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ==================== 提供商管理接口 ====================
+  /providers:
+    get:
+      summary: 获取提供商列表
+      description: 获取所有AI提供商列表
+      operationId: listProviders
+      tags:
+        - Providers
+      security:
+        - AdminToken: []
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Provider'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      summary: 创建提供商
+      description: 创建新的AI提供商配置
+      operationId: createProvider
+      tags:
+        - Providers
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: 提供商名称
+                api_type:
+                  type: string
+                  enum: [openai, anthropic, zhipu]
+                  description: 提供商类型
+                base_url:
+                  type: string
+                  description: API 基础 URL
+                models_endpoint:
+                  type: string
+                  nullable: true
+                  description: 模型列表端点
+              required:
+                - name
+                - api_type
+                - base_url
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Provider'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /providers/{provider}:
+    get:
+      summary: 获取提供商详情
+      description: 获取指定提供商的详细信息
+      operationId: getProvider
+      tags:
+        - Providers
+      security:
+        - AdminToken: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Provider'
+        '404':
+          description: 提供商不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    put:
+      summary: 更新提供商
+      description: 更新指定提供商的配置
+      operationId: updateProvider
+      tags:
+        - Providers
+      security:
+        - AdminToken: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                api_type:
+                  type: string
+                  enum: [openai, anthropic, zhipu]
+                base_url:
+                  type: string
+                models_endpoint:
+                  type: string
+                  nullable: true
+              required:
+                - api_type
+                - base_url
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Provider'
+        '404':
+          description: 提供商不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      summary: 删除提供商
+      description: 删除指定的提供商配置
+      operationId: deleteProvider
+      tags:
+        - Providers
+      security:
+        - AdminToken: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+      responses:
+        '200':
+          description: 成功删除
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '404':
+          description: 提供商不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /providers/{provider}/keys:
+    get:
+      summary: 获取提供商密钥列表
+      description: 获取指定提供商的所有API密钥
+      operationId: listProviderKeys
+      tags:
+        - Providers
+      security:
+        - AdminToken: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: string
+        '404':
+          description: 提供商不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      summary: 添加提供商密钥
+      description: 为指定提供商添加新的API密钥
+      operationId: addProviderKey
+      tags:
+        - Providers
+      security:
+        - AdminToken: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                key:
+                  type: string
+                  description: API密钥
+              required:
+                - key
+      responses:
+        '200':
+          description: 成功添加
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '404':
+          description: 提供商不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      summary: 删除提供商密钥
+      description: 删除指定提供商的API密钥
+      operationId: deleteProviderKey
+      tags:
+        - Providers
+      security:
+        - AdminToken: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                key:
+                  type: string
+                  description: 要删除的API密钥
+              required:
+                - key
+      responses:
+        '200':
+          description: 成功删除
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '404':
+          description: 提供商或密钥不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ==================== 日志查询接口 ====================
+  /admin/logs:
+    get:
+      summary: 获取请求日志列表
+      description: 获取系统请求日志，支持分页
+      operationId: listRequestLogs
+      tags:
+        - Logs
+      security:
+        - AdminToken: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+          description: 返回记录数量限制
+        - name: cursor
+          in: query
+          schema:
+            type: integer
+          description: 分页游标（上一页最后一条记录的ID）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RequestLog'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ==================== 统计分析接口 ====================
+  /admin/metrics/usage:
+    get:
+      summary: 获取使用量统计
+      description: 获取系统使用量统计信息
+      operationId: getUsageMetrics
+      tags:
+        - Metrics
+      security:
+        - AdminToken: []
+      parameters:
+        - name: start_date
+          in: query
+          schema:
+            type: string
+            format: date
+          description: 开始日期
+        - name: end_date
+          in: query
+          schema:
+            type: string
+            format: date
+          description: 结束日期
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_requests:
+                    type: integer
+                    description: 总请求数
+                  total_tokens:
+                    type: integer
+                    description: 总token数
+                  total_amount:
+                    type: number
+                    format: double
+                    description: 总消费金额
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ==================== 模型缓存接口 ====================
+  /models/{provider}/cache:
+    post:
+      summary: 更新模型缓存
+      description: 更新指定提供商的模型缓存
+      operationId: updateModelCache
+      tags:
+        - Models
+      security:
+        - AdminToken: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+      responses:
+        '200':
+          description: 成功更新
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '404':
+          description: 提供商不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      summary: 删除模型缓存
+      description: 删除指定提供商的模型缓存
+      operationId: deleteModelCache
+      tags:
+        - Models
+      security:
+        - AdminToken: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+      responses:
+        '200':
+          description: 成功删除
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  # ==================== 价格管理接口 ====================
+  /admin/model-prices:
+    get:
+      summary: 获取模型价格列表
+      description: 获取所有模型的价格配置
+      operationId: listModelPrices
+      tags:
+        - Admin
+      security:
+        - AdminToken: []
+      parameters:
+        - name: provider
+          in: query
+          schema:
+            type: string
+          description: 按提供商筛选（可选）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    provider:
+                      type: string
+                    model:
+                      type: string
+                    prompt_price_per_million:
+                      type: number
+                      format: double
+                    completion_price_per_million:
+                      type: number
+                      format: double
+                    currency:
+                      type: string
+                      nullable: true
+
+    post:
+      summary: 设置模型价格
+      description: 设置或更新模型价格
+      operationId: setModelPrice
+      tags:
+        - Admin
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider:
+                  type: string
+                  description: 提供商名称
+                model:
+                  type: string
+                  description: 模型名称
+                prompt_price_per_million:
+                  type: number
+                  format: double
+                  description: 每百万输入tokens价格
+                completion_price_per_million:
+                  type: number
+                  format: double
+                  description: 每百万输出tokens价格
+                currency:
+                  type: string
+                  nullable: true
+                  description: 货币单位
+              required:
+                - provider
+                - model
+                - prompt_price_per_million
+                - completion_price_per_million
+      responses:
+        '200':
+          description: 成功设置
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+tags:
+  - name: Chat
+    description: 聊天补全相关接口
+  - name: Models
+    description: 模型管理相关接口
+  - name: Token
+    description: 令牌管理相关接口
+  - name: Admin
+    description: 管理员接口
+  - name: Providers
+    description: 提供商管理接口
+  - name: Logs
+    description: 日志查询接口
+  - name: Metrics
+    description: 统计分析接口

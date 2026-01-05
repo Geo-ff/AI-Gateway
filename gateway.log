@@ -1,0 +1,20 @@
+[2m2025-12-27 15:41:27[0m [32m INFO[0m [2mtokio_postgres::connection[0m[2m:[0m NOTICE: relation "request_logs" already exists, skipping
+[2m2025-12-27 15:41:27[0m [32m INFO[0m [2mtokio_postgres::connection[0m[2m:[0m NOTICE: relation "cached_models" already exists, skipping
+[2m2025-12-27 15:41:27[0m [32m INFO[0m [2mtokio_postgres::connection[0m[2m:[0m NOTICE: relation "provider_ops_logs" already exists, skipping
+[2m2025-12-27 15:41:27[0m [32m INFO[0m [2mtokio_postgres::connection[0m[2m:[0m NOTICE: relation "model_prices" already exists, skipping
+[2m2025-12-27 15:41:27[0m [32m INFO[0m [2mtokio_postgres::connection[0m[2m:[0m NOTICE: relation "providers" already exists, skipping
+[2m2025-12-27 15:41:27[0m [32m INFO[0m [2mtokio_postgres::connection[0m[2m:[0m NOTICE: relation "provider_keys" already exists, skipping
+[2m2025-12-27 15:41:27[0m [32m INFO[0m [2mtokio_postgres::connection[0m[2m:[0m NOTICE: relation "admin_public_keys" already exists, skipping
+[2m2025-12-27 15:41:27[0m [32m INFO[0m [2mtokio_postgres::connection[0m[2m:[0m NOTICE: relation "tui_sessions" already exists, skipping
+[2m2025-12-27 15:41:27[0m [32m INFO[0m [2mtokio_postgres::connection[0m[2m:[0m NOTICE: relation "login_codes" already exists, skipping
+[2m2025-12-27 15:41:27[0m [32m INFO[0m [2mtokio_postgres::connection[0m[2m:[0m NOTICE: relation "web_sessions" already exists, skipping
+[2m2025-12-27 15:41:27[0m [32m INFO[0m [2mgateway::server[0m[2m:[0m Using PostgreSQL for logs and cache
+[2m2025-12-27 15:41:27[0m [32m INFO[0m [2mtokio_postgres::connection[0m[2m:[0m NOTICE: relation "admin_tokens" already exists, skipping
+[2m2025-12-27 15:41:27[0m [32m INFO[0m [2mgateway[0m[2m:[0m Gateway server running on http://0.0.0.0:8080
+[2m2025-12-27 15:45:33[0m [32m INFO[0m [2mgateway::server::handlers::auth_login[0m[2m:[0m attempt redeem code [3mcode_preview[0m[2m=[0mQEX
+[2m2025-12-27 15:45:33[0m [33m WARN[0m [2mgateway::server::handlers::auth_login[0m[2m:[0m redeem failed: invalid/expired/used
+[2m2025-12-27 15:45:49[0m [32m INFO[0m [2mgateway::server::handlers::auth_login[0m[2m:[0m attempt redeem code [3mcode_preview[0m[2m=[0mmGL
+[2m2025-12-27 15:45:49[0m [33m WARN[0m [2mgateway::server::handlers::auth_login[0m[2m:[0m redeem failed: invalid/expired/used
+[2m2025-12-27 15:55:16[0m [32m INFO[0m [2mgateway::server::handlers::auth_login[0m[2m:[0m create_login_code request [3mttl_secs[0m[2m=[0m60 [3mmax_uses[0m[2m=[0m1 [3mlength[0m[2m=[0m32 [3mmagic_url[0m[2m=[0mfalse
+[2m2025-12-27 15:55:23[0m [32m INFO[0m [2mgateway::server::handlers::auth_login[0m[2m:[0m attempt redeem code [3mcode_preview[0m[2m=[0mWjw
+[2m2025-12-27 15:55:23[0m [32m INFO[0m [2mgateway::server::handlers::auth_login[0m[2m:[0m redeem success, session issued [3msecure_cookie[0m[2m=[0mfalse [3msession_id_preview[0m[2m=[0mM8tefD

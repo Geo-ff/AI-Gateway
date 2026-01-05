@@ -1,0 +1,348 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1600">
+  <defs>
+    <style>
+      .layer-bg { fill: #f8f9fa; stroke: #dee2e6; stroke-width: 2; }
+      .component { fill: #ffffff; stroke: #495057; stroke-width: 2; rx: 8; }
+      .module { fill: #e3f2fd; stroke: #1976d2; stroke-width: 2; rx: 6; }
+      .provider { fill: #fff3e0; stroke: #f57c00; stroke-width: 2; rx: 6; }
+      .storage { fill: #f3e5f5; stroke: #7b1fa2; stroke-width: 2; rx: 6; }
+      .middleware { fill: #e8f5e9; stroke: #388e3c; stroke-width: 2; rx: 6; }
+      .title { font-family: Arial, sans-serif; font-size: 16px; font-weight: bold; fill: #212529; }
+      .subtitle { font-family: Arial, sans-serif; font-size: 13px; fill: #495057; }
+      .small-text { font-family: Arial, sans-serif; font-size: 11px; fill: #6c757d; }
+      .arrow { stroke: #495057; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .data-arrow { stroke: #7b1fa2; stroke-width: 2; fill: none; marker-end: url(#data-arrowhead); stroke-dasharray: 5,5; }
+      .layer-title { font-family: Arial, sans-serif; font-size: 18px; font-weight: bold; fill: #343a40; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#495057" />
+    </marker>
+    <marker id="data-arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#7b1fa2" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="700" y="30" text-anchor="middle" class="layer-title" style="font-size: 24px;">Gateway Zero 后端架构</text>
+  <text x="700" y="55" text-anchor="middle" class="small-text">基于 Rust + Axum 的 AI API 网关系统</text>
+
+  <!-- Layer 1: Client Layer -->
+  <rect x="50" y="80" width="1300" height="100" class="layer-bg"/>
+  <text x="70" y="105" class="layer-title">客户端层</text>
+  
+  <rect x="250" y="120" width="200" height="50" class="component"/>
+  <text x="350" y="145" text-anchor="middle" class="title">Web 前端</text>
+  <text x="350" y="162" text-anchor="middle" class="small-text">React/Vue</text>
+  
+  <rect x="550" y="120" width="200" height="50" class="component"/>
+  <text x="650" y="145" text-anchor="middle" class="title">TUI 客户端</text>
+  <text x="650" y="162" text-anchor="middle" class="small-text">终端界面</text>
+  
+  <rect x="850" y="120" width="200" height="50" class="component"/>
+  <text x="950" y="145" text-anchor="middle" class="title">第三方应用</text>
+  <text x="950" y="162" text-anchor="middle" class="small-text">OpenAI SDK</text>
+
+  <!-- Arrows from clients to gateway -->
+  <path d="M 350 170 L 350 230" class="arrow"/>
+  <path d="M 650 170 L 650 230" class="arrow"/>
+  <path d="M 950 170 L 950 230" class="arrow"/>
+
+  <!-- Layer 2: Gateway Entry -->
+  <rect x="50" y="200" width="1300" height="140" class="layer-bg"/>
+  <text x="70" y="225" class="layer-title">网关入口层</text>
+  
+  <rect x="200" y="245" width="1000" height="80" class="component"/>
+  <text x="700" y="270" text-anchor="middle" class="title">Axum HTTP Server (Tokio Runtime)</text>
+  <text x="700" y="287" text-anchor="middle" class="small-text">地址: {host}:{port}</text>
+  
+  <!-- Middleware boxes inside server -->
+  <rect x="230" y="295" width="150" height="25" class="middleware"/>
+  <text x="305" y="311" text-anchor="middle" class="subtitle">CORS 中间件</text>
+  
+  <rect x="400" y="295" width="150" height="25" class="middleware"/>
+  <text x="475" y="311" text-anchor="middle" class="subtitle">认证中间件</text>
+  
+  <rect x="570" y="295" width="150" height="25" class="middleware"/>
+  <text x="645" y="311" text-anchor="middle" class="subtitle">请求日志</text>
+  
+  <rect x="740" y="295" width="150" height="25" class="middleware"/>
+  <text x="815" y="311" text-anchor="middle" class="subtitle">Tower Trace</text>
+  
+  <rect x="910" y="295" width="150" height="25" class="middleware"/>
+  <text x="985" y="311" text-anchor="middle" class="subtitle">路由分发</text>
+
+  <!-- Arrow to routing -->
+  <path d="M 700 325 L 700 370" class="arrow"/>
+
+  <!-- Layer 3: Routing & Auth -->
+  <rect x="50" y="360" width="1300" height="230" class="layer-bg"/>
+  <text x="70" y="385" class="layer-title">路由与认证层</text>
+
+  <!-- Auth modules -->
+  <g>
+    <rect x="100" y="410" width="180" height="160" class="module"/>
+    <text x="190" y="435" text-anchor="middle" class="title">认证模块</text>
+    
+    <rect x="115" y="450" width="150" height="28" class="component"/>
+    <text x="190" y="467" text-anchor="middle" class="subtitle">Admin Token 验证</text>
+    
+    <rect x="115" y="485" width="150" height="28" class="component"/>
+    <text x="190" y="502" text-anchor="middle" class="subtitle">TUI Session 管理</text>
+    
+    <rect x="115" y="520" width="150" height="28" class="component"/>
+    <text x="190" y="537" text-anchor="middle" class="subtitle">Ed25519 签名验证</text>
+  </g>
+
+  <!-- API handlers -->
+  <g>
+    <rect x="320" y="410" width="500" height="160" class="module"/>
+    <text x="570" y="435" text-anchor="middle" class="title">API 处理器 (Handlers)</text>
+    
+    <rect x="335" y="450" width="140" height="28" class="component"/>
+    <text x="405" y="467" text-anchor="middle" class="subtitle">Chat Completions</text>
+    
+    <rect x="335" y="485" width="140" height="28" class="component"/>
+    <text x="405" y="502" text-anchor="middle" class="subtitle">Models</text>
+    
+    <rect x="335" y="520" width="140" height="28" class="component"/>
+    <text x="405" y="537" text-anchor="middle" class="subtitle">Token Info</text>
+    
+    <rect x="490" y="450" width="140" height="28" class="component"/>
+    <text x="560" y="467" text-anchor="middle" class="subtitle">Admin Tokens</text>
+    
+    <rect x="490" y="485" width="140" height="28" class="component"/>
+    <text x="560" y="502" text-anchor="middle" class="subtitle">Providers</text>
+    
+    <rect x="490" y="520" width="140" height="28" class="component"/>
+    <text x="560" y="537" text-anchor="middle" class="subtitle">Metrics &amp; Logs</text>
+    
+    <rect x="645" y="450" width="160" height="28" class="component"/>
+    <text x="725" y="467" text-anchor="middle" class="subtitle">Model Cache</text>
+    
+    <rect x="645" y="485" width="160" height="28" class="component"/>
+    <text x="725" y="502" text-anchor="middle" class="subtitle">Provider Keys</text>
+    
+    <rect x="645" y="520" width="160" height="28" class="component"/>
+    <text x="725" y="537" text-anchor="middle" class="subtitle">Pricing</text>
+  </g>
+
+  <!-- Config module -->
+  <g>
+    <rect x="860" y="410" width="180" height="160" class="module"/>
+    <text x="950" y="435" text-anchor="middle" class="title">配置管理</text>
+    
+    <rect x="875" y="450" width="150" height="28" class="component"/>
+    <text x="950" y="467" text-anchor="middle" class="subtitle">TOML 配置</text>
+    
+    <rect x="875" y="485" width="150" height="28" class="component"/>
+    <text x="950" y="502" text-anchor="middle" class="subtitle">模型重定向</text>
+    
+    <rect x="875" y="520" width="150" height="28" class="component"/>
+    <text x="950" y="537" text-anchor="middle" class="subtitle">负载均衡策略</text>
+  </g>
+
+  <!-- Layer 4: Business Logic -->
+  <rect x="50" y="610" width="1300" height="220" class="layer-bg"/>
+  <text x="70" y="635" class="layer-title">业务逻辑层</text>
+
+  <path d="M 405 570 L 405 650" class="arrow"/>
+  
+  <g>
+    <rect x="100" y="660" width="200" height="150" class="module"/>
+    <text x="200" y="685" text-anchor="middle" class="title">模型解析</text>
+    
+    <rect x="115" y="700" width="170" height="30" class="component"/>
+    <text x="200" y="718" text-anchor="middle" class="subtitle">provider/model 解析</text>
+    
+    <rect x="115" y="738" width="170" height="30" class="component"/>
+    <text x="200" y="756" text-anchor="middle" class="subtitle">模型名称映射</text>
+    
+    <rect x="115" y="775" width="170" height="30" class="component"/>
+    <text x="200" y="793" text-anchor="middle" class="subtitle">模型重定向规则</text>
+  </g>
+
+  <path d="M 300 735 L 360 735" class="arrow"/>
+
+  <g>
+    <rect x="360" y="660" width="220" height="150" class="module"/>
+    <text x="470" y="685" text-anchor="middle" class="title">负载均衡器</text>
+    
+    <rect x="375" y="700" width="190" height="30" class="component"/>
+    <text x="470" y="718" text-anchor="middle" class="subtitle">First Available</text>
+    
+    <rect x="375" y="738" width="190" height="30" class="component"/>
+    <text x="470" y="756" text-anchor="middle" class="subtitle">Round Robin</text>
+    
+    <rect x="375" y="775" width="190" height="30" class="component"/>
+    <text x="470" y="793" text-anchor="middle" class="subtitle">Random</text>
+  </g>
+
+  <path d="M 580 735 L 640 735" class="arrow"/>
+
+  <g>
+    <rect x="640" y="660" width="200" height="150" class="module"/>
+    <text x="740" y="685" text-anchor="middle" class="title">提供商调度</text>
+    
+    <rect x="655" y="700" width="170" height="30" class="component"/>
+    <text x="740" y="718" text-anchor="middle" class="subtitle">API Key 选择</text>
+    
+    <rect x="655" y="738" width="170" height="30" class="component"/>
+    <text x="740" y="756" text-anchor="middle" class="subtitle">请求适配</text>
+    
+    <rect x="655" y="775" width="170" height="30" class="component"/>
+    <text x="740" y="793" text-anchor="middle" class="subtitle">响应转换</text>
+  </g>
+
+  <g>
+    <rect x="900" y="660" width="200" height="150" class="module"/>
+    <text x="1000" y="685" text-anchor="middle" class="title">流式处理</text>
+    
+    <rect x="915" y="700" width="170" height="30" class="component"/>
+    <text x="1000" y="718" text-anchor="middle" class="subtitle">SSE 流转换</text>
+    
+    <rect x="915" y="738" width="170" height="30" class="component"/>
+    <text x="1000" y="756" text-anchor="middle" class="subtitle">Token 计数</text>
+    
+    <rect x="915" y="775" width="170" height="30" class="component"/>
+    <text x="1000" y="793" text-anchor="middle" class="subtitle">错误处理</text>
+  </g>
+
+  <!-- Arrow to providers -->
+  <path d="M 740 810 L 740 870" class="arrow"/>
+
+  <!-- Layer 5: Provider Layer -->
+  <rect x="50" y="850" width="1300" height="180" class="layer-bg"/>
+  <text x="70" y="875" class="layer-title">AI 提供商层</text>
+
+  <g>
+    <rect x="200" y="900" width="240" height="110" class="provider"/>
+    <text x="320" y="925" text-anchor="middle" class="title">OpenAI Provider</text>
+    
+    <rect x="215" y="940" width="210" height="28" class="component"/>
+    <text x="320" y="957" text-anchor="middle" class="subtitle">GPT-4, GPT-3.5-turbo</text>
+    
+    <rect x="215" y="975" width="210" height="28" class="component"/>
+    <text x="320" y="992" text-anchor="middle" class="subtitle">兼容 API (OpenRouter等)</text>
+  </g>
+
+  <g>
+    <rect x="500" y="900" width="240" height="110" class="provider"/>
+    <text x="620" y="925" text-anchor="middle" class="title">Anthropic Provider</text>
+    
+    <rect x="515" y="940" width="210" height="28" class="component"/>
+    <text x="620" y="957" text-anchor="middle" class="subtitle">Claude 3.5 Sonnet</text>
+    
+    <rect x="515" y="975" width="210" height="28" class="component"/>
+    <text x="620" y="992" text-anchor="middle" class="subtitle">请求/响应格式转换</text>
+  </g>
+
+  <g>
+    <rect x="800" y="900" width="240" height="110" class="provider"/>
+    <text x="920" y="925" text-anchor="middle" class="title">Zhipu Provider</text>
+    
+    <rect x="815" y="940" width="210" height="28" class="component"/>
+    <text x="920" y="957" text-anchor="middle" class="subtitle">GLM-4</text>
+    
+    <rect x="815" y="975" width="210" height="28" class="component"/>
+    <text x="920" y="992" text-anchor="middle" class="subtitle">智谱 AI 适配</text>
+  </g>
+
+  <!-- Layer 6: Storage Layer -->
+  <rect x="50" y="1050" width="1300" height="200" class="layer-bg"/>
+  <text x="70" y="1075" class="layer-title">存储层</text>
+
+  <g>
+    <rect x="150" y="1100" width="480" height="130" class="storage"/>
+    <text x="390" y="1125" text-anchor="middle" class="title">PostgreSQL / GaussDB</text>
+    
+    <rect x="170" y="1145" width="140" height="25" class="component"/>
+    <text x="240" y="1161" text-anchor="middle" class="small-text">request_logs 请求日志</text>
+    
+    <rect x="320" y="1145" width="140" height="25" class="component"/>
+    <text x="390" y="1161" text-anchor="middle" class="small-text">model_cache 模型缓存</text>
+    
+    <rect x="470" y="1145" width="140" height="25" class="component"/>
+    <text x="540" y="1161" text-anchor="middle" class="small-text">providers 提供商配置</text>
+    
+    <rect x="170" y="1178" width="140" height="25" class="component"/>
+    <text x="240" y="1194" text-anchor="middle" class="small-text">admin_tokens 令牌管理</text>
+    
+    <rect x="320" y="1178" width="140" height="25" class="component"/>
+    <text x="390" y="1194" text-anchor="middle" class="small-text">admin_keys 管理员密钥</text>
+    
+    <rect x="470" y="1178" width="140" height="25" class="component"/>
+    <text x="540" y="1194" text-anchor="middle" class="small-text">model_prices 模型价格</text>
+  </g>
+
+  <g>
+    <rect x="720" y="1100" width="330" height="130" class="storage"/>
+    <text x="885" y="1125" text-anchor="middle" class="title">SQLite (备选)</text>
+    
+    <rect x="740" y="1145" width="140" height="25" class="component"/>
+    <text x="810" y="1161" text-anchor="middle" class="small-text">日志存储</text>
+    
+    <rect x="890" y="1145" width="140" height="25" class="component"/>
+    <text x="960" y="1161" text-anchor="middle" class="small-text">缓存存储</text>
+    
+    <rect x="740" y="1178" width="140" height="25" class="component"/>
+    <text x="810" y="1194" text-anchor="middle" class="small-text">令牌存储</text>
+    
+    <rect x="890" y="1178" width="140" height="25" class="component"/>
+    <text x="960" y="1194" text-anchor="middle" class="small-text">提供商配置</text>
+  </g>
+
+  <!-- Data flow arrows -->
+  <path d="M 190 590 L 190 1100" class="data-arrow"/>
+  <path d="M 570 590 L 390 1100" class="data-arrow"/>
+  <path d="M 725 590 L 500 1100" class="data-arrow"/>
+  <path d="M 950 590 L 600 1100" class="data-arrow"/>
+
+  <!-- Layer 7: Supporting Services -->
+  <rect x="50" y="1270" width="1300" height="150" class="layer-bg"/>
+  <text x="70" y="1295" class="layer-title">支持服务层</text>
+
+  <g>
+    <rect x="150" y="1320" width="200" height="80" class="module"/>
+    <text x="250" y="1345" text-anchor="middle" class="title">日志系统</text>
+    
+    <rect x="165" y="1360" width="170" height="30" class="component"/>
+    <text x="250" y="1378" text-anchor="middle" class="subtitle">Tracing + 北京时间</text>
+  </g>
+
+  <g>
+    <rect x="400" y="1320" width="200" height="80" class="module"/>
+    <text x="500" y="1345" text-anchor="middle" class="title">加密模块</text>
+    
+    <rect x="415" y="1360" width="170" height="30" class="component"/>
+    <text x="500" y="1378" text-anchor="middle" class="subtitle">Ed25519 签名</text>
+  </g>
+
+  <g>
+    <rect x="650" y="1320" width="200" height="80" class="module"/>
+    <text x="750" y="1345" text-anchor="middle" class="title">监控统计</text>
+    
+    <rect x="665" y="1360" width="170" height="30" class="component"/>
+    <text x="750" y="1378" text-anchor="middle" class="subtitle">使用量/成本统计</text>
+  </g>
+
+  <g>
+    <rect x="900" y="1320" width="200" height="80" class="module"/>
+    <text x="1000" y="1345" text-anchor="middle" class="title">错误处理</text>
+    
+    <rect x="915" y="1360" width="170" height="30" class="component"/>
+    <text x="1000" y="1378" text-anchor="middle" class="subtitle">统一错误响应</text>
+  </g>
+
+  <!-- Key Features Box -->
+  <rect x="50" y="1450" width="1300" height="130" class="layer-bg" style="fill: #fff9c4;"/>
+  <text x="70" y="1475" class="layer-title">核心特性</text>
+  
+  <text x="100" y="1510" class="subtitle">✓ 统一 OpenAI 兼容接口，支持多个 AI 提供商</text>
+  <text x="100" y="1535" class="subtitle">✓ 灵活的负载均衡策略 (First/RoundRobin/Random) 和多 API Key 管理</text>
+  <text x="100" y="1560" class="subtitle">✓ 完整的令牌管理、用量统计、成本追踪和请求日志</text>
+  
+  <text x="750" y="1510" class="subtitle">✓ 模型名称重定向和智能路由 (provider/model 格式)</text>
+  <text x="750" y="1535" class="subtitle">✓ 流式响应支持 (SSE) 和请求/响应格式转换</text>
+  <text x="750" y="1560" class="subtitle">✓ PostgreSQL/SQLite 双存储支持，Ed25519 安全认证</text>
+
+</svg>
