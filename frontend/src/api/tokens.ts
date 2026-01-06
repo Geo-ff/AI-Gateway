@@ -22,6 +22,8 @@ async function handleJson<T>(resp: Response): Promise<T> {
 }
 
 export interface AdminToken {
+  id: string
+  name: string
   token: string
   allowed_models?: string[] | null
   max_tokens?: number | null
@@ -37,6 +39,7 @@ export interface AdminToken {
 }
 
 export interface CreateTokenBody {
+  name?: string | null
   allowed_models?: string[] | null
   max_tokens?: number | null
   max_amount?: number | null
@@ -45,6 +48,7 @@ export interface CreateTokenBody {
 }
 
 export interface UpdateTokenBody {
+  name?: string | null
   allowed_models?: string[] | null
   max_amount?: number | null
   max_tokens?: number | null
@@ -60,8 +64,8 @@ export async function listTokens(): Promise<AdminToken[]> {
   return handleJson(resp)
 }
 
-export async function getToken(token: string): Promise<AdminToken> {
-  const resp = await fetch(url(`/admin/tokens/${encodeURIComponent(token)}`), {
+export async function getToken(id: string): Promise<AdminToken> {
+  const resp = await fetch(url(`/admin/tokens/${encodeURIComponent(id)}`), {
     method: 'GET',
     credentials: 'include',
   })
@@ -82,8 +86,8 @@ export async function createToken(body: CreateTokenBody): Promise<AdminToken> {
   throw new Error(text || `HTTP ${resp.status}`)
 }
 
-export async function updateToken(token: string, body: UpdateTokenBody): Promise<AdminToken> {
-  const resp = await fetch(url(`/admin/tokens/${encodeURIComponent(token)}`), {
+export async function updateToken(id: string, body: UpdateTokenBody): Promise<AdminToken> {
+  const resp = await fetch(url(`/admin/tokens/${encodeURIComponent(id)}`), {
     method: 'PUT',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -92,8 +96,8 @@ export async function updateToken(token: string, body: UpdateTokenBody): Promise
   return handleJson(resp)
 }
 
-export async function deleteToken(token: string): Promise<void> {
-  const resp = await fetch(url(`/admin/tokens/${encodeURIComponent(token)}`), {
+export async function deleteToken(id: string): Promise<void> {
+  const resp = await fetch(url(`/admin/tokens/${encodeURIComponent(id)}`), {
     method: 'DELETE',
     credentials: 'include',
   })
@@ -103,8 +107,8 @@ export async function deleteToken(token: string): Promise<void> {
   }
 }
 
-export async function toggleToken(token: string, enabled: boolean): Promise<void> {
-  const resp = await fetch(url(`/admin/tokens/${encodeURIComponent(token)}/toggle`), {
+export async function toggleToken(id: string, enabled: boolean): Promise<void> {
+  const resp = await fetch(url(`/admin/tokens/${encodeURIComponent(id)}/toggle`), {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },

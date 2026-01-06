@@ -122,6 +122,12 @@ components:
     AdminToken:
       type: object
       properties:
+        id:
+          type: string
+          description: 令牌ID（非敏感标识，用于管理接口）
+        name:
+          type: string
+          description: 令牌名称
         token:
           type: string
           description: 令牌字符串
@@ -170,6 +176,8 @@ components:
           format: int64
           description: 累计总 tokens
       required:
+        - id
+        - name
         - token
         - enabled
         - created_at
@@ -287,6 +295,10 @@ components:
     CreateTokenRequest:
       type: object
       properties:
+        name:
+          type: string
+          nullable: true
+          description: 令牌名称（可选，不填则自动生成）
         allowed_models:
           type: array
           items:
@@ -311,6 +323,10 @@ components:
     UpdateTokenRequest:
       type: object
       properties:
+        name:
+          type: string
+          nullable: true
+          description: 令牌名称（可选）
         allowed_models:
           type: array
           items:
@@ -644,7 +660,7 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateTokenRequest'
       responses:
-        '200':
+        '201':
           description: 成功响应
           content:
             application/json:
@@ -663,7 +679,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /admin/tokens/{token}:
+  /admin/tokens/{id}:
     get:
       summary: 获取令牌详情
       description: 获取指定令牌的详细信息
@@ -673,12 +689,12 @@ paths:
       security:
         - AdminToken: []
       parameters:
-        - name: token
+        - name: id
           in: path
           required: true
           schema:
             type: string
-          description: 令牌字符串
+          description: 令牌ID
       responses:
         '200':
           description: 成功响应
@@ -693,7 +709,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-    patch:
+    put:
       summary: 更新令牌
       description: 更新指定令牌的配置
       operationId: updateAdminToken
@@ -702,12 +718,12 @@ paths:
       security:
         - AdminToken: []
       parameters:
-        - name: token
+        - name: id
           in: path
           required: true
           schema:
             type: string
-          description: 令牌字符串
+          description: 令牌ID
       requestBody:
         required: true
         content:
@@ -737,28 +753,59 @@ paths:
       security:
         - AdminToken: []
       parameters:
-        - name: token
+        - name: id
           in: path
           required: true
           schema:
             type: string
-          description: 令牌字符串
+          description: 令牌ID
       responses:
-        '200':
+        '204':
           description: 成功删除
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
         '404':
           description: 令牌不存在
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /admin/tokens/{id}/toggle:
+    post:
+      summary: 启用/禁用令牌
+      description: 启用或禁用指定令牌
+      operationId: toggleAdminToken
+      tags:
+        - Admin
+      security:
+        - AdminToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 令牌ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+              required:
+                - enabled
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
 
   /admin/users:
     get:

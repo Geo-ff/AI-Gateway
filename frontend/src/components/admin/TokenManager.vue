@@ -33,6 +33,7 @@ const statusFilter = ref<'all' | 'enabled' | 'disabled' | 'expired'>('all')
 const sortBy = ref<'created' | 'amount' | 'tokens' | 'expires'>('created')
 
 const tokenForm = reactive({
+  name: '',
   allowedModels: [] as string[],
   maxAmount: null as number | null,
   maxTokens: null as number | null,
@@ -42,7 +43,9 @@ const tokenForm = reactive({
 
 const deleteConfirmMessage = computed(() => {
   if (!tokenToDelete.value) return '确定要删除此令牌吗？该操作不可恢复。'
-  return `确定要删除令牌 ${tokenToDelete.value.token.substring(0, 8)}... 吗？该操作不可恢复。`
+  const name = tokenToDelete.value.name?.trim()
+  const hint = name ? `${name} (${tokenToDelete.value.token.substring(0, 8)}...)` : `${tokenToDelete.value.token.substring(0, 8)}...`
+  return `确定要删除令牌 ${hint} 吗？该操作不可恢复。`
 })
 
 const filteredTokens = computed(() => {
@@ -53,6 +56,8 @@ const filteredTokens = computed(() => {
     const search = searchText.value.toLowerCase().trim()
     result = result.filter(token =>
       token.token.toLowerCase().includes(search) ||
+      token.id.toLowerCase().includes(search) ||
+      token.name.toLowerCase().includes(search) ||
       (token.allowed_models && token.allowed_models.some(model =>
         model.toLowerCase().includes(search)
       ))
@@ -98,6 +103,7 @@ const filteredTokens = computed(() => {
 const { showMessage } = useNotify()
 
 function resetForm() {
+  tokenForm.name = ''
   tokenForm.allowedModels = []
   tokenForm.maxAmount = null
   tokenForm.maxTokens = null
@@ -106,6 +112,7 @@ function resetForm() {
 }
 
 function fillFormFromToken(token: AdminToken) {
+  tokenForm.name = token.name || ''
   tokenForm.allowedModels = token.allowed_models ? [...token.allowed_models] : []
   tokenForm.maxAmount = token.max_amount ?? null
   tokenForm.maxTokens = token.max_tokens ?? null
@@ -190,8 +197,8 @@ function closeDeleteModal() {
 async function confirmDeleteToken() {
   if (!tokenToDelete.value) return
   try {
-    await deleteToken(tokenToDelete.value.token)
-    tokens.value = tokens.value.filter((t) => t.token !== tokenToDelete.value!.token)
+    await deleteToken(tokenToDelete.value.id)
+    tokens.value = tokens.value.filter((t) => t.id !== tokenToDelete.value!.id)
     showMessage('令牌已删除', 'success')
     tokenToDelete.value = null
   } catch (err: any) {
@@ -208,6 +215,7 @@ async function submitCreate() {
       showMessage('部分模型已不再可用，已从令牌限制中移除', 'warning')
     }
     const payload: CreateTokenBody = {
+      name: tokenForm.name.trim() || undefined,
       allowed_models: filteredModels.length ? filteredModels : undefined,
       max_amount: tokenForm.maxAmount ?? undefined,
       max_tokens: tokenForm.maxTokens ?? undefined,
@@ -233,6 +241,7 @@ async function submitUpdate() {
       showMessage('部分模型已不再可用，已从令牌限制中移除', 'warning')
     }
     const payload: UpdateTokenBody = {
+      name: tokenForm.name.trim() || undefined,
       // 空数组表示清空限制（允许所有模型）
       allowed_models: filteredModels,
       max_amount: tokenForm.maxAmount ?? null,
@@ -241,8 +250,8 @@ async function submitUpdate() {
       // null => 清空过期时间；字符串 => 设置为该时间
       expires_at: expiresStr,
     }
-    const updated = await updateToken(currentToken.value.token, payload)
-    const idx = tokens.value.findIndex(t => t.token === updated.token)
+    const updated = await updateToken(currentToken.value.id, payload)
+    const idx = tokens.value.findIndex(t => t.id === updated.id)
     if (idx >= 0) {
       // 使用 Object.assign 确保 Vue 能检测到所有属性的变化
       Object.assign(tokens.value[idx], updated)
@@ -257,8 +266,8 @@ async function submitUpdate() {
 async function toggleEnabled(token: AdminToken) {
   try {
     const newState = !token.enabled
-    await toggleToken(token.token, newState)
-    const idx = tokens.value.findIndex(t => t.token === token.token)
+    await toggleToken(token.id, newState)
+    const idx = tokens.value.findIndex(t => t.id === token.id)
     if (idx >= 0) {
       tokens.value[idx].enabled = newState
     }
@@ -366,8 +375,9 @@ onMounted(async () => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="token in filteredTokens" :key="token.token">
+            <tr v-for="token in filteredTokens" :key="token.id">
               <td class="token-cell">
+                <div class="token-name">{{ token.name }}</div>
                 <div class="token-display">
                   <code class="token-text">{{ token.token.substring(0, 8) }}...{{ token.token.substring(-8) }}</code>
                   <button @click="copyToClipboard(token.token)" class="copy-btn" title="复制令牌">复制</button>
@@ -434,6 +444,15 @@ onMounted(async () => {
         </header>
         <div class="modal-body">
           <form @submit.prevent="submitCreate" class="token-form">
+            <div class="form-group">
+              <label>名称</label>
+              <input
+                type="text"
+                v-model="tokenForm.name"
+                maxlength="64"
+                placeholder="例如：前端测试"
+              />
+            </div>
             <div class="form-group">
               <label>允许使用的模型</label>
               <div class="models-selector">
@@ -509,10 +528,21 @@ onMounted(async () => {
         </header>
         <div class="modal-body">
           <div class="token-info">
+            <p><strong>ID:</strong> <code>{{ currentToken?.id }}</code></p>
+            <p><strong>名称:</strong> {{ currentToken?.name }}</p>
             <p><strong>令牌:</strong> <code>{{ currentToken?.token }}</code></p>
             <p><strong>创建时间:</strong> {{ formatDate(currentToken?.created_at) }}</p>
           </div>
           <form @submit.prevent="submitUpdate" class="token-form">
+            <div class="form-group">
+              <label>名称</label>
+              <input
+                type="text"
+                v-model="tokenForm.name"
+                maxlength="64"
+                placeholder="例如：前端测试"
+              />
+            </div>
             <div class="form-group">
               <label>允许使用的模型</label>
               <div class="models-selector">

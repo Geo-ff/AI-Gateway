@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use chrono::Utc;
 
-use crate::admin::{AdminToken, CreateTokenPayload, TokenStore, UpdateTokenPayload};
+use crate::admin::{
+    AdminToken, CreateTokenPayload, TokenStore, UpdateTokenPayload, admin_token_id_for_token,
+    normalize_admin_token_name,
+};
 use crate::error::GatewayError;
 use crate::logging::database::DatabaseLogger;
 use crate::logging::time::{parse_beijing_string, to_beijing_string};
@@ -35,17 +38,21 @@ impl TokenStore for DatabaseLogger {
                 .collect();
             s
         };
+        let id = admin_token_id_for_token(&token);
+        let name = normalize_admin_token_name(payload.name.clone(), &id);
         let now = Utc::now();
         let allowed_models_s = join_allowed_models(&payload.allowed_models);
         let expires_at_s = payload.expires_at.clone();
         let conn = self.connection.lock().await;
         conn.execute(
-            "INSERT INTO admin_tokens (token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, 0, 0)",
+            "INSERT INTO admin_tokens (id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, 0, 0)",
             (
+                &id,
+                &name,
                 &token,
                 &allowed_models_s,
                 payload.max_tokens,
-                if payload.enabled {1} else {0},
+                if payload.enabled { 1 } else { 0 },
                 &expires_at_s,
                 to_beijing_string(&now),
                 payload.max_amount,
@@ -53,6 +60,8 @@ impl TokenStore for DatabaseLogger {
         )?;
 
         Ok(AdminToken {
+            id,
+            name,
             token,
             allowed_models: payload.allowed_models,
             max_tokens: payload.max_tokens,
@@ -77,25 +86,29 @@ impl TokenStore for DatabaseLogger {
     ) -> Result<Option<AdminToken>, GatewayError> {
         let conn = self.connection.lock().await;
         use rusqlite::OptionalExtension;
-        let mut stmt = conn.prepare("SELECT token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens WHERE token = ?1")?;
+        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens WHERE token = ?1")?;
         let row_opt = stmt
             .query_row([token], |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(0)?,
                     row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<i64>>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, Option<f64>>(6)?,
-                    row.get::<_, Option<f64>>(7)?,
-                    row.get::<_, Option<i64>>(8)?,
-                    row.get::<_, Option<i64>>(9)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<f64>>(8)?,
+                    row.get::<_, Option<f64>>(9)?,
                     row.get::<_, Option<i64>>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, Option<i64>>(12)?,
                 ))
             })
             .optional()?;
         let Some((
+            id0,
+            name0,
             tok,
             allowed,
             max,
@@ -112,6 +125,26 @@ impl TokenStore for DatabaseLogger {
             return Ok(None);
         };
 
+        let needs_id_backfill = id0.as_deref().filter(|s| !s.is_empty()).is_none();
+        let id = id0
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| admin_token_id_for_token(&tok));
+        let mut name = normalize_admin_token_name(name0.clone(), &id);
+        if needs_id_backfill {
+            let _ = conn.execute(
+                "UPDATE admin_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
+                (&tok, &id),
+            );
+        }
+        if name0.as_deref().filter(|s| !s.trim().is_empty()).is_none() {
+            let _ = conn.execute(
+                "UPDATE admin_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
+                (&tok, &name),
+            );
+        }
+
         let mut allowed_models = parse_allowed_models(allowed);
         let mut max_tokens = max;
         let mut enabled = enabled_i != 0;
@@ -122,6 +155,9 @@ impl TokenStore for DatabaseLogger {
         let completion_tokens_spent = completion0.unwrap_or(0);
         let total_tokens_spent = total0.unwrap_or(0);
 
+        if let Some(v) = payload.name {
+            name = normalize_admin_token_name(Some(v), &id);
+        }
         if let Some(v) = payload.allowed_models {
             allowed_models = Some(v);
         }
@@ -139,18 +175,21 @@ impl TokenStore for DatabaseLogger {
         }
 
         conn.execute(
-            "UPDATE admin_tokens SET allowed_models = ?2, max_tokens = ?3, enabled = ?4, expires_at = ?5, max_amount = ?6 WHERE token = ?1",
+            "UPDATE admin_tokens SET name = ?2, allowed_models = ?3, max_tokens = ?4, enabled = ?5, expires_at = ?6, max_amount = ?7 WHERE token = ?1",
             (
                 &tok,
+                &name,
                 join_allowed_models(&allowed_models),
                 max_tokens,
-                if enabled {1} else {0},
+                if enabled { 1 } else { 0 },
                 expires_at.clone(),
                 max_amount,
             ),
         )?;
 
         Ok(Some(AdminToken {
+            id,
+            name,
             token: tok,
             allowed_models,
             max_tokens,
@@ -180,36 +219,29 @@ impl TokenStore for DatabaseLogger {
     async fn get_token(&self, token: &str) -> Result<Option<AdminToken>, GatewayError> {
         let conn = self.connection.lock().await;
         use rusqlite::OptionalExtension;
-        let mut stmt = conn.prepare("SELECT token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens WHERE token = ?1")?;
+        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens WHERE token = ?1")?;
         let row = stmt
             .query_row([token], |row| {
-                let token: String = row.get(0)?;
-                let allowed: Option<String> = row.get(1)?;
-                let max_tokens: Option<i64> = row.get(2)?;
-                let enabled_i: i64 = row.get(3)?;
-                let expires: Option<String> = row.get(4)?;
-                let created_at_s: String = row.get(5)?;
-                let max_amount: Option<f64> = row.get(6)?;
-                let amount_spent: Option<f64> = row.get(7)?;
-                let prompt_tokens_spent: Option<i64> = row.get(8)?;
-                let completion_tokens_spent: Option<i64> = row.get(9)?;
-                let total_tokens_spent: Option<i64> = row.get(10)?;
                 Ok((
-                    token,
-                    allowed,
-                    max_tokens,
-                    enabled_i,
-                    expires,
-                    created_at_s,
-                    max_amount,
-                    amount_spent,
-                    prompt_tokens_spent,
-                    completion_tokens_spent,
-                    total_tokens_spent,
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<f64>>(8)?,
+                    row.get::<_, Option<f64>>(9)?,
+                    row.get::<_, Option<i64>>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, Option<i64>>(12)?,
                 ))
             })
             .optional()?;
         if let Some((
+            id0,
+            name0,
             token,
             allowed,
             max_tokens,
@@ -223,7 +255,29 @@ impl TokenStore for DatabaseLogger {
             total_tokens_spent,
         )) = row
         {
+        let needs_id_backfill = id0.as_deref().filter(|s| !s.is_empty()).is_none();
+        let needs_name_backfill = name0.as_deref().filter(|s| !s.trim().is_empty()).is_none();
+        let id = id0
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| admin_token_id_for_token(&token));
+        let name = normalize_admin_token_name(name0.clone(), &id);
+        if needs_id_backfill {
+            let _ = conn.execute(
+                "UPDATE admin_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
+                (&token, &id),
+            );
+        }
+        if needs_name_backfill {
+            let _ = conn.execute(
+                "UPDATE admin_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
+                (&token, &name),
+            );
+        }
             Ok(Some(AdminToken {
+                id,
+                name,
                 token,
                 allowed_models: parse_allowed_models(allowed),
                 max_tokens,
@@ -244,22 +298,147 @@ impl TokenStore for DatabaseLogger {
         }
     }
 
+    async fn get_token_by_id(&self, id: &str) -> Result<Option<AdminToken>, GatewayError> {
+        let conn = self.connection.lock().await;
+        use rusqlite::OptionalExtension;
+        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens WHERE id = ?1")?;
+        let row = stmt
+            .query_row([id], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<f64>>(8)?,
+                    row.get::<_, Option<f64>>(9)?,
+                    row.get::<_, Option<i64>>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, Option<i64>>(12)?,
+                ))
+            })
+            .optional()?;
+        let Some((
+            id0,
+            name0,
+            token,
+            allowed,
+            max_tokens,
+            enabled_i,
+            expires,
+            created_at_s,
+            max_amount,
+            amount_spent,
+            prompt_tokens_spent,
+            completion_tokens_spent,
+            total_tokens_spent,
+        )) = row
+        else {
+            return Ok(None);
+        };
+        let needs_id_backfill = id0.as_deref().filter(|s| !s.is_empty()).is_none();
+        let needs_name_backfill = name0.as_deref().filter(|s| !s.trim().is_empty()).is_none();
+        let id = id0
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| admin_token_id_for_token(&token));
+        let name = normalize_admin_token_name(name0.clone(), &id);
+        if needs_id_backfill {
+            let _ = conn.execute(
+                "UPDATE admin_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
+                (&token, &id),
+            );
+        }
+        if needs_name_backfill {
+            let _ = conn.execute(
+                "UPDATE admin_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
+                (&token, &name),
+            );
+        }
+        Ok(Some(AdminToken {
+            id,
+            name,
+            token,
+            allowed_models: parse_allowed_models(allowed),
+            max_tokens,
+            max_amount,
+            enabled: enabled_i != 0,
+            expires_at: match expires {
+                Some(s) => Some(parse_beijing_string(&s)?),
+                None => None,
+            },
+            created_at: parse_beijing_string(&created_at_s)?,
+            amount_spent: amount_spent.unwrap_or(0.0),
+            prompt_tokens_spent: prompt_tokens_spent.unwrap_or(0),
+            completion_tokens_spent: completion_tokens_spent.unwrap_or(0),
+            total_tokens_spent: total_tokens_spent.unwrap_or(0),
+        }))
+    }
+
     async fn list_tokens(&self) -> Result<Vec<AdminToken>, GatewayError> {
         let conn = self.connection.lock().await;
-        let mut stmt = conn.prepare("SELECT token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens ORDER BY created_at DESC")?;
+        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens ORDER BY created_at DESC")?;
         let rows = stmt.query_map([], |row| {
-            let token: String = row.get(0)?;
-            let allowed: Option<String> = row.get(1)?;
-            let max_tokens: Option<i64> = row.get(2)?;
-            let enabled_i: i64 = row.get(3)?;
-            let expires: Option<String> = row.get(4)?;
-            let created_at_s: String = row.get(5)?;
-            let max_amount: Option<f64> = row.get(6)?;
-            let amount_spent: Option<f64> = row.get(7)?;
-            let prompt_tokens_spent: Option<i64> = row.get(8)?;
-            let completion_tokens_spent: Option<i64> = row.get(9)?;
-            let total_tokens_spent: Option<i64> = row.get(10)?;
-            let out = AdminToken {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, Option<f64>>(8)?,
+                row.get::<_, Option<f64>>(9)?,
+                row.get::<_, Option<i64>>(10)?,
+                row.get::<_, Option<i64>>(11)?,
+                row.get::<_, Option<i64>>(12)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (
+                id0,
+                name0,
+                token,
+                allowed,
+                max_tokens,
+                enabled_i,
+                expires,
+                created_at_s,
+                max_amount,
+                amount_spent,
+                prompt_tokens_spent,
+                completion_tokens_spent,
+                total_tokens_spent,
+            ) = r?;
+            let needs_id_backfill = id0.as_deref().filter(|s| !s.is_empty()).is_none();
+            let needs_name_backfill = name0.as_deref().filter(|s| !s.trim().is_empty()).is_none();
+            let id = id0
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| admin_token_id_for_token(&token));
+            let name = normalize_admin_token_name(name0.clone(), &id);
+            if needs_id_backfill {
+                let _ = conn.execute(
+                    "UPDATE admin_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
+                    (&token, &id),
+                );
+            }
+            if needs_name_backfill {
+                let _ = conn.execute(
+                    "UPDATE admin_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
+                    (&token, &name),
+                );
+            }
+            out.push(AdminToken {
+                id,
+                name,
                 token,
                 allowed_models: parse_allowed_models(allowed),
                 max_tokens,
@@ -274,12 +453,7 @@ impl TokenStore for DatabaseLogger {
                 prompt_tokens_spent: prompt_tokens_spent.unwrap_or(0),
                 completion_tokens_spent: completion_tokens_spent.unwrap_or(0),
                 total_tokens_spent: total_tokens_spent.unwrap_or(0),
-            };
-            Ok(out)
-        })?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r?);
+            });
         }
         Ok(out)
     }
@@ -311,6 +485,38 @@ impl TokenStore for DatabaseLogger {
     async fn delete_token(&self, token: &str) -> Result<bool, GatewayError> {
         let conn = self.connection.lock().await;
         let affected = conn.execute("DELETE FROM admin_tokens WHERE token = ?1", (token,))?;
+        Ok(affected > 0)
+    }
+
+    async fn delete_token_by_id(&self, id: &str) -> Result<bool, GatewayError> {
+        let conn = self.connection.lock().await;
+        let affected = conn.execute("DELETE FROM admin_tokens WHERE id = ?1", (id,))?;
+        Ok(affected > 0)
+    }
+
+    async fn update_token_by_id(
+        &self,
+        id: &str,
+        payload: UpdateTokenPayload,
+    ) -> Result<Option<AdminToken>, GatewayError> {
+        let tok: Option<String> = {
+            let conn = self.connection.lock().await;
+            use rusqlite::OptionalExtension;
+            let mut stmt = conn.prepare("SELECT token FROM admin_tokens WHERE id = ?1")?;
+            stmt.query_row([id], |row| row.get(0)).optional()?
+        };
+        let Some(tok) = tok else {
+            return Ok(None);
+        };
+        self.update_token(&tok, payload).await
+    }
+
+    async fn set_enabled_by_id(&self, id: &str, enabled: bool) -> Result<bool, GatewayError> {
+        let conn = self.connection.lock().await;
+        let affected = conn.execute(
+            "UPDATE admin_tokens SET enabled = ?2 WHERE id = ?1",
+            (id, if enabled { 1 } else { 0 }),
+        )?;
         Ok(affected > 0)
     }
 }

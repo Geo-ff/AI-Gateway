@@ -617,6 +617,8 @@ impl DatabaseLogger {
         // Admin tokens table
         conn.execute(
             "CREATE TABLE IF NOT EXISTS admin_tokens (
+                id TEXT,
+                name TEXT,
                 token TEXT PRIMARY KEY,
                 allowed_models TEXT,
                 max_tokens INTEGER,
@@ -679,6 +681,12 @@ impl DatabaseLogger {
         );
         let _ = conn.execute(
             "ALTER TABLE admin_tokens ADD COLUMN total_tokens_spent INTEGER DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute("ALTER TABLE admin_tokens ADD COLUMN id TEXT", []);
+        let _ = conn.execute("ALTER TABLE admin_tokens ADD COLUMN name TEXT", []);
+        let _ = conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS admin_tokens_id_uidx ON admin_tokens(id)",
             [],
         );
 

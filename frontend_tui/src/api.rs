@@ -99,6 +99,10 @@ pub struct AdminKeyOut {
 /// 管理员令牌信息
 #[derive(Debug, Deserialize, Clone)]
 pub struct AdminTokenOut {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
     pub token: String,
     #[serde(default, rename = "allowed_models")]
     pub _allowed_models: Option<Vec<String>>,

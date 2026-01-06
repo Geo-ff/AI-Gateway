@@ -99,7 +99,7 @@ amount_spent              | 25.5            (已花费 25.5 元)
 **方式 A：手动创建（第一个）**
 ```bash
 sqlite3 data/gateway.db
-INSERT INTO admin_tokens (token, ...) VALUES ('my-token', ...);
+INSERT INTO admin_tokens (name, token, ...) VALUES ('my-first-token', 'my-token', ...);
 ```
 
 **方式 B：通过 API 创建（有了第一个 Token 后）**
@@ -166,11 +166,11 @@ curl http://localhost:8080/v1/token/usage \
 
 ```bash
 # 禁用 Token
-curl -X POST http://localhost:8080/admin/tokens/my-token/toggle \
+curl -X POST http://localhost:8080/admin/tokens/<token-id>/toggle \
   -H "Authorization: Bearer admin-token"
 
 # 删除 Token
-curl -X DELETE http://localhost:8080/admin/tokens/my-token \
+curl -X DELETE http://localhost:8080/admin/tokens/<token-id> \
   -H "Authorization: Bearer admin-token"
 ```
 

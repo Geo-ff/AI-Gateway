@@ -307,6 +307,8 @@ sqlite3 data/gateway.db
 
 # 在 SQLite 提示符下执行：
 CREATE TABLE IF NOT EXISTS admin_tokens (
+    id TEXT,
+    name TEXT,
     token TEXT PRIMARY KEY,
     allowed_models TEXT,
     max_tokens BIGINT,

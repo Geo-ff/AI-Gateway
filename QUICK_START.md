@@ -82,6 +82,7 @@ docker exec -it gateway-postgres psql -U postgres -d gateway
 
 # 创建 Token（在 psql 提示符下执行）
 INSERT INTO admin_tokens (
+    name,
     token, 
     enabled, 
     created_at, 
@@ -91,6 +92,7 @@ INSERT INTO admin_tokens (
     total_tokens_spent
 )
 VALUES (
+    'my-first-token',
     'my-api-token-12345', 
     true, 
     NOW(), 
