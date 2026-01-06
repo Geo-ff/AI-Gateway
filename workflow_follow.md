@@ -1,6 +1,6 @@
 ### 前后端对接
 
-#### 项目最新状态（2026-01-05 更新）
+#### 项目最新状态（2026-01-06 更新）
 
 **前端模块精简：**
 - ✅ 保留模块：keys、channels、users、chats、dashboard、auth、settings
@@ -33,6 +33,7 @@
 2. 🟡 前端对接用户接口：`/admin/users`（GET/POST）与 `/admin/users/{id}`（GET/PUT/DELETE）（API 层已就绪，页面仍使用 mock data，待接入）
 3. ✅ 统一时间字段格式：前端已支持解析后端北京时间字符串（`%Y-%m-%d %H:%M:%S`）为 `Date`（UTC），建议后端逐步切换 ISO-8601
 4. 认证接口仍待实现：`/auth/login`、`/auth/logout`、`/auth/me`
+5. ✅ 后端 AdminToken 已添加 `id`、`name` 字段，并将管理端令牌 CRUD 从 `{token}` 切换为 `{id}`（避免在 URL/日志中暴露敏感 token）
 #### 任务完成情况（实时更新）
 1. ✅ 后端数据模型的定义和分布已指出
 2. ✅ api规范文件已完成，路径：/home/Geoff001/Code/Project/Graduation_Project/gateway_zero/openapi.yaml
@@ -42,6 +43,7 @@
 4. ✅ 已补充用户模块最小单元测试覆盖（`cargo test` 将包含 users 相关用例）
 5. ✅ 前端已新增 Users API 适配层（DTO↔Domain）：`src/features/users/api/*`
 6. ✅ 前端已新增最小请求层 `axios` client：`src/lib/api-client.ts`（自动附加 `Authorization: Bearer <token>`；baseURL 读取 `VITE_API_BASE_URL`）
+7. ✅ AdminToken 已补齐 `id/name` 字段，并同步更新 OpenAPI、前端令牌管理页面与 TUI（路由按 `{id}` 操作）
 
 ---
 
@@ -66,8 +68,8 @@
 
 | 前端字段 | 后端字段 | 状态 | 说明 |
 |---------|---------|------|------|
-| `id` | ❌ 无 | 🔴 缺失 | 后端用 `token` 作为唯一标识 |
-| `name` | ❌ 无 | 🔴 缺失 | 后端无密钥名称字段 |
+| `id` | `id` | 🟢 对应 | 非敏感标识，用于管理端列表/操作（CRUD 按 `{id}`） |
+| `name` | `name` | 🟢 对应 | 密钥可读名称（可选，不填则后端自动生成） |
 | `status` | `enabled` | 🟡 转换 | 前端 enum，后端 boolean |
 | `validFrom` | ❌ 无 | 🔴 缺失 | 后端无生效时间 |
 | `validUntil` | `expires_at` | 🟢 对应 | 格式需统一 |
@@ -91,8 +93,8 @@
 
 | 优先级 | 调整项 | 负责方 | 说明 |
 |-------|-------|-------|------|
-| 🔴 高 | 添加 `name` 字段 | 后端 | 密钥需要可读名称 |
-| 🔴 高 | 添加 `id` 字段 | 后端 | 用于前端列表操作 |
+| ✅ 完成 | 添加 `name` 字段 | 后端 | 密钥需要可读名称 |
+| ✅ 完成 | 添加 `id` 字段 | 后端 | 用于前端列表操作（管理端接口按 `{id}`） |
 | 🟡 中 | 添加 `remark` 字段 | 后端 | 备注功能常用 |
 | 🟡 中 | 添加 IP 白/黑名单 | 后端 | 安全控制需求 |
 | 🟢 低 | `isFavorite` | 前端存储 | 可用 localStorage |
@@ -216,7 +218,7 @@
 阶段一：基础对接（优先）
 ├── 1. ✅ 前端创建 API 适配层（字段映射）
 ├── 1.1 配置 `VITE_API_BASE_URL` 并接入 Users 页面（替换 mock data）
-├── 2. 后端 AdminToken 添加 name、id 字段
+├── 2. ✅ 后端 AdminToken 添加 name、id 字段（管理端 CRUD 按 `{id}`）
 └── 3. 对接 Keys 模块基础 CRUD
 
 阶段二：功能完善
