@@ -366,6 +366,7 @@ components:
     # 更新令牌请求
     UpdateTokenRequest:
       type: object
+      description: 本接口为部分更新：字段缺失=不修改；字段为 null=清空；字段为具体值=更新为该值。
       properties:
         name:
           type: string
