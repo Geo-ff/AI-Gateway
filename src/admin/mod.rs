@@ -36,10 +36,14 @@ pub struct AdminToken {
     pub enabled: bool,
     pub expires_at: Option<DateTime<Utc>>, // None 表示不过期
     pub created_at: DateTime<Utc>,
-    pub amount_spent: f64,            // 累计消费金额（默认 0）
-    pub prompt_tokens_spent: i64,     // 累计提示/输入 tokens
-    pub completion_tokens_spent: i64, // 累计补全/回复 tokens
-    pub total_tokens_spent: i64,      // 累计总 tokens
+    pub amount_spent: f64,                 // 累计消费金额（默认 0）
+    pub prompt_tokens_spent: i64,          // 累计提示/输入 tokens
+    pub completion_tokens_spent: i64,      // 累计补全/回复 tokens
+    pub total_tokens_spent: i64,           // 累计总 tokens
+    pub remark: Option<String>,            // 备注
+    pub organization_id: Option<String>,   // 所属组织 ID（暂按字符串）
+    pub ip_whitelist: Option<Vec<String>>, // IP 白名单（JSON 数组）
+    pub ip_blacklist: Option<Vec<String>>, // IP 黑名单（JSON 数组）
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -61,10 +65,26 @@ pub struct CreateTokenPayload {
     pub enabled: bool,
     #[serde(default)]
     pub expires_at: Option<String>, // 北京时间字符串，可选
+    #[serde(default)]
+    pub remark: Option<String>,
+    #[serde(default)]
+    pub organization_id: Option<String>,
+    #[serde(default)]
+    pub ip_whitelist: Option<Vec<String>>,
+    #[serde(default)]
+    pub ip_blacklist: Option<Vec<String>>,
 }
 
 fn default_enabled_true() -> bool {
     true
+}
+
+fn deserialize_patch_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Ok(Some(Option::<T>::deserialize(deserializer)?))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,16 +93,24 @@ pub struct UpdateTokenPayload {
     pub id: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
-    #[serde(default)]
-    pub allowed_models: Option<Vec<String>>, // None -> 不修改；Some(Some(vec)) -> 设置；Some(None) -> 清空
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_patch_option")]
+    pub allowed_models: Option<Option<Vec<String>>>, // None -> 不修改；Some(Some(vec)) -> 设置；Some(None) -> 清空
+    #[serde(default, deserialize_with = "deserialize_patch_option")]
     pub max_tokens: Option<Option<i64>>, // 兼容旧字段（忽略）
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_patch_option")]
     pub max_amount: Option<Option<f64>>, // None -> 不修改；Some(Some(v)) -> 设置；Some(None) -> 清空
     #[serde(default)]
     pub enabled: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_patch_option")]
     pub expires_at: Option<Option<String>>, // None -> 不修改；Some(Some(s)) -> 设置；Some(None) -> 清空
+    #[serde(default, deserialize_with = "deserialize_patch_option")]
+    pub remark: Option<Option<String>>, // None -> 不修改；Some(Some(s)) -> 设置；Some(None) -> 清空
+    #[serde(default, deserialize_with = "deserialize_patch_option")]
+    pub organization_id: Option<Option<String>>, // 同上
+    #[serde(default, deserialize_with = "deserialize_patch_option")]
+    pub ip_whitelist: Option<Option<Vec<String>>>, // 同上
+    #[serde(default, deserialize_with = "deserialize_patch_option")]
+    pub ip_blacklist: Option<Option<Vec<String>>>, // 同上
 }
 
 #[async_trait]
@@ -138,7 +166,38 @@ fn parse_allowed_models(s: Option<String>) -> Option<Vec<String>> {
     .and_then(|v| if v.is_empty() { None } else { Some(v) })
 }
 
-fn row_to_admin_token(r: &tokio_postgres::Row) -> AdminToken {
+pub(crate) fn encode_json_string_list(
+    field: &str,
+    v: &Option<Vec<String>>,
+) -> Result<Option<String>, GatewayError> {
+    match v {
+        None => Ok(None),
+        Some(list) => serde_json::to_string(list)
+            .map(Some)
+            .map_err(|e| GatewayError::Config(format!("Failed to encode {}: {}", field, e))),
+    }
+}
+
+pub(crate) fn decode_json_string_list(
+    field: &str,
+    s: Option<String>,
+) -> Result<Option<Vec<String>>, GatewayError> {
+    let Some(raw) = s else { return Ok(None) };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str::<Vec<String>>(trimmed)
+        .map(Some)
+        .map_err(|e| {
+            GatewayError::Config(format!(
+                "DB decode error: admin_tokens.{} invalid JSON: {}",
+                field, e
+            ))
+        })
+}
+
+fn row_to_admin_token(r: &tokio_postgres::Row) -> Result<AdminToken, GatewayError> {
     let id_opt: Option<String> = r.get(0);
     let name_opt: Option<String> = r.get(1);
     let token: String = r.get(2);
@@ -152,9 +211,13 @@ fn row_to_admin_token(r: &tokio_postgres::Row) -> AdminToken {
     let prompt_tokens_spent: i64 = r.get::<usize, Option<i64>>(10).unwrap_or(0);
     let completion_tokens_spent: i64 = r.get::<usize, Option<i64>>(11).unwrap_or(0);
     let total_tokens_spent: i64 = r.get::<usize, Option<i64>>(12).unwrap_or(0);
+    let remark: Option<String> = r.get(13);
+    let organization_id: Option<String> = r.get(14);
+    let ip_whitelist_s: Option<String> = r.get(15);
+    let ip_blacklist_s: Option<String> = r.get(16);
     let id = id_opt.unwrap_or_else(|| admin_token_id_for_token(&token));
     let name = normalize_admin_token_name(name_opt, &id);
-    AdminToken {
+    Ok(AdminToken {
         id,
         name,
         token,
@@ -168,7 +231,11 @@ fn row_to_admin_token(r: &tokio_postgres::Row) -> AdminToken {
         prompt_tokens_spent,
         completion_tokens_spent,
         total_tokens_spent,
-    }
+        remark,
+        organization_id,
+        ip_whitelist: decode_json_string_list("ip_whitelist", ip_whitelist_s)?,
+        ip_blacklist: decode_json_string_list("ip_blacklist", ip_blacklist_s)?,
+    })
 }
 
 impl PgTokenStore {
@@ -203,15 +270,23 @@ impl PgTokenStore {
                 amount_spent DOUBLE PRECISION DEFAULT 0,
                 prompt_tokens_spent BIGINT DEFAULT 0,
                 completion_tokens_spent BIGINT DEFAULT 0,
-                total_tokens_spent BIGINT DEFAULT 0
+                total_tokens_spent BIGINT DEFAULT 0,
+                remark TEXT,
+                organization_id TEXT,
+                ip_whitelist TEXT,
+                ip_blacklist TEXT
             )"#,
                 &[],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("Failed to init admin_tokens: {}", e)))?;
         // Migration
-        let _ = client.execute("ALTER TABLE admin_tokens ADD COLUMN id TEXT", &[]).await;
-        let _ = client.execute("ALTER TABLE admin_tokens ADD COLUMN name TEXT", &[]).await;
+        let _ = client
+            .execute("ALTER TABLE admin_tokens ADD COLUMN id TEXT", &[])
+            .await;
+        let _ = client
+            .execute("ALTER TABLE admin_tokens ADD COLUMN name TEXT", &[])
+            .await;
         let _ = client
             .execute(
                 "ALTER TABLE admin_tokens ADD COLUMN max_amount DOUBLE PRECISION",
@@ -241,6 +316,21 @@ impl PgTokenStore {
                 "ALTER TABLE admin_tokens ADD COLUMN total_tokens_spent BIGINT DEFAULT 0",
                 &[],
             )
+            .await;
+        let _ = client
+            .execute("ALTER TABLE admin_tokens ADD COLUMN remark TEXT", &[])
+            .await;
+        let _ = client
+            .execute(
+                "ALTER TABLE admin_tokens ADD COLUMN organization_id TEXT",
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute("ALTER TABLE admin_tokens ADD COLUMN ip_whitelist TEXT", &[])
+            .await;
+        let _ = client
+            .execute("ALTER TABLE admin_tokens ADD COLUMN ip_blacklist TEXT", &[])
             .await;
         let _ = client
             .execute(
@@ -302,10 +392,12 @@ impl TokenStore for PgTokenStore {
         let now = Utc::now();
         let allowed_models_s = join_allowed_models(&payload.allowed_models);
         let expires_s = payload.expires_at.clone();
+        let ip_whitelist_s = encode_json_string_list("ip_whitelist", &payload.ip_whitelist)?;
+        let ip_blacklist_s = encode_json_string_list("ip_blacklist", &payload.ip_blacklist)?;
         self.client
             .execute(
-                "INSERT INTO admin_tokens (id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, 0, 0)",
-                &[&id, &name, &token, &allowed_models_s, &payload.max_tokens, &payload.enabled, &expires_s, &to_beijing_string(&now), &payload.max_amount],
+                "INSERT INTO admin_tokens (id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, 0, 0, $10, $11, $12, $13)",
+                &[&id, &name, &token, &allowed_models_s, &payload.max_tokens, &payload.enabled, &expires_s, &to_beijing_string(&now), &payload.max_amount, &payload.remark, &payload.organization_id, &ip_whitelist_s, &ip_blacklist_s],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
@@ -327,6 +419,10 @@ impl TokenStore for PgTokenStore {
             prompt_tokens_spent: 0,
             completion_tokens_spent: 0,
             total_tokens_spent: 0,
+            remark: payload.remark,
+            organization_id: payload.organization_id,
+            ip_whitelist: payload.ip_whitelist,
+            ip_blacklist: payload.ip_blacklist,
         })
     }
 
@@ -338,19 +434,19 @@ impl TokenStore for PgTokenStore {
         // read existing
         let row = self.client
             .query_opt(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens WHERE token = $1",
+                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens WHERE token = $1",
                 &[&token],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         let Some(r) = row else { return Ok(None) };
-        let mut current = row_to_admin_token(&r);
+        let mut current = row_to_admin_token(&r)?;
 
         if let Some(v) = payload.name {
             current.name = normalize_admin_token_name(Some(v), &current.id);
         }
         if let Some(v) = payload.allowed_models {
-            current.allowed_models = Some(v);
+            current.allowed_models = v;
         }
         if let Some(v) = payload.max_tokens {
             current.max_tokens = v;
@@ -364,11 +460,25 @@ impl TokenStore for PgTokenStore {
         if let Some(v) = payload.expires_at {
             current.expires_at = v.and_then(|s| parse_beijing_string(&s).ok());
         }
+        if let Some(v) = payload.remark {
+            current.remark = v;
+        }
+        if let Some(v) = payload.organization_id {
+            current.organization_id = v;
+        }
+        if let Some(v) = payload.ip_whitelist {
+            current.ip_whitelist = v;
+        }
+        if let Some(v) = payload.ip_blacklist {
+            current.ip_blacklist = v;
+        }
 
+        let ip_whitelist_s = encode_json_string_list("ip_whitelist", &current.ip_whitelist)?;
+        let ip_blacklist_s = encode_json_string_list("ip_blacklist", &current.ip_blacklist)?;
         self.client
             .execute(
-                "UPDATE admin_tokens SET name = $2, allowed_models = $3, max_tokens = $4, enabled = $5, expires_at = $6, max_amount = $7 WHERE token = $1",
-                &[&token, &current.name, &join_allowed_models(&current.allowed_models), &current.max_tokens, &current.enabled, &current.expires_at.as_ref().map(to_beijing_string), &current.max_amount],
+                "UPDATE admin_tokens SET name = $2, allowed_models = $3, max_tokens = $4, enabled = $5, expires_at = $6, max_amount = $7, remark = $8, organization_id = $9, ip_whitelist = $10, ip_blacklist = $11 WHERE token = $1",
+                &[&token, &current.name, &join_allowed_models(&current.allowed_models), &current.max_tokens, &current.enabled, &current.expires_at.as_ref().map(to_beijing_string), &current.max_amount, &current.remark, &current.organization_id, &ip_whitelist_s, &ip_blacklist_s],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
@@ -391,13 +501,13 @@ impl TokenStore for PgTokenStore {
     async fn get_token(&self, token: &str) -> Result<Option<AdminToken>, GatewayError> {
         let row = self.client
             .query_opt(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens WHERE token = $1",
+                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens WHERE token = $1",
                 &[&token],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         if let Some(r) = row {
-            Ok(Some(row_to_admin_token(&r)))
+            Ok(Some(row_to_admin_token(&r)?))
         } else {
             Ok(None)
         }
@@ -406,23 +516,28 @@ impl TokenStore for PgTokenStore {
     async fn get_token_by_id(&self, id: &str) -> Result<Option<AdminToken>, GatewayError> {
         let row = self.client
             .query_opt(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens WHERE id = $1",
+                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens WHERE id = $1",
                 &[&id],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
-        Ok(row.map(|r| row_to_admin_token(&r)))
+        match row {
+            Some(r) => Ok(Some(row_to_admin_token(&r)?)),
+            None => Ok(None),
+        }
     }
 
     async fn list_tokens(&self) -> Result<Vec<AdminToken>, GatewayError> {
         let rows = self.client
             .query(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens ORDER BY created_at DESC",
+                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens ORDER BY created_at DESC",
                 &[],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
-        Ok(rows.into_iter().map(|r| row_to_admin_token(&r)).collect())
+        rows.into_iter()
+            .map(|r| row_to_admin_token(&r))
+            .collect::<Result<Vec<_>, _>>()
     }
 
     async fn delete_token(&self, token: &str) -> Result<bool, GatewayError> {
@@ -451,7 +566,7 @@ impl TokenStore for PgTokenStore {
         let row = self
             .client
             .query_opt(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens WHERE id = $1",
+                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens WHERE id = $1",
                 &[&id],
             )
             .await

@@ -102,7 +102,9 @@ pub async fn log_chat_request(
         {
             tracing::warn!("Failed to update token spent: {}", e);
         }
-        if let Ok(r) = response && let Some(u) = r.typed.usage.as_ref() {
+        if let Ok(r) = response
+            && let Some(u) = r.typed.usage.as_ref()
+        {
             let prompt = u.prompt_tokens as i64;
             let completion = u.completion_tokens as i64;
             let total = u.total_tokens as i64;

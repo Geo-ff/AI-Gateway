@@ -135,7 +135,9 @@ pub async fn stream_chat_completions(
         return Err(ge);
     }
 
-    if let Some(exp) = token.expires_at && chrono::Utc::now() > exp {
+    if let Some(exp) = token.expires_at
+        && chrono::Utc::now() > exp
+    {
         return Err(GatewayError::Config("token expired".into()));
     }
 
@@ -145,7 +147,9 @@ pub async fn stream_chat_completions(
         return Err(GatewayError::Config("model not allowed for token".into()));
     }
 
-    if let Some(max_tokens) = token.max_tokens && token.total_tokens_spent >= max_tokens {
+    if let Some(max_tokens) = token.max_tokens
+        && token.total_tokens_spent >= max_tokens
+    {
         let ge = GatewayError::Config("token tokens exceeded".into());
         let code = ge.status_code().as_u16();
         crate::server::request_logging::log_simple_request(
@@ -232,10 +236,14 @@ pub async fn stream_chat_completions(
     if let Some(tok) = client_token.as_deref()
         && let Some(t) = app_state.token_store.get_token(tok).await?
     {
-        if let Some(max_amount) = t.max_amount && t.amount_spent > max_amount {
+        if let Some(max_amount) = t.max_amount
+            && t.amount_spent > max_amount
+        {
             let _ = app_state.token_store.set_enabled(tok, false).await;
         }
-        if let Some(max_tokens) = t.max_tokens && t.total_tokens_spent > max_tokens {
+        if let Some(max_tokens) = t.max_tokens
+            && t.total_tokens_spent > max_tokens
+        {
             let _ = app_state.token_store.set_enabled(tok, false).await;
         }
     }

@@ -629,7 +629,11 @@ impl DatabaseLogger {
                 amount_spent REAL DEFAULT 0,
                 prompt_tokens_spent INTEGER DEFAULT 0,
                 completion_tokens_spent INTEGER DEFAULT 0,
-                total_tokens_spent INTEGER DEFAULT 0
+                total_tokens_spent INTEGER DEFAULT 0,
+                remark TEXT,
+                organization_id TEXT,
+                ip_whitelist TEXT,
+                ip_blacklist TEXT
             )",
             [],
         )?;
@@ -685,6 +689,13 @@ impl DatabaseLogger {
         );
         let _ = conn.execute("ALTER TABLE admin_tokens ADD COLUMN id TEXT", []);
         let _ = conn.execute("ALTER TABLE admin_tokens ADD COLUMN name TEXT", []);
+        let _ = conn.execute("ALTER TABLE admin_tokens ADD COLUMN remark TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE admin_tokens ADD COLUMN organization_id TEXT",
+            [],
+        );
+        let _ = conn.execute("ALTER TABLE admin_tokens ADD COLUMN ip_whitelist TEXT", []);
+        let _ = conn.execute("ALTER TABLE admin_tokens ADD COLUMN ip_blacklist TEXT", []);
         let _ = conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS admin_tokens_id_uidx ON admin_tokens(id)",
             [],

@@ -37,12 +37,16 @@ components:
     # 错误响应
     Error:
       type: object
-      properties:
-        error:
-          type: string
-          description: 错误信息
       required:
-        - error
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: 错误代码 (如 http_error, not_found, rate_limited 等)
+        message:
+          type: string
+          description: 错误详细信息
 
     # 请求日志
     RequestLog:
@@ -175,6 +179,26 @@ components:
           type: integer
           format: int64
           description: 累计总 tokens
+        remark:
+          type: string
+          nullable: true
+          description: 备注
+        organization_id:
+          type: string
+          nullable: true
+          description: 所属组织 ID（字符串）
+        ip_whitelist:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: IP 白名单（JSON 数组，null 表示未设置）
+        ip_blacklist:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: IP 黑名单（JSON 数组，null 表示未设置）
       required:
         - id
         - name
@@ -318,6 +342,26 @@ components:
           type: string
           nullable: true
           description: 过期时间 (北京时间字符串)
+        remark:
+          type: string
+          nullable: true
+          description: 备注
+        organization_id:
+          type: string
+          nullable: true
+          description: 所属组织 ID（字符串）
+        ip_whitelist:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: IP 白名单（JSON 数组）
+        ip_blacklist:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: IP 黑名单（JSON 数组）
 
     # 更新令牌请求
     UpdateTokenRequest:
@@ -346,6 +390,26 @@ components:
           type: string
           nullable: true
           description: 过期时间 (北京时间字符串)
+        remark:
+          type: string
+          nullable: true
+          description: 备注（null 表示清空）
+        organization_id:
+          type: string
+          nullable: true
+          description: 所属组织 ID（字符串，null 表示清空）
+        ip_whitelist:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: IP 白名单（null 表示清空）
+        ip_blacklist:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: IP 黑名单（null 表示清空）
 
     # 提供商
     Provider:

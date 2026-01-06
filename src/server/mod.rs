@@ -62,8 +62,7 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
         token_store,
         login_store_arc,
         user_store_arc,
-    ): StoreTuple =
-        if let Some(pg_url) = &config.logging.pg_url {
+    ): StoreTuple = if let Some(pg_url) = &config.logging.pg_url {
         // Strict Postgres-only mode (no SQLite fallback)
         let pool_size = config.logging.pg_pool_size.unwrap_or(4);
         let pglog = PgLogStore::connect(pg_url, &config.logging.pg_schema, pool_size).await?;

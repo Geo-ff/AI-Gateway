@@ -211,4 +211,3 @@ impl UserStore for PgLogStore {
         Ok(affected > 0)
     }
 }
-

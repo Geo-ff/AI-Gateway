@@ -139,10 +139,14 @@ pub(super) async fn log_stream_success(
     if let Some(tok) = client_token.as_deref()
         && let Ok(Some(t)) = app_state.token_store.get_token(tok).await
     {
-        if let Some(max_amount) = t.max_amount && t.amount_spent > max_amount {
+        if let Some(max_amount) = t.max_amount
+            && t.amount_spent > max_amount
+        {
             let _ = app_state.token_store.set_enabled(tok, false).await;
         }
-        if let Some(max_tokens) = t.max_tokens && t.total_tokens_spent > max_tokens {
+        if let Some(max_tokens) = t.max_tokens
+            && t.total_tokens_spent > max_tokens
+        {
             let _ = app_state.token_store.set_enabled(tok, false).await;
         }
     }

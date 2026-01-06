@@ -3,7 +3,7 @@ use chrono::Utc;
 
 use crate::admin::{
     AdminToken, CreateTokenPayload, TokenStore, UpdateTokenPayload, admin_token_id_for_token,
-    normalize_admin_token_name,
+    decode_json_string_list, encode_json_string_list, normalize_admin_token_name,
 };
 use crate::error::GatewayError;
 use crate::logging::database::DatabaseLogger;
@@ -43,9 +43,11 @@ impl TokenStore for DatabaseLogger {
         let now = Utc::now();
         let allowed_models_s = join_allowed_models(&payload.allowed_models);
         let expires_at_s = payload.expires_at.clone();
+        let ip_whitelist_s = encode_json_string_list("ip_whitelist", &payload.ip_whitelist)?;
+        let ip_blacklist_s = encode_json_string_list("ip_blacklist", &payload.ip_blacklist)?;
         let conn = self.connection.lock().await;
         conn.execute(
-            "INSERT INTO admin_tokens (id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, 0, 0)",
+            "INSERT INTO admin_tokens (id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, 0, 0, ?10, ?11, ?12, ?13)",
             (
                 &id,
                 &name,
@@ -56,6 +58,10 @@ impl TokenStore for DatabaseLogger {
                 &expires_at_s,
                 to_beijing_string(&now),
                 payload.max_amount,
+                &payload.remark,
+                &payload.organization_id,
+                &ip_whitelist_s,
+                &ip_blacklist_s,
             ),
         )?;
 
@@ -76,6 +82,10 @@ impl TokenStore for DatabaseLogger {
             prompt_tokens_spent: 0,
             completion_tokens_spent: 0,
             total_tokens_spent: 0,
+            remark: payload.remark,
+            organization_id: payload.organization_id,
+            ip_whitelist: payload.ip_whitelist,
+            ip_blacklist: payload.ip_blacklist,
         })
     }
 
@@ -86,7 +96,7 @@ impl TokenStore for DatabaseLogger {
     ) -> Result<Option<AdminToken>, GatewayError> {
         let conn = self.connection.lock().await;
         use rusqlite::OptionalExtension;
-        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens WHERE token = ?1")?;
+        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens WHERE token = ?1")?;
         let row_opt = stmt
             .query_row([token], |row| {
                 Ok((
@@ -103,6 +113,10 @@ impl TokenStore for DatabaseLogger {
                     row.get::<_, Option<i64>>(10)?,
                     row.get::<_, Option<i64>>(11)?,
                     row.get::<_, Option<i64>>(12)?,
+                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, Option<String>>(15)?,
+                    row.get::<_, Option<String>>(16)?,
                 ))
             })
             .optional()?;
@@ -120,6 +134,10 @@ impl TokenStore for DatabaseLogger {
             prompt0,
             completion0,
             total0,
+            remark0,
+            organization_id0,
+            ip_whitelist0,
+            ip_blacklist0,
         )) = row_opt
         else {
             return Ok(None);
@@ -150,6 +168,10 @@ impl TokenStore for DatabaseLogger {
         let mut enabled = enabled_i != 0;
         let mut expires_at = expires;
         let mut max_amount = max_amount0;
+        let mut remark = remark0;
+        let mut organization_id = organization_id0;
+        let mut ip_whitelist = decode_json_string_list("ip_whitelist", ip_whitelist0)?;
+        let mut ip_blacklist = decode_json_string_list("ip_blacklist", ip_blacklist0)?;
         let amount_spent = amount_spent0.unwrap_or(0.0);
         let prompt_tokens_spent = prompt0.unwrap_or(0);
         let completion_tokens_spent = completion0.unwrap_or(0);
@@ -159,7 +181,7 @@ impl TokenStore for DatabaseLogger {
             name = normalize_admin_token_name(Some(v), &id);
         }
         if let Some(v) = payload.allowed_models {
-            allowed_models = Some(v);
+            allowed_models = v;
         }
         if let Some(v) = payload.max_tokens {
             max_tokens = v;
@@ -173,9 +195,23 @@ impl TokenStore for DatabaseLogger {
         if let Some(v) = payload.expires_at {
             expires_at = v;
         }
+        if let Some(v) = payload.remark {
+            remark = v;
+        }
+        if let Some(v) = payload.organization_id {
+            organization_id = v;
+        }
+        if let Some(v) = payload.ip_whitelist {
+            ip_whitelist = v;
+        }
+        if let Some(v) = payload.ip_blacklist {
+            ip_blacklist = v;
+        }
 
+        let ip_whitelist_s = encode_json_string_list("ip_whitelist", &ip_whitelist)?;
+        let ip_blacklist_s = encode_json_string_list("ip_blacklist", &ip_blacklist)?;
         conn.execute(
-            "UPDATE admin_tokens SET name = ?2, allowed_models = ?3, max_tokens = ?4, enabled = ?5, expires_at = ?6, max_amount = ?7 WHERE token = ?1",
+            "UPDATE admin_tokens SET name = ?2, allowed_models = ?3, max_tokens = ?4, enabled = ?5, expires_at = ?6, max_amount = ?7, remark = ?8, organization_id = ?9, ip_whitelist = ?10, ip_blacklist = ?11 WHERE token = ?1",
             (
                 &tok,
                 &name,
@@ -184,6 +220,10 @@ impl TokenStore for DatabaseLogger {
                 if enabled { 1 } else { 0 },
                 expires_at.clone(),
                 max_amount,
+                remark.clone(),
+                organization_id.clone(),
+                ip_whitelist_s.clone(),
+                ip_blacklist_s.clone(),
             ),
         )?;
 
@@ -204,6 +244,10 @@ impl TokenStore for DatabaseLogger {
             prompt_tokens_spent,
             completion_tokens_spent,
             total_tokens_spent,
+            remark,
+            organization_id,
+            ip_whitelist,
+            ip_blacklist,
         }))
     }
 
@@ -219,7 +263,7 @@ impl TokenStore for DatabaseLogger {
     async fn get_token(&self, token: &str) -> Result<Option<AdminToken>, GatewayError> {
         let conn = self.connection.lock().await;
         use rusqlite::OptionalExtension;
-        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens WHERE token = ?1")?;
+        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens WHERE token = ?1")?;
         let row = stmt
             .query_row([token], |row| {
                 Ok((
@@ -236,6 +280,10 @@ impl TokenStore for DatabaseLogger {
                     row.get::<_, Option<i64>>(10)?,
                     row.get::<_, Option<i64>>(11)?,
                     row.get::<_, Option<i64>>(12)?,
+                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, Option<String>>(15)?,
+                    row.get::<_, Option<String>>(16)?,
                 ))
             })
             .optional()?;
@@ -253,28 +301,32 @@ impl TokenStore for DatabaseLogger {
             prompt_tokens_spent,
             completion_tokens_spent,
             total_tokens_spent,
+            remark,
+            organization_id,
+            ip_whitelist_s,
+            ip_blacklist_s,
         )) = row
         {
-        let needs_id_backfill = id0.as_deref().filter(|s| !s.is_empty()).is_none();
-        let needs_name_backfill = name0.as_deref().filter(|s| !s.trim().is_empty()).is_none();
-        let id = id0
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| admin_token_id_for_token(&token));
-        let name = normalize_admin_token_name(name0.clone(), &id);
-        if needs_id_backfill {
-            let _ = conn.execute(
-                "UPDATE admin_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
-                (&token, &id),
-            );
-        }
-        if needs_name_backfill {
-            let _ = conn.execute(
+            let needs_id_backfill = id0.as_deref().filter(|s| !s.is_empty()).is_none();
+            let needs_name_backfill = name0.as_deref().filter(|s| !s.trim().is_empty()).is_none();
+            let id = id0
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| admin_token_id_for_token(&token));
+            let name = normalize_admin_token_name(name0.clone(), &id);
+            if needs_id_backfill {
+                let _ = conn.execute(
+                    "UPDATE admin_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
+                    (&token, &id),
+                );
+            }
+            if needs_name_backfill {
+                let _ = conn.execute(
                 "UPDATE admin_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
                 (&token, &name),
             );
-        }
+            }
             Ok(Some(AdminToken {
                 id,
                 name,
@@ -292,6 +344,10 @@ impl TokenStore for DatabaseLogger {
                 prompt_tokens_spent: prompt_tokens_spent.unwrap_or(0),
                 completion_tokens_spent: completion_tokens_spent.unwrap_or(0),
                 total_tokens_spent: total_tokens_spent.unwrap_or(0),
+                remark,
+                organization_id,
+                ip_whitelist: decode_json_string_list("ip_whitelist", ip_whitelist_s)?,
+                ip_blacklist: decode_json_string_list("ip_blacklist", ip_blacklist_s)?,
             }))
         } else {
             Ok(None)
@@ -301,7 +357,7 @@ impl TokenStore for DatabaseLogger {
     async fn get_token_by_id(&self, id: &str) -> Result<Option<AdminToken>, GatewayError> {
         let conn = self.connection.lock().await;
         use rusqlite::OptionalExtension;
-        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens WHERE id = ?1")?;
+        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens WHERE id = ?1")?;
         let row = stmt
             .query_row([id], |row| {
                 Ok((
@@ -318,6 +374,10 @@ impl TokenStore for DatabaseLogger {
                     row.get::<_, Option<i64>>(10)?,
                     row.get::<_, Option<i64>>(11)?,
                     row.get::<_, Option<i64>>(12)?,
+                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, Option<String>>(15)?,
+                    row.get::<_, Option<String>>(16)?,
                 ))
             })
             .optional()?;
@@ -335,6 +395,10 @@ impl TokenStore for DatabaseLogger {
             prompt_tokens_spent,
             completion_tokens_spent,
             total_tokens_spent,
+            remark,
+            organization_id,
+            ip_whitelist_s,
+            ip_blacklist_s,
         )) = row
         else {
             return Ok(None);
@@ -376,12 +440,16 @@ impl TokenStore for DatabaseLogger {
             prompt_tokens_spent: prompt_tokens_spent.unwrap_or(0),
             completion_tokens_spent: completion_tokens_spent.unwrap_or(0),
             total_tokens_spent: total_tokens_spent.unwrap_or(0),
+            remark,
+            organization_id,
+            ip_whitelist: decode_json_string_list("ip_whitelist", ip_whitelist_s)?,
+            ip_blacklist: decode_json_string_list("ip_blacklist", ip_blacklist_s)?,
         }))
     }
 
     async fn list_tokens(&self) -> Result<Vec<AdminToken>, GatewayError> {
         let conn = self.connection.lock().await;
-        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent FROM admin_tokens ORDER BY created_at DESC")?;
+        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens ORDER BY created_at DESC")?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, Option<String>>(0)?,
@@ -397,6 +465,10 @@ impl TokenStore for DatabaseLogger {
                 row.get::<_, Option<i64>>(10)?,
                 row.get::<_, Option<i64>>(11)?,
                 row.get::<_, Option<i64>>(12)?,
+                row.get::<_, Option<String>>(13)?,
+                row.get::<_, Option<String>>(14)?,
+                row.get::<_, Option<String>>(15)?,
+                row.get::<_, Option<String>>(16)?,
             ))
         })?;
         let mut out = Vec::new();
@@ -415,6 +487,10 @@ impl TokenStore for DatabaseLogger {
                 prompt_tokens_spent,
                 completion_tokens_spent,
                 total_tokens_spent,
+                remark,
+                organization_id,
+                ip_whitelist_s,
+                ip_blacklist_s,
             ) = r?;
             let needs_id_backfill = id0.as_deref().filter(|s| !s.is_empty()).is_none();
             let needs_name_backfill = name0.as_deref().filter(|s| !s.trim().is_empty()).is_none();
@@ -453,6 +529,10 @@ impl TokenStore for DatabaseLogger {
                 prompt_tokens_spent: prompt_tokens_spent.unwrap_or(0),
                 completion_tokens_spent: completion_tokens_spent.unwrap_or(0),
                 total_tokens_spent: total_tokens_spent.unwrap_or(0),
+                remark,
+                organization_id,
+                ip_whitelist: decode_json_string_list("ip_whitelist", ip_whitelist_s)?,
+                ip_blacklist: decode_json_string_list("ip_blacklist", ip_blacklist_s)?,
             });
         }
         Ok(out)

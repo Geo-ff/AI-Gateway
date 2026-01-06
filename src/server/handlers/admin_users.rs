@@ -310,8 +310,8 @@ pub async fn delete_user(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::settings::{LoadBalancing, LoggingConfig, ServerConfig};
     use crate::config::BalanceStrategy;
+    use crate::config::settings::{LoadBalancing, LoggingConfig, ServerConfig};
     use crate::logging::DatabaseLogger;
     use crate::server::login::LoginManager;
     use crate::server::storage_traits::{AdminPublicKeyRecord, LoginStore, TuiSessionRecord};
@@ -343,7 +343,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let settings = test_settings(db_path.to_str().unwrap().to_string());
-        let logger = Arc::new(DatabaseLogger::new(&settings.logging.database_path).await.unwrap());
+        let logger = Arc::new(
+            DatabaseLogger::new(&settings.logging.database_path)
+                .await
+                .unwrap(),
+        );
 
         let fingerprint = "test-fp".to_string();
         let now = Utc::now();

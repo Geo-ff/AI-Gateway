@@ -79,7 +79,9 @@ pub async fn ensure_client(
         }
         return Err(GatewayError::Config("token disabled".into()));
     }
-    if let Some(exp) = t.expires_at && chrono::Utc::now() > exp {
+    if let Some(exp) = t.expires_at
+        && chrono::Utc::now() > exp
+    {
         return Err(GatewayError::Config("token expired".into()));
     }
     Ok(tok)

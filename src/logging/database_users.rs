@@ -128,9 +128,7 @@ impl UserStore for DatabaseLogger {
         let mut stmt = conn.prepare(
             "SELECT id, first_name, last_name, username, email, phone_number, status, role, created_at, updated_at FROM users WHERE id = ?1",
         )?;
-        let row = stmt
-            .query_row([id], |row| row_to_user(row))
-            .optional()?;
+        let row = stmt.query_row([id], |row| row_to_user(row)).optional()?;
         let Some(mut user) = row else {
             return Ok(None);
         };
@@ -181,9 +179,7 @@ impl UserStore for DatabaseLogger {
         let mut stmt = conn.prepare(
             "SELECT id, first_name, last_name, username, email, phone_number, status, role, created_at, updated_at FROM users WHERE id = ?1",
         )?;
-        let row = stmt
-            .query_row([id], |row| row_to_user(row))
-            .optional()?;
+        let row = stmt.query_row([id], |row| row_to_user(row)).optional()?;
         Ok(row)
     }
 

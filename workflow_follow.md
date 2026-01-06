@@ -216,7 +216,7 @@
 
 ```
 阶段一：基础对接（优先）
-├── 1. ✅ 前端创建 API 适配层（字段映射）
+├── 1. ✅ 前端创建 API 适配层（字段映射） 
 ├── 1.1 配置 `VITE_API_BASE_URL` 并接入 Users 页面（替换 mock data）
 ├── 2. ✅ 后端 AdminToken 添加 name、id 字段（管理端 CRUD 按 `{id}`）
 └── 3. 对接 Keys 模块基础 CRUD

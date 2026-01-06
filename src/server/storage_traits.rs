@@ -9,10 +9,8 @@ use chrono::{DateTime, Utc};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-type DateRangeFuture<'a> =
-    BoxFuture<'a, rusqlite::Result<Option<(DateTime<Utc>, DateTime<Utc>)>>>;
-type ModelPriceFuture<'a> =
-    BoxFuture<'a, rusqlite::Result<Option<(f64, f64, Option<String>)>>>;
+type DateRangeFuture<'a> = BoxFuture<'a, rusqlite::Result<Option<(DateTime<Utc>, DateTime<Utc>)>>>;
+type ModelPriceFuture<'a> = BoxFuture<'a, rusqlite::Result<Option<(f64, f64, Option<String>)>>>;
 type ModelPriceListFuture<'a> =
     BoxFuture<'a, rusqlite::Result<Vec<(String, String, f64, f64, Option<String>)>>>;
 
@@ -75,15 +73,8 @@ pub trait RequestLogStore: Send + Sync {
         completion_price_per_million: f64,
         currency: Option<&'a str>,
     ) -> BoxFuture<'a, rusqlite::Result<()>>;
-    fn get_model_price<'a>(
-        &'a self,
-        provider: &'a str,
-        model: &'a str,
-    ) -> ModelPriceFuture<'a>;
-    fn list_model_prices<'a>(
-        &'a self,
-        provider: Option<&'a str>,
-    ) -> ModelPriceListFuture<'a>;
+    fn get_model_price<'a>(&'a self, provider: &'a str, model: &'a str) -> ModelPriceFuture<'a>;
+    fn list_model_prices<'a>(&'a self, provider: Option<&'a str>) -> ModelPriceListFuture<'a>;
     fn sum_spent_amount_by_client_token<'a>(
         &'a self,
         token: &'a str,

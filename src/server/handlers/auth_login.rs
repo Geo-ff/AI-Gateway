@@ -85,7 +85,9 @@ fn parse_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
     let cookie = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
     for part in cookie.split(';') {
         let kv = part.trim();
-        if let Some((k, v)) = kv.split_once('=') && k.trim() == name {
+        if let Some((k, v)) = kv.split_once('=')
+            && k.trim() == name
+        {
             return Some(v.trim().to_string());
         }
     }
