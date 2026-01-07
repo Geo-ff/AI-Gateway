@@ -127,7 +127,7 @@ pub async fn create_login_code(
     let session = match identity {
         AdminIdentity::TuiSession(session) => session,
         _ => {
-            return Err(GatewayError::Config(
+            return Err(GatewayError::Forbidden(
                 "仅允许通过 TUI 会话生成登录凭证".into(),
             ));
         }
@@ -179,7 +179,7 @@ pub async fn current_code_status(
     let session = match identity {
         AdminIdentity::TuiSession(session) => session,
         _ => {
-            return Err(GatewayError::Config("仅 TUI 会话可查询登录凭证状态".into()));
+            return Err(GatewayError::Forbidden("仅 TUI 会话可查询登录凭证状态".into()));
         }
     };
 

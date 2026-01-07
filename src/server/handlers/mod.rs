@@ -12,6 +12,7 @@ mod admin_prices;
 mod client_tokens;
 mod admin_users;
 mod auth;
+mod auth_jwt;
 mod auth_keys;
 mod auth_login;
 mod auth_tui;
@@ -45,6 +46,8 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/auth/login-codes/status",
             get(auth_login::current_code_status),
         )
+        .route("/auth/login", post(auth_jwt::login))
+        .route("/auth/me", get(auth_jwt::me))
         .route("/auth/code/redeem", post(auth_login::redeem_code))
         .route("/auth/session", get(auth_login::get_session))
         .route("/auth/logout", post(auth_login::logout))

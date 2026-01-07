@@ -35,6 +35,12 @@ pub enum GatewayError {
 
     #[error("Rate limited: {0}")]
     RateLimited(String),
+
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
 }
 
 pub type Result<T> = std::result::Result<T, GatewayError>;
@@ -52,6 +58,8 @@ impl GatewayError {
             | GatewayError::Balance(BalanceError::NoApiKeysAvailable) => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
+            GatewayError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            GatewayError::Forbidden(_) => StatusCode::FORBIDDEN,
             GatewayError::Http(_) => StatusCode::BAD_GATEWAY,
             GatewayError::Config(_) => StatusCode::BAD_REQUEST,
             GatewayError::NotFound(_) => StatusCode::NOT_FOUND,
@@ -72,6 +80,8 @@ impl GatewayError {
             GatewayError::Config(_) => "config_error",
             GatewayError::NotFound(_) => "not_found",
             GatewayError::RateLimited(_) => "rate_limited",
+            GatewayError::Unauthorized(_) => "unauthorized",
+            GatewayError::Forbidden(_) => "forbidden",
         }
     }
 }

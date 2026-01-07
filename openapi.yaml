@@ -36,6 +36,12 @@ components:
       name: gw_session
       description: 管理员身份（Admin Identity）的 Web Session Cookie（HttpOnly）
 
+    AccessToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 管理端 AccessToken（JWT），格式: Bearer <jwt>；用于访问 `/admin/*`、`/providers/*` 等管理端接口
+
   schemas:
     # 错误响应
     Error:
@@ -616,6 +622,65 @@ components:
         fingerprint:
           type: string
 
+    JwtLoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required:
+        - email
+        - password
+
+    JwtAuthUser:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [superadmin, admin, cashier, manager]
+        permissions:
+          type: array
+          items:
+            type: string
+      required:
+        - id
+        - email
+        - role
+        - permissions
+
+    JwtLoginResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          description: AccessToken（JWT）
+        expiresAt:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/JwtAuthUser'
+      required:
+        - accessToken
+        - expiresAt
+        - user
+
+    JwtMeResponse:
+      type: object
+      properties:
+        expiresAt:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/JwtAuthUser'
+      required:
+        - expiresAt
+        - user
+
     AdminKey:
       type: object
       properties:
@@ -1182,6 +1247,70 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /auth/login:
+    post:
+      summary: 管理端登录（JWT）
+      description: |
+        使用管理员账号密码签发 AccessToken（JWT）。
+        需要配置：`GW_ADMIN_EMAIL`、`GW_ADMIN_PASSWORD`、`GW_JWT_SECRET`（可选 `GW_JWT_TTL_SECS`）。
+      operationId: authLogin
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JwtLoginRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JwtLoginResponse'
+        '400':
+          description: 配置/参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 登录失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/me:
+    get:
+      summary: 获取当前登录用户（JWT）
+      description: 从 Authorization Bearer JWT 解析并返回当前用户信息
+      operationId: authMe
+      tags:
+        - Auth
+      security:
+        - AccessToken: []
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JwtMeResponse'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /auth/keys:
     get:
       summary: 获取管理员公钥列表
@@ -1190,6 +1319,7 @@ paths:
       tags:
         - Auth
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       responses:
@@ -1207,6 +1337,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
     post:
       summary: 添加管理员公钥
@@ -1215,6 +1351,7 @@ paths:
       tags:
         - Auth
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       requestBody:
@@ -1242,6 +1379,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /auth/keys/{fingerprint}:
     delete:
@@ -1251,6 +1394,7 @@ paths:
       tags:
         - Auth
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -1269,6 +1413,18 @@ paths:
                 properties:
                   deleted:
                     type: boolean
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 不存在
           content:
@@ -1284,6 +1440,7 @@ paths:
       tags:
         - Auth
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -1301,6 +1458,18 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/TuiSession'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /auth/tui/sessions/{session_id}/revoke:
     post:
@@ -1310,6 +1479,7 @@ paths:
       tags:
         - Auth
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -1328,6 +1498,18 @@ paths:
                 properties:
                   revoked:
                     type: boolean
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /auth/login-codes:
     post:
@@ -1357,6 +1539,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /auth/login-codes/status:
     get:
@@ -1374,6 +1562,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CodeStatusResponse'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /auth/code/redeem:
     post:
@@ -1415,8 +1615,10 @@ paths:
 
   /auth/logout:
     post:
-      summary: 退出登录（撤销 Cookie 会话）
-      description: 撤销 `gw_session` 并清理 Cookie
+      summary: 退出登录
+      description: |
+        - Cookie 会话：撤销 `gw_session` 并清理 Cookie
+        - AccessToken（JWT）：无状态，服务端不存储 Token，返回 204；前端自行清理本地 Token
       operationId: logout
       tags:
         - Auth
@@ -1479,6 +1681,7 @@ paths:
         - Models
       security:
         - ClientToken: []
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       responses:
@@ -1504,6 +1707,7 @@ paths:
         - Models
       security:
         - ClientToken: []
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -1600,6 +1804,7 @@ paths:
       tags:
         - Admin
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       responses:
@@ -1617,6 +1822,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
     post:
       summary: 创建令牌
@@ -1625,6 +1836,7 @@ paths:
       tags:
         - Admin
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       requestBody:
@@ -1652,6 +1864,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /admin/tokens/{id}:
     get:
@@ -1661,6 +1879,7 @@ paths:
       tags:
         - Admin
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -1677,6 +1896,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ClientToken'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 令牌不存在
           content:
@@ -1691,6 +1922,7 @@ paths:
       tags:
         - Admin
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -1713,6 +1945,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ClientToken'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 令牌不存在
           content:
@@ -1727,6 +1971,7 @@ paths:
       tags:
         - Admin
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -1739,6 +1984,18 @@ paths:
       responses:
         '204':
           description: 成功删除
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 令牌不存在
           content:
@@ -1754,6 +2011,7 @@ paths:
       tags:
         - Admin
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -1784,6 +2042,18 @@ paths:
                 properties:
                   status:
                     type: string
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /admin/users:
     get:
@@ -1793,6 +2063,7 @@ paths:
       tags:
         - Admin
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       responses:
@@ -1810,6 +2081,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
     post:
       summary: 创建用户
@@ -1818,6 +2095,7 @@ paths:
       tags:
         - Admin
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       requestBody:
@@ -1845,6 +2123,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /admin/users/{id}:
     get:
@@ -1854,6 +2138,7 @@ paths:
       tags:
         - Admin
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -1870,6 +2155,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 用户不存在
           content:
@@ -1884,6 +2181,7 @@ paths:
       tags:
         - Admin
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -1906,6 +2204,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 用户不存在
           content:
@@ -1920,6 +2230,7 @@ paths:
       tags:
         - Admin
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -1932,6 +2243,18 @@ paths:
       responses:
         '204':
           description: 删除成功
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 用户不存在
           content:
@@ -1948,6 +2271,7 @@ paths:
       tags:
         - Providers
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       responses:
@@ -1965,6 +2289,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
     post:
       summary: 创建提供商
@@ -1973,6 +2303,7 @@ paths:
       tags:
         - Providers
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       requestBody:
@@ -2013,6 +2344,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /providers/{provider}:
     get:
@@ -2022,6 +2365,7 @@ paths:
       tags:
         - Providers
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2038,6 +2382,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Provider'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 提供商不存在
           content:
@@ -2052,6 +2408,7 @@ paths:
       tags:
         - Providers
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2086,6 +2443,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Provider'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 提供商不存在
           content:
@@ -2100,6 +2469,7 @@ paths:
       tags:
         - Providers
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2119,6 +2489,18 @@ paths:
                 properties:
                   success:
                     type: boolean
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 提供商不存在
           content:
@@ -2134,6 +2516,7 @@ paths:
       tags:
         - Providers
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2155,6 +2538,18 @@ paths:
                     type: array
                     items:
                       type: string
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 提供商不存在
           content:
@@ -2169,6 +2564,7 @@ paths:
       tags:
         - Providers
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2200,6 +2596,18 @@ paths:
                 properties:
                   success:
                     type: boolean
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 提供商不存在
           content:
@@ -2214,6 +2622,7 @@ paths:
       tags:
         - Providers
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2245,6 +2654,18 @@ paths:
                 properties:
                   success:
                     type: boolean
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 提供商或密钥不存在
           content:
@@ -2260,6 +2681,7 @@ paths:
       tags:
         - Providers
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2301,6 +2723,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /providers/{provider}/keys/batch:
     post:
@@ -2310,6 +2738,7 @@ paths:
       tags:
         - Providers
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2363,6 +2792,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
     delete:
       summary: 批量删除提供商密钥
@@ -2371,6 +2806,7 @@ paths:
       tags:
         - Providers
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2424,6 +2860,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   # ==================== 日志查询接口 ====================
   /admin/logs/requests:
@@ -2434,6 +2876,7 @@ paths:
       tags:
         - Logs
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2503,6 +2946,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /admin/logs/chat-completions:
     get:
@@ -2512,6 +2961,7 @@ paths:
       tags:
         - Logs
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2540,6 +2990,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /admin/logs/operations:
     get:
@@ -2549,6 +3005,7 @@ paths:
       tags:
         - Logs
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2587,6 +3044,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   # ==================== 统计分析接口 ====================
   /admin/metrics/summary:
@@ -2597,6 +3060,7 @@ paths:
       tags:
         - Metrics
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2628,6 +3092,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /admin/metrics/series:
     get:
@@ -2637,6 +3107,7 @@ paths:
       tags:
         - Metrics
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2673,6 +3144,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /admin/metrics/models-distribution:
     get:
@@ -2682,6 +3159,7 @@ paths:
       tags:
         - Metrics
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2718,6 +3196,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /admin/metrics/series-models:
     get:
@@ -2727,6 +3211,7 @@ paths:
       tags:
         - Metrics
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2763,6 +3248,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   # ==================== 模型缓存接口 ====================
   /admin/models/cache:
@@ -2773,6 +3264,7 @@ paths:
       tags:
         - Models
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2794,6 +3286,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /models/{provider}/cache:
     post:
@@ -2803,6 +3301,7 @@ paths:
       tags:
         - Models
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2822,6 +3321,18 @@ paths:
                 properties:
                   success:
                     type: boolean
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 提供商不存在
           content:
@@ -2836,6 +3347,7 @@ paths:
       tags:
         - Models
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2855,6 +3367,18 @@ paths:
                 properties:
                   success:
                     type: boolean
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   # ==================== 价格管理接口 ====================
   /admin/model-prices:
@@ -2865,6 +3389,7 @@ paths:
       tags:
         - Admin
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2896,6 +3421,18 @@ paths:
                     currency:
                       type: string
                       nullable: true
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
     post:
       summary: 设置模型价格
@@ -2904,6 +3441,7 @@ paths:
       tags:
         - Admin
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       requestBody:
@@ -2946,6 +3484,18 @@ paths:
                 properties:
                   success:
                     type: boolean
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /admin/model-prices/{provider}/{model}:
     get:
@@ -2955,6 +3505,7 @@ paths:
       tags:
         - Admin
       security:
+        - AccessToken: []
         - AdminTuiSessionToken: []
         - AdminSessionCookie: []
       parameters:
@@ -2989,6 +3540,18 @@ paths:
                   currency:
                     type: string
                     nullable: true
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: 不存在
           content:

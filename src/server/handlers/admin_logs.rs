@@ -111,6 +111,7 @@ pub struct OperationLogsResponse {
 
 fn identity_label(identity: &AdminIdentity) -> &'static str {
     match identity {
+        AdminIdentity::Jwt(_) => "jwt",
         AdminIdentity::TuiSession(_) => "tui_session",
         AdminIdentity::WebSession(_) => "web_session",
     }
@@ -310,6 +311,7 @@ pub async fn list_chat_completion_logs(
         None,
         None,
         Some(match identity {
+            AdminIdentity::Jwt(_) => "jwt",
             AdminIdentity::TuiSession(_) => "tui_session",
             AdminIdentity::WebSession(_) => "web_session",
         }),
