@@ -84,7 +84,7 @@
     <text x="190" y="435" text-anchor="middle" class="title">认证模块</text>
     
     <rect x="115" y="450" width="150" height="28" class="component"/>
-    <text x="190" y="467" text-anchor="middle" class="subtitle">Admin Token 验证</text>
+    <text x="190" y="467" text-anchor="middle" class="subtitle">Client Token 验证</text>
     
     <rect x="115" y="485" width="150" height="28" class="component"/>
     <text x="190" y="502" text-anchor="middle" class="subtitle">TUI Session 管理</text>
@@ -108,7 +108,7 @@
     <text x="405" y="537" text-anchor="middle" class="subtitle">Token Info</text>
     
     <rect x="490" y="450" width="140" height="28" class="component"/>
-    <text x="560" y="467" text-anchor="middle" class="subtitle">Admin Tokens</text>
+    <text x="560" y="467" text-anchor="middle" class="subtitle">Client Tokens</text>
     
     <rect x="490" y="485" width="140" height="28" class="component"/>
     <text x="560" y="502" text-anchor="middle" class="subtitle">Providers</text>
@@ -265,7 +265,7 @@
     <text x="540" y="1161" text-anchor="middle" class="small-text">providers 提供商配置</text>
     
     <rect x="170" y="1178" width="140" height="25" class="component"/>
-    <text x="240" y="1194" text-anchor="middle" class="small-text">admin_tokens 令牌管理</text>
+    <text x="240" y="1194" text-anchor="middle" class="small-text">client_tokens 令牌管理</text>
     
     <rect x="320" y="1178" width="140" height="25" class="component"/>
     <text x="390" y="1194" text-anchor="middle" class="small-text">admin_keys 管理员密钥</text>

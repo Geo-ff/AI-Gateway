@@ -23,7 +23,7 @@
 | 模块 | 文件路径 | 主要数据结构 | 用途 |
 |------|---------|-------------|------|
 | 日志类型 | src/logging/types.rs | RequestLog, CachedModel, ProviderOpLog | 请求日志、模型缓存、提供商操作日志 |
-| 管理令牌 | src/admin/mod.rs | AdminToken, CreateTokenPayload, UpdateTokenPayload | 管理员令牌管理、创建和更新 |
+| 管理令牌 | src/admin/mod.rs | ClientToken, CreateTokenPayload, UpdateTokenPayload | 客户端令牌（Client Token）管理、创建和更新 |
 | 存储特征 | src/server/storage_traits.rs | AdminPublicKeyRecord, TuiSessionRecord, LoginCodeRecord, WebSessionRecord | 管理员密钥、TUI会话、登录码、Web会话 |
 | 配置设置 | src/config/settings.rs | Provider, Settings, LoadBalancing, ServerConfig, LoggingConfig | 提供商配置、系统设置、负载均衡 |
 | 用户管理 | src/users.rs | User, CreateUserPayload, UpdateUserPayload, UserStore | 用户数据结构与 CRUD 存储抽象 |
@@ -33,7 +33,7 @@
 2. 🟡 前端对接用户接口：`/admin/users`（GET/POST）与 `/admin/users/{id}`（GET/PUT/DELETE）（API 层已就绪，页面仍使用 mock data，待接入）
 3. ✅ 统一时间字段格式：前端已支持解析后端北京时间字符串（`%Y-%m-%d %H:%M:%S`）为 `Date`（UTC），建议后端逐步切换 ISO-8601
 4. 认证接口仍待实现：`/auth/login`、`/auth/logout`、`/auth/me`
-5. ✅ 后端 AdminToken 已添加 `id`、`name` 字段，并将管理端令牌 CRUD 从 `{token}` 切换为 `{id}`（避免在 URL/日志中暴露敏感 token）
+5. ✅ 后端 ClientToken 已添加 `id`、`name` 字段，并将管理端令牌 CRUD 从 `{token}` 切换为 `{id}`（避免在 URL/日志中暴露敏感 token）
 #### 任务完成情况（实时更新）
 1. ✅ 后端数据模型的定义和分布已指出
 2. ✅ api规范文件已完成，路径：/home/Geoff001/Code/Project/Graduation_Project/gateway_zero/openapi.yaml
@@ -43,7 +43,7 @@
 4. ✅ 已补充用户模块最小单元测试覆盖（`cargo test` 将包含 users 相关用例）
 5. ✅ 前端已新增 Users API 适配层（DTO↔Domain）：`src/features/users/api/*`
 6. ✅ 前端已新增最小请求层 `axios` client：`src/lib/api-client.ts`（自动附加 `Authorization: Bearer <token>`；baseURL 读取 `VITE_API_BASE_URL`）
-7. ✅ AdminToken 已补齐 `id/name` 字段，并同步更新 OpenAPI、前端令牌管理页面与 TUI（路由按 `{id}` 操作）
+7. ✅ ClientToken 已补齐 `id/name` 字段，并同步更新 OpenAPI、前端令牌管理页面与 TUI（路由按 `{id}` 操作）
 
 ---
 
@@ -56,13 +56,13 @@
 
 | 前端模块 | 后端对应 | 映射关系 |
 |---------|---------|---------|
-| **Keys** (API 密钥) | **AdminToken** (管理员令牌) | ⚠️ 部分对应，字段差异大 |
+| **Keys** (API 密钥) | **ClientToken** (客户端令牌) | ⚠️ 部分对应，字段差异大 |
 | **Channels** (渠道) | **Provider** (提供商) | ⚠️ 概念相近，结构不同 |
 | **Users** (用户) | **User**（用户管理模块） | 🟡 已实现，需前端做字段映射 |
 
 ---
 
-### 二、Keys ↔ AdminToken 字段对比
+### 二、Keys ↔ ClientToken 字段对比
 
 #### 2.1 字段映射表
 
@@ -218,7 +218,7 @@
 阶段一：基础对接（优先）
 ├── 1. ✅ 前端创建 API 适配层（字段映射） 
 ├── 1.1 配置 `VITE_API_BASE_URL` 并接入 Users 页面（替换 mock data）
-├── 2. ✅ 后端 AdminToken 添加 name、id 字段（管理端 CRUD 按 `{id}`）
+├── 2. ✅ 后端 ClientToken 添加 name、id 字段（管理端 CRUD 按 `{id}`）
 └── 3. 对接 Keys 模块基础 CRUD
 
 阶段二：功能完善
@@ -243,3 +243,5 @@
 ---
 
 > **备注**：本文档将随对接进度持续更新
+
+✅ 术语对齐：统一 Client Token / Admin Identity 术语，并同步更新 OpenAPI 与文档（全局无残留）

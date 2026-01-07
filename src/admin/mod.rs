@@ -5,28 +5,28 @@ use serde::{Deserialize, Serialize};
 use crate::error::GatewayError;
 use crate::logging::time::{parse_beijing_string, to_beijing_string};
 
-const ADMIN_TOKEN_ID_PREFIX: &str = "atk_";
+const CLIENT_TOKEN_ID_PREFIX: &str = "atk_";
 
-pub(crate) fn admin_token_id_for_token(token: &str) -> String {
+pub(crate) fn client_token_id_for_token(token: &str) -> String {
     use sha2::Digest;
     let mut hasher = sha2::Sha256::new();
     hasher.update(token.as_bytes());
     let hex = hex::encode(hasher.finalize());
-    format!("{}{}", ADMIN_TOKEN_ID_PREFIX, &hex[..24])
+    format!("{}{}", CLIENT_TOKEN_ID_PREFIX, &hex[..24])
 }
 
-pub(crate) fn normalize_admin_token_name(name: Option<String>, id: &str) -> String {
+pub(crate) fn normalize_client_token_name(name: Option<String>, id: &str) -> String {
     let trimmed = name.map(|v| v.trim().to_string());
     if let Some(v) = trimmed.filter(|v| !v.is_empty()) {
         return v;
     }
     // Default: stable, non-sensitive, human-friendly
-    let suffix = id.strip_prefix(ADMIN_TOKEN_ID_PREFIX).unwrap_or(id);
+    let suffix = id.strip_prefix(CLIENT_TOKEN_ID_PREFIX).unwrap_or(id);
     format!("token-{}", &suffix[..8.min(suffix.len())])
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AdminToken {
+pub struct ClientToken {
     pub id: String,
     pub name: String,
     pub token: String,
@@ -115,16 +115,16 @@ pub struct UpdateTokenPayload {
 
 #[async_trait]
 pub trait TokenStore: Send + Sync {
-    async fn create_token(&self, payload: CreateTokenPayload) -> Result<AdminToken, GatewayError>;
+    async fn create_token(&self, payload: CreateTokenPayload) -> Result<ClientToken, GatewayError>;
     async fn update_token(
         &self,
         token: &str,
         payload: UpdateTokenPayload,
-    ) -> Result<Option<AdminToken>, GatewayError>;
+    ) -> Result<Option<ClientToken>, GatewayError>;
     async fn set_enabled(&self, token: &str, enabled: bool) -> Result<bool, GatewayError>;
-    async fn get_token(&self, token: &str) -> Result<Option<AdminToken>, GatewayError>;
-    async fn get_token_by_id(&self, id: &str) -> Result<Option<AdminToken>, GatewayError>;
-    async fn list_tokens(&self) -> Result<Vec<AdminToken>, GatewayError>;
+    async fn get_token(&self, token: &str) -> Result<Option<ClientToken>, GatewayError>;
+    async fn get_token_by_id(&self, id: &str) -> Result<Option<ClientToken>, GatewayError>;
+    async fn list_tokens(&self) -> Result<Vec<ClientToken>, GatewayError>;
     async fn add_amount_spent(&self, token: &str, delta: f64) -> Result<(), GatewayError>;
     async fn add_usage_spent(
         &self,
@@ -139,11 +139,11 @@ pub trait TokenStore: Send + Sync {
         &self,
         id: &str,
         payload: UpdateTokenPayload,
-    ) -> Result<Option<AdminToken>, GatewayError>;
+    ) -> Result<Option<ClientToken>, GatewayError>;
     async fn set_enabled_by_id(&self, id: &str, enabled: bool) -> Result<bool, GatewayError>;
 }
 
-// SQLite 的实现由 DatabaseLogger 提供（见 logging/database_admin_tokens.rs）
+// SQLite 的实现由 DatabaseLogger 提供（见 logging/database_client_tokens.rs）
 
 // ------------------ Postgres 实现（GaussDB 兼容） ------------------
 
@@ -191,13 +191,13 @@ pub(crate) fn decode_json_string_list(
         .map(Some)
         .map_err(|e| {
             GatewayError::Config(format!(
-                "DB decode error: admin_tokens.{} invalid JSON: {}",
+                "DB decode error: client_tokens.{} invalid JSON: {}",
                 field, e
             ))
         })
 }
 
-fn row_to_admin_token(r: &tokio_postgres::Row) -> Result<AdminToken, GatewayError> {
+fn row_to_client_token(r: &tokio_postgres::Row) -> Result<ClientToken, GatewayError> {
     let id_opt: Option<String> = r.get(0);
     let name_opt: Option<String> = r.get(1);
     let token: String = r.get(2);
@@ -215,9 +215,9 @@ fn row_to_admin_token(r: &tokio_postgres::Row) -> Result<AdminToken, GatewayErro
     let organization_id: Option<String> = r.get(14);
     let ip_whitelist_s: Option<String> = r.get(15);
     let ip_blacklist_s: Option<String> = r.get(16);
-    let id = id_opt.unwrap_or_else(|| admin_token_id_for_token(&token));
-    let name = normalize_admin_token_name(name_opt, &id);
-    Ok(AdminToken {
+    let id = id_opt.unwrap_or_else(|| client_token_id_for_token(&token));
+    let name = normalize_client_token_name(name_opt, &id);
+    Ok(ClientToken {
         id,
         name,
         token,
@@ -255,9 +255,79 @@ impl PgTokenStore {
                 .await
                 .map_err(|e| GatewayError::Config(format!("Failed to set search_path: {}", e)))?;
         }
-        client
-            .execute(
-                r#"CREATE TABLE IF NOT EXISTS admin_tokens (
+        ensure_client_tokens_table_pg(&client).await?;
+        let store = Self {
+            client: std::sync::Arc::new(client),
+        };
+        // keepalive（带抖动），降低空闲回收的概率并避免集群齐刷刷触发
+        crate::db::postgres::spawn_keepalive(std::sync::Arc::clone(&store.client), 240, 420);
+        Ok(store)
+    }
+}
+
+const CLIENT_TOKENS_TABLE: &str = "client_tokens";
+
+fn quote_pg_ident(ident: &str) -> String {
+    format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
+async fn table_exists_pg(
+    client: &tokio_postgres::Client,
+    table_name: &str,
+) -> Result<bool, GatewayError> {
+    let row = client
+        .query_opt(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1",
+            &[&table_name],
+        )
+        .await
+        .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
+    Ok(row.is_some())
+}
+
+async fn find_legacy_tokens_table_pg(
+    client: &tokio_postgres::Client,
+) -> Result<Option<String>, GatewayError> {
+    // Heuristic: locate a token table in current_schema by its core columns.
+    let rows = client
+        .query(
+            "SELECT table_name
+             FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND column_name IN ('token', 'enabled', 'created_at', 'allowed_models')
+             GROUP BY table_name
+             HAVING COUNT(DISTINCT column_name) = 4
+             LIMIT 8",
+            &[],
+        )
+        .await
+        .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
+
+    for r in rows {
+        let name: String = r.get(0);
+        if name == CLIENT_TOKENS_TABLE {
+            continue;
+        }
+        return Ok(Some(name));
+    }
+    Ok(None)
+}
+
+async fn ensure_client_tokens_table_pg(client: &tokio_postgres::Client) -> Result<(), GatewayError> {
+    if !table_exists_pg(client, CLIENT_TOKENS_TABLE).await? {
+        if let Some(legacy) = find_legacy_tokens_table_pg(client).await? {
+            let sql = format!(
+                "ALTER TABLE {} RENAME TO {}",
+                quote_pg_ident(&legacy),
+                CLIENT_TOKENS_TABLE
+            );
+            let _ = client.execute(&sql, &[]).await;
+        }
+    }
+
+    client
+        .execute(
+            r#"CREATE TABLE IF NOT EXISTS client_tokens (
                 id TEXT UNIQUE,
                 name TEXT,
                 token TEXT PRIMARY KEY,
@@ -276,107 +346,103 @@ impl PgTokenStore {
                 ip_whitelist TEXT,
                 ip_blacklist TEXT
             )"#,
-                &[],
-            )
-            .await
-            .map_err(|e| GatewayError::Config(format!("Failed to init admin_tokens: {}", e)))?;
-        // Migration
-        let _ = client
-            .execute("ALTER TABLE admin_tokens ADD COLUMN id TEXT", &[])
-            .await;
-        let _ = client
-            .execute("ALTER TABLE admin_tokens ADD COLUMN name TEXT", &[])
-            .await;
-        let _ = client
-            .execute(
-                "ALTER TABLE admin_tokens ADD COLUMN max_amount DOUBLE PRECISION",
-                &[],
-            )
-            .await;
-        let _ = client
-            .execute(
-                "ALTER TABLE admin_tokens ADD COLUMN amount_spent DOUBLE PRECISION DEFAULT 0",
-                &[],
-            )
-            .await;
-        let _ = client
-            .execute(
-                "ALTER TABLE admin_tokens ADD COLUMN prompt_tokens_spent BIGINT DEFAULT 0",
-                &[],
-            )
-            .await;
-        let _ = client
-            .execute(
-                "ALTER TABLE admin_tokens ADD COLUMN completion_tokens_spent BIGINT DEFAULT 0",
-                &[],
-            )
-            .await;
-        let _ = client
-            .execute(
-                "ALTER TABLE admin_tokens ADD COLUMN total_tokens_spent BIGINT DEFAULT 0",
-                &[],
-            )
-            .await;
-        let _ = client
-            .execute("ALTER TABLE admin_tokens ADD COLUMN remark TEXT", &[])
-            .await;
-        let _ = client
-            .execute(
-                "ALTER TABLE admin_tokens ADD COLUMN organization_id TEXT",
-                &[],
-            )
-            .await;
-        let _ = client
-            .execute("ALTER TABLE admin_tokens ADD COLUMN ip_whitelist TEXT", &[])
-            .await;
-        let _ = client
-            .execute("ALTER TABLE admin_tokens ADD COLUMN ip_blacklist TEXT", &[])
-            .await;
-        let _ = client
-            .execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS admin_tokens_id_uidx ON admin_tokens(id)",
-                &[],
-            )
-            .await;
+            &[],
+        )
+        .await
+        .map_err(|e| GatewayError::Config(format!("Failed to init client_tokens: {}", e)))?;
 
-        // Backfill id/name for existing rows (best-effort)
-        if let Ok(rows) = client
-            .query(
-                "SELECT token FROM admin_tokens WHERE id IS NULL OR id = '' OR name IS NULL OR name = ''",
-                &[],
-            )
-            .await
-        {
-            for r in rows {
-                let tok: String = r.get(0);
-                let id = admin_token_id_for_token(&tok);
-                let name = normalize_admin_token_name(None, &id);
-                let _ = client
-                    .execute(
-                        "UPDATE admin_tokens SET id = $2 WHERE token = $1 AND (id IS NULL OR id = '')",
-                        &[&tok, &id],
-                    )
-                    .await;
-                let _ = client
-                    .execute(
-                        "UPDATE admin_tokens SET name = $2 WHERE token = $1 AND (name IS NULL OR name = '')",
-                        &[&tok, &name],
-                    )
-                    .await;
-            }
+    // Migration (best-effort)
+    let _ = client
+        .execute("ALTER TABLE client_tokens ADD COLUMN id TEXT", &[])
+        .await;
+    let _ = client
+        .execute("ALTER TABLE client_tokens ADD COLUMN name TEXT", &[])
+        .await;
+    let _ = client
+        .execute(
+            "ALTER TABLE client_tokens ADD COLUMN max_amount DOUBLE PRECISION",
+            &[],
+        )
+        .await;
+    let _ = client
+        .execute(
+            "ALTER TABLE client_tokens ADD COLUMN amount_spent DOUBLE PRECISION DEFAULT 0",
+            &[],
+        )
+        .await;
+    let _ = client
+        .execute(
+            "ALTER TABLE client_tokens ADD COLUMN prompt_tokens_spent BIGINT DEFAULT 0",
+            &[],
+        )
+        .await;
+    let _ = client
+        .execute(
+            "ALTER TABLE client_tokens ADD COLUMN completion_tokens_spent BIGINT DEFAULT 0",
+            &[],
+        )
+        .await;
+    let _ = client
+        .execute(
+            "ALTER TABLE client_tokens ADD COLUMN total_tokens_spent BIGINT DEFAULT 0",
+            &[],
+        )
+        .await;
+    let _ = client
+        .execute("ALTER TABLE client_tokens ADD COLUMN remark TEXT", &[])
+        .await;
+    let _ = client
+        .execute(
+            "ALTER TABLE client_tokens ADD COLUMN organization_id TEXT",
+            &[],
+        )
+        .await;
+    let _ = client
+        .execute("ALTER TABLE client_tokens ADD COLUMN ip_whitelist TEXT", &[])
+        .await;
+    let _ = client
+        .execute("ALTER TABLE client_tokens ADD COLUMN ip_blacklist TEXT", &[])
+        .await;
+    let _ = client
+        .execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS client_tokens_id_uidx ON client_tokens(id)",
+            &[],
+        )
+        .await;
+
+    // Backfill id/name for existing rows (best-effort)
+    if let Ok(rows) = client
+        .query(
+            "SELECT token FROM client_tokens WHERE id IS NULL OR id = '' OR name IS NULL OR name = ''",
+            &[],
+        )
+        .await
+    {
+        for r in rows {
+            let tok: String = r.get(0);
+            let id = client_token_id_for_token(&tok);
+            let name = normalize_client_token_name(None, &id);
+            let _ = client
+                .execute(
+                    "UPDATE client_tokens SET id = $2 WHERE token = $1 AND (id IS NULL OR id = '')",
+                    &[&tok, &id],
+                )
+                .await;
+            let _ = client
+                .execute(
+                    "UPDATE client_tokens SET name = $2 WHERE token = $1 AND (name IS NULL OR name = '')",
+                    &[&tok, &name],
+                )
+                .await;
         }
-        let store = Self {
-            client: std::sync::Arc::new(client),
-        };
-        // keepalive（带抖动），降低空闲回收的概率并避免集群齐刷刷触发
-        crate::db::postgres::spawn_keepalive(std::sync::Arc::clone(&store.client), 240, 420);
-        Ok(store)
     }
+
+    Ok(())
 }
 
 #[async_trait]
 impl TokenStore for PgTokenStore {
-    async fn create_token(&self, payload: CreateTokenPayload) -> Result<AdminToken, GatewayError> {
+    async fn create_token(&self, payload: CreateTokenPayload) -> Result<ClientToken, GatewayError> {
         // 始终生成随机令牌，忽略传入 token 字段
         let token = {
             use rand::Rng;
@@ -387,8 +453,8 @@ impl TokenStore for PgTokenStore {
                 .map(char::from)
                 .collect::<String>()
         };
-        let id = admin_token_id_for_token(&token);
-        let name = normalize_admin_token_name(payload.name.clone(), &id);
+        let id = client_token_id_for_token(&token);
+        let name = normalize_client_token_name(payload.name.clone(), &id);
         let now = Utc::now();
         let allowed_models_s = join_allowed_models(&payload.allowed_models);
         let expires_s = payload.expires_at.clone();
@@ -396,13 +462,13 @@ impl TokenStore for PgTokenStore {
         let ip_blacklist_s = encode_json_string_list("ip_blacklist", &payload.ip_blacklist)?;
         self.client
             .execute(
-                "INSERT INTO admin_tokens (id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, 0, 0, $10, $11, $12, $13)",
+                "INSERT INTO client_tokens (id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, 0, 0, $10, $11, $12, $13)",
                 &[&id, &name, &token, &allowed_models_s, &payload.max_tokens, &payload.enabled, &expires_s, &to_beijing_string(&now), &payload.max_amount, &payload.remark, &payload.organization_id, &ip_whitelist_s, &ip_blacklist_s],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
 
-        Ok(AdminToken {
+        Ok(ClientToken {
             id,
             name,
             token,
@@ -430,20 +496,20 @@ impl TokenStore for PgTokenStore {
         &self,
         token: &str,
         payload: UpdateTokenPayload,
-    ) -> Result<Option<AdminToken>, GatewayError> {
+    ) -> Result<Option<ClientToken>, GatewayError> {
         // read existing
         let row = self.client
             .query_opt(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens WHERE token = $1",
+                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE token = $1",
                 &[&token],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         let Some(r) = row else { return Ok(None) };
-        let mut current = row_to_admin_token(&r)?;
+        let mut current = row_to_client_token(&r)?;
 
         if let Some(v) = payload.name {
-            current.name = normalize_admin_token_name(Some(v), &current.id);
+            current.name = normalize_client_token_name(Some(v), &current.id);
         }
         if let Some(v) = payload.allowed_models {
             current.allowed_models = v;
@@ -477,7 +543,7 @@ impl TokenStore for PgTokenStore {
         let ip_blacklist_s = encode_json_string_list("ip_blacklist", &current.ip_blacklist)?;
         self.client
             .execute(
-                "UPDATE admin_tokens SET name = $2, allowed_models = $3, max_tokens = $4, enabled = $5, expires_at = $6, max_amount = $7, remark = $8, organization_id = $9, ip_whitelist = $10, ip_blacklist = $11 WHERE token = $1",
+                "UPDATE client_tokens SET name = $2, allowed_models = $3, max_tokens = $4, enabled = $5, expires_at = $6, max_amount = $7, remark = $8, organization_id = $9, ip_whitelist = $10, ip_blacklist = $11 WHERE token = $1",
                 &[&token, &current.name, &join_allowed_models(&current.allowed_models), &current.max_tokens, &current.enabled, &current.expires_at.as_ref().map(to_beijing_string), &current.max_amount, &current.remark, &current.organization_id, &ip_whitelist_s, &ip_blacklist_s],
             )
             .await
@@ -490,7 +556,7 @@ impl TokenStore for PgTokenStore {
         let res = self
             .client
             .execute(
-                "UPDATE admin_tokens SET enabled = $2 WHERE token = $1",
+                "UPDATE client_tokens SET enabled = $2 WHERE token = $1",
                 &[&token, &enabled],
             )
             .await
@@ -498,52 +564,52 @@ impl TokenStore for PgTokenStore {
         Ok(res > 0)
     }
 
-    async fn get_token(&self, token: &str) -> Result<Option<AdminToken>, GatewayError> {
+    async fn get_token(&self, token: &str) -> Result<Option<ClientToken>, GatewayError> {
         let row = self.client
             .query_opt(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens WHERE token = $1",
+                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE token = $1",
                 &[&token],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         if let Some(r) = row {
-            Ok(Some(row_to_admin_token(&r)?))
+            Ok(Some(row_to_client_token(&r)?))
         } else {
             Ok(None)
         }
     }
 
-    async fn get_token_by_id(&self, id: &str) -> Result<Option<AdminToken>, GatewayError> {
+    async fn get_token_by_id(&self, id: &str) -> Result<Option<ClientToken>, GatewayError> {
         let row = self.client
             .query_opt(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens WHERE id = $1",
+                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE id = $1",
                 &[&id],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         match row {
-            Some(r) => Ok(Some(row_to_admin_token(&r)?)),
+            Some(r) => Ok(Some(row_to_client_token(&r)?)),
             None => Ok(None),
         }
     }
 
-    async fn list_tokens(&self) -> Result<Vec<AdminToken>, GatewayError> {
+    async fn list_tokens(&self) -> Result<Vec<ClientToken>, GatewayError> {
         let rows = self.client
             .query(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens ORDER BY created_at DESC",
+                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens ORDER BY created_at DESC",
                 &[],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         rows.into_iter()
-            .map(|r| row_to_admin_token(&r))
+            .map(|r| row_to_client_token(&r))
             .collect::<Result<Vec<_>, _>>()
     }
 
     async fn delete_token(&self, token: &str) -> Result<bool, GatewayError> {
         let res = self
             .client
-            .execute("DELETE FROM admin_tokens WHERE token = $1", &[&token])
+            .execute("DELETE FROM client_tokens WHERE token = $1", &[&token])
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         Ok(res > 0)
@@ -552,7 +618,7 @@ impl TokenStore for PgTokenStore {
     async fn delete_token_by_id(&self, id: &str) -> Result<bool, GatewayError> {
         let res = self
             .client
-            .execute("DELETE FROM admin_tokens WHERE id = $1", &[&id])
+            .execute("DELETE FROM client_tokens WHERE id = $1", &[&id])
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         Ok(res > 0)
@@ -562,11 +628,11 @@ impl TokenStore for PgTokenStore {
         &self,
         id: &str,
         payload: UpdateTokenPayload,
-    ) -> Result<Option<AdminToken>, GatewayError> {
+    ) -> Result<Option<ClientToken>, GatewayError> {
         let row = self
             .client
             .query_opt(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens WHERE id = $1",
+                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE id = $1",
                 &[&id],
             )
             .await
@@ -580,7 +646,7 @@ impl TokenStore for PgTokenStore {
         let res = self
             .client
             .execute(
-                "UPDATE admin_tokens SET enabled = $2 WHERE id = $1",
+                "UPDATE client_tokens SET enabled = $2 WHERE id = $1",
                 &[&id, &enabled],
             )
             .await
@@ -591,7 +657,7 @@ impl TokenStore for PgTokenStore {
     async fn add_amount_spent(&self, token: &str, delta: f64) -> Result<(), GatewayError> {
         self.client
             .execute(
-                "UPDATE admin_tokens SET amount_spent = COALESCE(amount_spent, 0) + $2 WHERE token = $1",
+                "UPDATE client_tokens SET amount_spent = COALESCE(amount_spent, 0) + $2 WHERE token = $1",
                 &[&token, &delta],
             )
             .await
@@ -608,7 +674,7 @@ impl TokenStore for PgTokenStore {
     ) -> Result<(), GatewayError> {
         self.client
             .execute(
-                "UPDATE admin_tokens SET prompt_tokens_spent = COALESCE(prompt_tokens_spent,0) + $2, completion_tokens_spent = COALESCE(completion_tokens_spent,0) + $3, total_tokens_spent = COALESCE(total_tokens_spent,0) + $4 WHERE token = $1",
+                "UPDATE client_tokens SET prompt_tokens_spent = COALESCE(prompt_tokens_spent,0) + $2, completion_tokens_spent = COALESCE(completion_tokens_spent,0) + $3, total_tokens_spent = COALESCE(total_tokens_spent,0) + $4 WHERE token = $1",
                 &[&token, &prompt, &completion, &total],
             )
             .await

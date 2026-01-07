@@ -12,7 +12,7 @@
 // use gateway::logging::{RequestLog, CachedModel};
 // use gateway::server::handlers;
 // use gateway::server::storage_traits::{RequestLogStore, ModelCache, ProviderStore, BoxFuture};
-// use gateway::admin::{TokenStore, AdminToken, CreateTokenPayload, UpdateTokenPayload};
+// use gateway::admin::{TokenStore, ClientToken, CreateTokenPayload, UpdateTokenPayload};
 // use gateway::server::AppState;
 // use gateway::providers::openai::Model as OpenAIModel;
 // use chrono::{Utc};
@@ -219,19 +219,19 @@
 
 // #[derive(Clone, Default)]
 // struct MemTokenStore {
-//     tokens: Arc<tokio::sync::RwLock<HashMap<String, AdminToken>>>,
+//     tokens: Arc<tokio::sync::RwLock<HashMap<String, ClientToken>>>,
 // }
 
 // #[async_trait]
 // impl TokenStore for MemTokenStore {
-//     async fn create_token(&self, payload: CreateTokenPayload) -> Result<AdminToken, gateway::error::GatewayError> {
+//     async fn create_token(&self, payload: CreateTokenPayload) -> Result<ClientToken, gateway::error::GatewayError> {
 //         let token = payload.token.unwrap_or_else(|| {
 //             use rand::Rng; use rand::distr::Alphanumeric;
 //             let rng = rand::rng();
 //             rng.sample_iter(&Alphanumeric).take(40).map(char::from).collect::<String>()
 //         });
 //         let now = Utc::now();
-//         let t = AdminToken {
+//         let t = ClientToken {
 //             token: token.clone(),
 //             allowed_models: payload.allowed_models,
 //             max_tokens: payload.max_tokens,
@@ -247,7 +247,7 @@
 //         self.tokens.write().await.insert(token.clone(), t.clone());
 //         Ok(t)
 //     }
-//     async fn update_token(&self, token: &str, payload: UpdateTokenPayload) -> Result<Option<AdminToken>, gateway::error::GatewayError> {
+//     async fn update_token(&self, token: &str, payload: UpdateTokenPayload) -> Result<Option<ClientToken>, gateway::error::GatewayError> {
 //         let mut g = self.tokens.write().await;
 //         if let Some(t) = g.get_mut(token) {
 //             if let Some(v) = payload.allowed_models { t.allowed_models = Some(v); }
@@ -264,10 +264,10 @@
 //         if let Some(t) = g.get_mut(token) { t.enabled = enabled; return Ok(true); }
 //         Ok(false)
 //     }
-//     async fn get_token(&self, token: &str) -> Result<Option<AdminToken>, gateway::error::GatewayError> {
+//     async fn get_token(&self, token: &str) -> Result<Option<ClientToken>, gateway::error::GatewayError> {
 //         Ok(self.tokens.read().await.get(token).cloned())
 //     }
-//     async fn list_tokens(&self) -> Result<Vec<AdminToken>, gateway::error::GatewayError> {
+//     async fn list_tokens(&self) -> Result<Vec<ClientToken>, gateway::error::GatewayError> {
 //         Ok(self.tokens.read().await.values().cloned().collect())
 //     }
 //     async fn add_amount_spent(&self, token: &str, delta: f64) -> Result<(), gateway::error::GatewayError> {

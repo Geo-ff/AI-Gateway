@@ -8,13 +8,13 @@ use std::sync::Arc;
 
 use crate::server::util::{bearer_token, token_for_log};
 use crate::{
-    admin::{AdminToken, CreateTokenPayload, UpdateTokenPayload},
+    admin::{ClientToken, CreateTokenPayload, UpdateTokenPayload},
     error::GatewayError,
     server::AppState,
 };
 
 #[derive(Debug, Serialize)]
-pub struct AdminTokenOut {
+pub struct ClientTokenOut {
     pub id: String,
     pub name: String,
     pub token: String,
@@ -35,8 +35,8 @@ pub struct AdminTokenOut {
     pub ip_blacklist: Option<Vec<String>>,
 }
 
-impl From<AdminToken> for AdminTokenOut {
-    fn from(t: AdminToken) -> Self {
+impl From<ClientToken> for ClientTokenOut {
+    fn from(t: ClientToken) -> Self {
         Self {
             id: t.id,
             name: t.name,
@@ -67,7 +67,7 @@ use super::auth::ensure_admin;
 use crate::server::request_logging::log_simple_request;
 use chrono::Utc;
 
-fn validate_admin_token_name(name: &str) -> Result<String, GatewayError> {
+fn validate_client_token_name(name: &str) -> Result<String, GatewayError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err(GatewayError::Config("name 不能为空".into()));
@@ -171,7 +171,7 @@ fn normalize_ip_list_patch(
 pub async fn list_tokens(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> Result<Json<Vec<AdminTokenOut>>, GatewayError> {
+) -> Result<Json<Vec<ClientTokenOut>>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state).await {
@@ -181,7 +181,7 @@ pub async fn list_tokens(
             start_time,
             "GET",
             "/admin/tokens",
-            "admin_tokens_list",
+            "client_tokens_list",
             None,
             None,
             provided_token.as_deref(),
@@ -205,7 +205,7 @@ pub async fn list_tokens(
         .await?
         .into_iter()
         .map(|token| {
-            let mut out = AdminTokenOut::from(token.clone());
+            let mut out = ClientTokenOut::from(token.clone());
             if let Some(count) = usage_counts.get(&token.token) {
                 out.usage_count = *count;
             }
@@ -217,7 +217,7 @@ pub async fn list_tokens(
         start_time,
         "GET",
         "/admin/tokens",
-        "admin_tokens_list",
+        "client_tokens_list",
         None,
         None,
         token_for_log(provided_token.as_deref()),
@@ -232,7 +232,7 @@ pub async fn get_token(
     Path(id): Path<String>,
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> Result<Json<AdminTokenOut>, GatewayError> {
+) -> Result<Json<ClientTokenOut>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state).await {
@@ -242,7 +242,7 @@ pub async fn get_token(
             start_time,
             "GET",
             "/admin/tokens/{id}",
-            "admin_tokens_get",
+            "client_tokens_get",
             None,
             None,
             provided_token.as_deref(),
@@ -254,7 +254,7 @@ pub async fn get_token(
     }
     match app_state.token_store.get_token_by_id(&id).await? {
         Some(t) => {
-            let mut out = AdminTokenOut::from(t.clone());
+            let mut out = ClientTokenOut::from(t.clone());
             let usage_counts: std::collections::HashMap<String, i64> = app_state
                 .log_store
                 .count_requests_by_client_token()
@@ -271,9 +271,9 @@ pub async fn get_token(
             log_simple_request(
                 &app_state,
                 start_time,
-                "GET",
-                "/admin/tokens/{id}",
-                "admin_tokens_get",
+            "GET",
+            "/admin/tokens/{id}",
+            "client_tokens_get",
                 None,
                 None,
                 provided_token.as_deref(),
@@ -290,7 +290,7 @@ pub async fn create_token(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payload): Json<CreateTokenPayload>,
-) -> Result<(axum::http::StatusCode, Json<AdminTokenOut>), GatewayError> {
+) -> Result<(axum::http::StatusCode, Json<ClientTokenOut>), GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state).await {
@@ -300,7 +300,7 @@ pub async fn create_token(
             start_time,
             "POST",
             "/admin/tokens",
-            "admin_tokens_create",
+            "client_tokens_create",
             None,
             None,
             provided_token.as_deref(),
@@ -315,7 +315,7 @@ pub async fn create_token(
     }
     let mut payload = payload;
     if let Some(name) = payload.name.as_deref() {
-        payload.name = Some(validate_admin_token_name(name)?);
+        payload.name = Some(validate_client_token_name(name)?);
     }
     payload.remark = normalize_optional_string("remark", payload.remark, REMARK_MAX_LEN)?;
     payload.organization_id = normalize_optional_string(
@@ -356,7 +356,7 @@ pub async fn create_token(
         start_time,
         "POST",
         "/admin/tokens",
-        "admin_tokens_create",
+        "client_tokens_create",
         None,
         None,
         token_for_log(provided_token.as_deref()),
@@ -366,7 +366,7 @@ pub async fn create_token(
     .await;
     Ok((
         axum::http::StatusCode::CREATED,
-        Json(AdminTokenOut::from(t)),
+        Json(ClientTokenOut::from(t)),
     ))
 }
 
@@ -390,7 +390,7 @@ pub async fn toggle_token(
             start_time,
             "POST",
             "/admin/tokens/{id}/toggle",
-            "admin_tokens_toggle",
+            "client_tokens_toggle",
             None,
             None,
             provided_token.as_deref(),
@@ -410,7 +410,7 @@ pub async fn toggle_token(
             start_time,
             "POST",
             "/admin/tokens/{id}/toggle",
-            "admin_tokens_toggle",
+            "client_tokens_toggle",
             None,
             None,
             token_for_log(provided_token.as_deref()),
@@ -427,7 +427,7 @@ pub async fn toggle_token(
             start_time,
             "POST",
             "/admin/tokens/{id}/toggle",
-            "admin_tokens_toggle",
+            "client_tokens_toggle",
             None,
             None,
             provided_token.as_deref(),
@@ -453,7 +453,7 @@ pub async fn delete_token(
             start_time,
             "DELETE",
             "/admin/tokens/{id}",
-            "admin_tokens_delete",
+            "client_tokens_delete",
             None,
             None,
             provided_token.as_deref(),
@@ -470,7 +470,7 @@ pub async fn delete_token(
             start_time,
             "DELETE",
             "/admin/tokens/{id}",
-            "admin_tokens_delete",
+            "client_tokens_delete",
             None,
             None,
             token_for_log(provided_token.as_deref()),
@@ -487,7 +487,7 @@ pub async fn delete_token(
             start_time,
             "DELETE",
             "/admin/tokens/{id}",
-            "admin_tokens_delete",
+            "client_tokens_delete",
             None,
             None,
             provided_token.as_deref(),
@@ -504,7 +504,7 @@ pub async fn update_token(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payload): Json<UpdateTokenPayload>,
-) -> Result<Json<AdminTokenOut>, GatewayError> {
+) -> Result<Json<ClientTokenOut>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     if let Err(e) = ensure_admin(&headers, &app_state).await {
@@ -514,7 +514,7 @@ pub async fn update_token(
             start_time,
             "PUT",
             "/admin/tokens/{id}",
-            "admin_tokens_update",
+            "client_tokens_update",
             None,
             None,
             provided_token.as_deref(),
@@ -529,7 +529,7 @@ pub async fn update_token(
     }
     let mut payload = payload;
     if let Some(name) = payload.name.as_deref() {
-        payload.name = Some(validate_admin_token_name(name)?);
+        payload.name = Some(validate_client_token_name(name)?);
     }
     payload.remark = normalize_optional_string_patch("remark", payload.remark, REMARK_MAX_LEN)?;
     payload.organization_id = normalize_optional_string_patch(
@@ -566,7 +566,7 @@ pub async fn update_token(
                 start_time,
                 "PUT",
                 "/admin/tokens/{id}",
-                "admin_tokens_update",
+                "client_tokens_update",
                 None,
                 None,
                 token_for_log(provided_token.as_deref()),
@@ -574,7 +574,7 @@ pub async fn update_token(
                 None,
             )
             .await;
-            Ok(Json(AdminTokenOut::from(t)))
+            Ok(Json(ClientTokenOut::from(t)))
         }
         None => {
             let ge = GatewayError::NotFound("token not found".into());
@@ -584,7 +584,7 @@ pub async fn update_token(
                 start_time,
                 "PUT",
                 "/admin/tokens/{id}",
-                "admin_tokens_update",
+                "client_tokens_update",
                 None,
                 None,
                 provided_token.as_deref(),
@@ -692,7 +692,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_tokens_create_get_update_delete_works() {
+    async fn client_tokens_create_get_update_delete_works() {
         let h = harness().await;
         let headers = auth_headers(&h.token);
 
@@ -808,7 +808,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_tokens_reject_client_supplied_id_and_empty_name() {
+    async fn client_tokens_reject_client_supplied_id_and_empty_name() {
         let h = harness().await;
         let headers = auth_headers(&h.token);
 

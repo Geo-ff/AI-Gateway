@@ -74,9 +74,9 @@ enum BalanceStrategy {
 - RoundRobin：流量均衡，避免单 Key 限流
 - Random：避免"踩踏效应"，更分散
 
-##### 4. Admin Token
+##### 4. Client Token
 ```
-作用：客户端调用网关的凭证（类似酒店房卡）
+作用：外部客户端调用 `/v1/*` 的凭证（类似酒店房卡）
 功能：
   - 权限控制（allowed_models: ["gpt-4"]）
   - 额度限制（max_amount: 100.0）
@@ -87,8 +87,8 @@ enum BalanceStrategy {
 ##### 5. 认证方式
 ```
 两种认证：
-1. Admin Token 认证（API 调用）
-   Authorization: Bearer admin-token-xxx
+1. Client Token 认证（/v1 API 调用）
+   Authorization: Bearer client-token-xxx
    
 2. Ed25519 签名认证（TUI 管理界面）
    Challenge-Response 机制，防重放攻击
@@ -167,10 +167,10 @@ async fn chat_completions(
     TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
     Json(request): Json<ChatCompletionRequest>
 ) -> Result<Response> {
-    // 步骤 1：验证 Admin Token
+    // 步骤 1：验证 Client Token
     let token = extract_token(&auth)?;
-    let admin_token = state.token_store.get_token(&token).await?;
-    check_token_valid(&admin_token)?;  // 检查启用/过期/额度
+    let client_token = state.token_store.get_token(&token).await?;
+    check_token_valid(&client_token)?;  // 检查启用/过期/额度
     
     // 步骤 2：模型解析和重定向
     let model_name = apply_redirect(&request.model)?;
@@ -251,7 +251,7 @@ pub async fn chat_completions(
     ↓
 [CORS 中间件] → 检查跨域
     ↓
-[认证中间件] → 验证 Admin Token
+[认证中间件] → 验证 Client Token
     ↓
 [路由] → /v1/chat/completions
     ↓
@@ -295,7 +295,7 @@ RUST_LOG=debug cargo run
 
 ---
 
-#### 任务 2：创建第一个 Admin Token（15 分钟）
+#### 任务 2：创建第一个 Client Token（15 分钟）
 
 **⚠️ 重要**：创建 Token 的接口需要认证，这里有个"先有鸡还是先有蛋"的问题。有三种解决方案：
 
@@ -306,7 +306,7 @@ RUST_LOG=debug cargo run
 sqlite3 data/gateway.db
 
 # 在 SQLite 提示符下执行：
-CREATE TABLE IF NOT EXISTS admin_tokens (
+CREATE TABLE IF NOT EXISTS client_tokens (
     id TEXT,
     name TEXT,
     token TEXT PRIMARY KEY,
@@ -322,7 +322,7 @@ CREATE TABLE IF NOT EXISTS admin_tokens (
     total_tokens_spent BIGINT DEFAULT 0
 );
 
-INSERT INTO admin_tokens (
+INSERT INTO client_tokens (
     token, 
     enabled, 
     created_at, 
@@ -342,7 +342,7 @@ VALUES (
 );
 
 # 查看结果
-SELECT * FROM admin_tokens;
+SELECT * FROM client_tokens;
 
 # 退出 SQLite
 .exit
@@ -562,7 +562,7 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 ## 🎉 完成第四步后你将掌握
 
 - ✅ 如何启动和配置网关
-- ✅ 如何管理 Admin Token
+- ✅ 如何管理 Client Token
 - ✅ 如何添加 AI Provider 和 API Key
 - ✅ 如何发送聊天请求（非流式和流式）
 - ✅ 如何查看日志和统计
@@ -585,7 +585,7 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 ##### Level 2：存储层（理解数据持久化）
 ```
 5. src/db/               - 数据库连接工具
-6. src/admin/mod.rs      - Admin Token 的 CRUD
+6. src/admin/mod.rs      - Client Token 的 CRUD
 7. src/server/storage_traits.rs  - 存储接口定义（重要！）
 8. src/logging/postgres_store.rs - PostgreSQL 实现
 9. src/logging/database.rs       - SQLite 实现
@@ -614,7 +614,7 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 ##### Level 5：HTTP 层（框架使用）
 ```
 18. src/server/handlers/chat.rs        - 聊天接口实现
-19. src/server/handlers/admin_tokens.rs - Token 管理
+19. src/server/handlers/client_tokens.rs - Token 管理
 20. src/server/handlers/providers.rs    - Provider 管理
 21. src/server/login.rs                 - TUI 认证（高级）
 ```
@@ -652,7 +652,7 @@ dbg!(&parsed_model);
 # SQLite
 sqlite3 data/gateway.db
 .tables
-SELECT * FROM admin_tokens;
+SELECT * FROM client_tokens;
 SELECT * FROM request_logs ORDER BY timestamp DESC LIMIT 10;
 
 # PostgreSQL

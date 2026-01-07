@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 
 use crate::admin::{
-    AdminToken, CreateTokenPayload, TokenStore, UpdateTokenPayload, admin_token_id_for_token,
-    decode_json_string_list, encode_json_string_list, normalize_admin_token_name,
+    ClientToken, CreateTokenPayload, TokenStore, UpdateTokenPayload, client_token_id_for_token,
+    decode_json_string_list, encode_json_string_list, normalize_client_token_name,
 };
 use crate::error::GatewayError;
 use crate::logging::database::DatabaseLogger;
@@ -25,7 +25,7 @@ fn parse_allowed_models(s: Option<String>) -> Option<Vec<String>> {
 
 #[async_trait]
 impl TokenStore for DatabaseLogger {
-    async fn create_token(&self, payload: CreateTokenPayload) -> Result<AdminToken, GatewayError> {
+    async fn create_token(&self, payload: CreateTokenPayload) -> Result<ClientToken, GatewayError> {
         // 始终生成随机令牌，忽略传入 token 字段
         let token = {
             use rand::Rng;
@@ -38,8 +38,8 @@ impl TokenStore for DatabaseLogger {
                 .collect();
             s
         };
-        let id = admin_token_id_for_token(&token);
-        let name = normalize_admin_token_name(payload.name.clone(), &id);
+        let id = client_token_id_for_token(&token);
+        let name = normalize_client_token_name(payload.name.clone(), &id);
         let now = Utc::now();
         let allowed_models_s = join_allowed_models(&payload.allowed_models);
         let expires_at_s = payload.expires_at.clone();
@@ -47,7 +47,7 @@ impl TokenStore for DatabaseLogger {
         let ip_blacklist_s = encode_json_string_list("ip_blacklist", &payload.ip_blacklist)?;
         let conn = self.connection.lock().await;
         conn.execute(
-            "INSERT INTO admin_tokens (id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, 0, 0, ?10, ?11, ?12, ?13)",
+            "INSERT INTO client_tokens (id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, 0, 0, ?10, ?11, ?12, ?13)",
             (
                 &id,
                 &name,
@@ -65,7 +65,7 @@ impl TokenStore for DatabaseLogger {
             ),
         )?;
 
-        Ok(AdminToken {
+        Ok(ClientToken {
             id,
             name,
             token,
@@ -93,10 +93,10 @@ impl TokenStore for DatabaseLogger {
         &self,
         token: &str,
         payload: UpdateTokenPayload,
-    ) -> Result<Option<AdminToken>, GatewayError> {
+    ) -> Result<Option<ClientToken>, GatewayError> {
         let conn = self.connection.lock().await;
         use rusqlite::OptionalExtension;
-        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens WHERE token = ?1")?;
+        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE token = ?1")?;
         let row_opt = stmt
             .query_row([token], |row| {
                 Ok((
@@ -148,17 +148,17 @@ impl TokenStore for DatabaseLogger {
             .as_deref()
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| admin_token_id_for_token(&tok));
-        let mut name = normalize_admin_token_name(name0.clone(), &id);
+            .unwrap_or_else(|| client_token_id_for_token(&tok));
+        let mut name = normalize_client_token_name(name0.clone(), &id);
         if needs_id_backfill {
             let _ = conn.execute(
-                "UPDATE admin_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
+                "UPDATE client_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
                 (&tok, &id),
             );
         }
         if name0.as_deref().filter(|s| !s.trim().is_empty()).is_none() {
             let _ = conn.execute(
-                "UPDATE admin_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
+                "UPDATE client_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
                 (&tok, &name),
             );
         }
@@ -178,7 +178,7 @@ impl TokenStore for DatabaseLogger {
         let total_tokens_spent = total0.unwrap_or(0);
 
         if let Some(v) = payload.name {
-            name = normalize_admin_token_name(Some(v), &id);
+            name = normalize_client_token_name(Some(v), &id);
         }
         if let Some(v) = payload.allowed_models {
             allowed_models = v;
@@ -211,7 +211,7 @@ impl TokenStore for DatabaseLogger {
         let ip_whitelist_s = encode_json_string_list("ip_whitelist", &ip_whitelist)?;
         let ip_blacklist_s = encode_json_string_list("ip_blacklist", &ip_blacklist)?;
         conn.execute(
-            "UPDATE admin_tokens SET name = ?2, allowed_models = ?3, max_tokens = ?4, enabled = ?5, expires_at = ?6, max_amount = ?7, remark = ?8, organization_id = ?9, ip_whitelist = ?10, ip_blacklist = ?11 WHERE token = ?1",
+            "UPDATE client_tokens SET name = ?2, allowed_models = ?3, max_tokens = ?4, enabled = ?5, expires_at = ?6, max_amount = ?7, remark = ?8, organization_id = ?9, ip_whitelist = ?10, ip_blacklist = ?11 WHERE token = ?1",
             (
                 &tok,
                 &name,
@@ -227,7 +227,7 @@ impl TokenStore for DatabaseLogger {
             ),
         )?;
 
-        Ok(Some(AdminToken {
+        Ok(Some(ClientToken {
             id,
             name,
             token: tok,
@@ -254,16 +254,16 @@ impl TokenStore for DatabaseLogger {
     async fn set_enabled(&self, token: &str, enabled: bool) -> Result<bool, GatewayError> {
         let conn = self.connection.lock().await;
         let affected = conn.execute(
-            "UPDATE admin_tokens SET enabled = ?2 WHERE token = ?1",
+            "UPDATE client_tokens SET enabled = ?2 WHERE token = ?1",
             (token, if enabled { 1 } else { 0 }),
         )?;
         Ok(affected > 0)
     }
 
-    async fn get_token(&self, token: &str) -> Result<Option<AdminToken>, GatewayError> {
+    async fn get_token(&self, token: &str) -> Result<Option<ClientToken>, GatewayError> {
         let conn = self.connection.lock().await;
         use rusqlite::OptionalExtension;
-        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens WHERE token = ?1")?;
+        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE token = ?1")?;
         let row = stmt
             .query_row([token], |row| {
                 Ok((
@@ -313,21 +313,21 @@ impl TokenStore for DatabaseLogger {
                 .as_deref()
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| admin_token_id_for_token(&token));
-            let name = normalize_admin_token_name(name0.clone(), &id);
+                .unwrap_or_else(|| client_token_id_for_token(&token));
+            let name = normalize_client_token_name(name0.clone(), &id);
             if needs_id_backfill {
                 let _ = conn.execute(
-                    "UPDATE admin_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
+                    "UPDATE client_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
                     (&token, &id),
                 );
             }
             if needs_name_backfill {
                 let _ = conn.execute(
-                "UPDATE admin_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
+                "UPDATE client_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
                 (&token, &name),
             );
             }
-            Ok(Some(AdminToken {
+            Ok(Some(ClientToken {
                 id,
                 name,
                 token,
@@ -354,10 +354,10 @@ impl TokenStore for DatabaseLogger {
         }
     }
 
-    async fn get_token_by_id(&self, id: &str) -> Result<Option<AdminToken>, GatewayError> {
+    async fn get_token_by_id(&self, id: &str) -> Result<Option<ClientToken>, GatewayError> {
         let conn = self.connection.lock().await;
         use rusqlite::OptionalExtension;
-        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens WHERE id = ?1")?;
+        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE id = ?1")?;
         let row = stmt
             .query_row([id], |row| {
                 Ok((
@@ -409,21 +409,21 @@ impl TokenStore for DatabaseLogger {
             .as_deref()
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| admin_token_id_for_token(&token));
-        let name = normalize_admin_token_name(name0.clone(), &id);
+            .unwrap_or_else(|| client_token_id_for_token(&token));
+        let name = normalize_client_token_name(name0.clone(), &id);
         if needs_id_backfill {
             let _ = conn.execute(
-                "UPDATE admin_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
+                "UPDATE client_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
                 (&token, &id),
             );
         }
         if needs_name_backfill {
             let _ = conn.execute(
-                "UPDATE admin_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
+                "UPDATE client_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
                 (&token, &name),
             );
         }
-        Ok(Some(AdminToken {
+        Ok(Some(ClientToken {
             id,
             name,
             token,
@@ -447,9 +447,9 @@ impl TokenStore for DatabaseLogger {
         }))
     }
 
-    async fn list_tokens(&self) -> Result<Vec<AdminToken>, GatewayError> {
+    async fn list_tokens(&self) -> Result<Vec<ClientToken>, GatewayError> {
         let conn = self.connection.lock().await;
-        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM admin_tokens ORDER BY created_at DESC")?;
+        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens ORDER BY created_at DESC")?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, Option<String>>(0)?,
@@ -498,21 +498,21 @@ impl TokenStore for DatabaseLogger {
                 .as_deref()
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| admin_token_id_for_token(&token));
-            let name = normalize_admin_token_name(name0.clone(), &id);
+                .unwrap_or_else(|| client_token_id_for_token(&token));
+            let name = normalize_client_token_name(name0.clone(), &id);
             if needs_id_backfill {
                 let _ = conn.execute(
-                    "UPDATE admin_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
+                    "UPDATE client_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
                     (&token, &id),
                 );
             }
             if needs_name_backfill {
                 let _ = conn.execute(
-                    "UPDATE admin_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
+                    "UPDATE client_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
                     (&token, &name),
                 );
             }
-            out.push(AdminToken {
+            out.push(ClientToken {
                 id,
                 name,
                 token,
@@ -541,7 +541,7 @@ impl TokenStore for DatabaseLogger {
     async fn add_amount_spent(&self, token: &str, delta: f64) -> Result<(), GatewayError> {
         let conn = self.connection.lock().await;
         conn.execute(
-            "UPDATE admin_tokens SET amount_spent = COALESCE(amount_spent, 0) + ?2 WHERE token = ?1",
+            "UPDATE client_tokens SET amount_spent = COALESCE(amount_spent, 0) + ?2 WHERE token = ?1",
             (token, delta),
         )?;
         Ok(())
@@ -556,7 +556,7 @@ impl TokenStore for DatabaseLogger {
     ) -> Result<(), GatewayError> {
         let conn = self.connection.lock().await;
         conn.execute(
-            "UPDATE admin_tokens SET prompt_tokens_spent = COALESCE(prompt_tokens_spent,0) + ?2, completion_tokens_spent = COALESCE(completion_tokens_spent,0) + ?3, total_tokens_spent = COALESCE(total_tokens_spent,0) + ?4 WHERE token = ?1",
+            "UPDATE client_tokens SET prompt_tokens_spent = COALESCE(prompt_tokens_spent,0) + ?2, completion_tokens_spent = COALESCE(completion_tokens_spent,0) + ?3, total_tokens_spent = COALESCE(total_tokens_spent,0) + ?4 WHERE token = ?1",
             (token, prompt, completion, total),
         )?;
         Ok(())
@@ -564,13 +564,13 @@ impl TokenStore for DatabaseLogger {
 
     async fn delete_token(&self, token: &str) -> Result<bool, GatewayError> {
         let conn = self.connection.lock().await;
-        let affected = conn.execute("DELETE FROM admin_tokens WHERE token = ?1", (token,))?;
+        let affected = conn.execute("DELETE FROM client_tokens WHERE token = ?1", (token,))?;
         Ok(affected > 0)
     }
 
     async fn delete_token_by_id(&self, id: &str) -> Result<bool, GatewayError> {
         let conn = self.connection.lock().await;
-        let affected = conn.execute("DELETE FROM admin_tokens WHERE id = ?1", (id,))?;
+        let affected = conn.execute("DELETE FROM client_tokens WHERE id = ?1", (id,))?;
         Ok(affected > 0)
     }
 
@@ -578,11 +578,11 @@ impl TokenStore for DatabaseLogger {
         &self,
         id: &str,
         payload: UpdateTokenPayload,
-    ) -> Result<Option<AdminToken>, GatewayError> {
+    ) -> Result<Option<ClientToken>, GatewayError> {
         let tok: Option<String> = {
             let conn = self.connection.lock().await;
             use rusqlite::OptionalExtension;
-            let mut stmt = conn.prepare("SELECT token FROM admin_tokens WHERE id = ?1")?;
+            let mut stmt = conn.prepare("SELECT token FROM client_tokens WHERE id = ?1")?;
             stmt.query_row([id], |row| row.get(0)).optional()?
         };
         let Some(tok) = tok else {
@@ -594,7 +594,7 @@ impl TokenStore for DatabaseLogger {
     async fn set_enabled_by_id(&self, id: &str, enabled: bool) -> Result<bool, GatewayError> {
         let conn = self.connection.lock().await;
         let affected = conn.execute(
-            "UPDATE admin_tokens SET enabled = ?2 WHERE id = ?1",
+            "UPDATE client_tokens SET enabled = ?2 WHERE id = ?1",
             (id, if enabled { 1 } else { 0 }),
         )?;
         Ok(affected > 0)

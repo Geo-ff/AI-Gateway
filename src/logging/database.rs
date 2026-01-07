@@ -10,6 +10,118 @@ use rusqlite::{Connection, OptionalExtension, Result};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+const CLIENT_TOKENS_TABLE: &str = "client_tokens";
+
+fn quote_sqlite_ident(ident: &str) -> String {
+    format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
+fn sqlite_table_exists(conn: &Connection, name: &str) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+            [name],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+fn sqlite_table_has_columns(conn: &Connection, table: &str, required: &[&str]) -> Result<bool> {
+    let pragma = format!("PRAGMA table_info({})", quote_sqlite_ident(table));
+    let mut stmt = conn.prepare(&pragma)?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let mut cols = std::collections::HashSet::<String>::new();
+    for r in rows {
+        cols.insert(r?);
+    }
+    Ok(required.iter().all(|c| cols.contains(*c)))
+}
+
+fn find_legacy_tokens_table_sqlite(conn: &Connection) -> Result<Option<String>> {
+    let mut stmt =
+        conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    for r in rows {
+        let name = r?;
+        if name == CLIENT_TOKENS_TABLE {
+            continue;
+        }
+        // Heuristic: locate a token table by core columns.
+        if sqlite_table_has_columns(conn, &name, &["token", "enabled", "created_at", "allowed_models"])? {
+            return Ok(Some(name));
+        }
+    }
+    Ok(None)
+}
+
+fn ensure_client_tokens_table_sqlite(conn: &Connection) -> Result<()> {
+    if !sqlite_table_exists(conn, CLIENT_TOKENS_TABLE)? {
+        if let Some(legacy) = find_legacy_tokens_table_sqlite(conn)? {
+            let sql = format!(
+                "ALTER TABLE {} RENAME TO {}",
+                quote_sqlite_ident(&legacy),
+                CLIENT_TOKENS_TABLE
+            );
+            let _ = conn.execute(&sql, []);
+        }
+    }
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS client_tokens (
+            id TEXT,
+            name TEXT,
+            token TEXT PRIMARY KEY,
+            allowed_models TEXT,
+            max_tokens INTEGER,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            expires_at TEXT,
+            created_at TEXT NOT NULL,
+            max_amount REAL,
+            amount_spent REAL DEFAULT 0,
+            prompt_tokens_spent INTEGER DEFAULT 0,
+            completion_tokens_spent INTEGER DEFAULT 0,
+            total_tokens_spent INTEGER DEFAULT 0,
+            remark TEXT,
+            organization_id TEXT,
+            ip_whitelist TEXT,
+            ip_blacklist TEXT
+        )",
+        [],
+    )?;
+
+    // Best-effort migrations
+    let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN max_amount REAL", []);
+    let _ = conn.execute(
+        "ALTER TABLE client_tokens ADD COLUMN amount_spent REAL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE client_tokens ADD COLUMN prompt_tokens_spent INTEGER DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE client_tokens ADD COLUMN completion_tokens_spent INTEGER DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE client_tokens ADD COLUMN total_tokens_spent INTEGER DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN id TEXT", []);
+    let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN name TEXT", []);
+    let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN remark TEXT", []);
+    let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN organization_id TEXT", []);
+    let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN ip_whitelist TEXT", []);
+    let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN ip_blacklist TEXT", []);
+    let _ = conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS client_tokens_id_uidx ON client_tokens(id)",
+        [],
+    );
+
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct DatabaseLogger {
     pub(super) connection: Arc<Mutex<Connection>>,
@@ -614,29 +726,7 @@ impl DatabaseLogger {
             [],
         )?;
 
-        // Admin tokens table
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS admin_tokens (
-                id TEXT,
-                name TEXT,
-                token TEXT PRIMARY KEY,
-                allowed_models TEXT,
-                max_tokens INTEGER,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                expires_at TEXT,
-                created_at TEXT NOT NULL,
-                max_amount REAL,
-                amount_spent REAL DEFAULT 0,
-                prompt_tokens_spent INTEGER DEFAULT 0,
-                completion_tokens_spent INTEGER DEFAULT 0,
-                total_tokens_spent INTEGER DEFAULT 0,
-                remark TEXT,
-                organization_id TEXT,
-                ip_whitelist TEXT,
-                ip_blacklist TEXT
-            )",
-            [],
-        )?;
+        ensure_client_tokens_table_sqlite(&conn)?;
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS users (
@@ -669,37 +759,6 @@ impl DatabaseLogger {
             )",
             [],
         )?;
-        // Migration: add max_amount to admin_tokens if missing
-        let _ = conn.execute("ALTER TABLE admin_tokens ADD COLUMN max_amount REAL", []);
-        let _ = conn.execute(
-            "ALTER TABLE admin_tokens ADD COLUMN amount_spent REAL DEFAULT 0",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE admin_tokens ADD COLUMN prompt_tokens_spent INTEGER DEFAULT 0",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE admin_tokens ADD COLUMN completion_tokens_spent INTEGER DEFAULT 0",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE admin_tokens ADD COLUMN total_tokens_spent INTEGER DEFAULT 0",
-            [],
-        );
-        let _ = conn.execute("ALTER TABLE admin_tokens ADD COLUMN id TEXT", []);
-        let _ = conn.execute("ALTER TABLE admin_tokens ADD COLUMN name TEXT", []);
-        let _ = conn.execute("ALTER TABLE admin_tokens ADD COLUMN remark TEXT", []);
-        let _ = conn.execute(
-            "ALTER TABLE admin_tokens ADD COLUMN organization_id TEXT",
-            [],
-        );
-        let _ = conn.execute("ALTER TABLE admin_tokens ADD COLUMN ip_whitelist TEXT", []);
-        let _ = conn.execute("ALTER TABLE admin_tokens ADD COLUMN ip_blacklist TEXT", []);
-        let _ = conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS admin_tokens_id_uidx ON admin_tokens(id)",
-            [],
-        );
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS admin_public_keys (

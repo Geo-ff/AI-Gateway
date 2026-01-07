@@ -8,13 +8,13 @@ import {
   updateToken,
   toggleToken,
   deleteToken,
-  type AdminToken,
+  type ClientToken,
   type CreateTokenBody,
   type UpdateTokenBody,
 } from '../../api/tokens'
 import { listModels, type ModelInfo } from '../../api/models'
 
-const tokens = ref<AdminToken[]>([])
+const tokens = ref<ClientToken[]>([])
 const availableModels = ref<ModelInfo[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -23,9 +23,9 @@ const message = ref<string | null>(null)
 // 弹窗状态
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
-const currentToken = ref<AdminToken | null>(null)
+const currentToken = ref<ClientToken | null>(null)
 const showDeleteModal = ref(false)
-const tokenToDelete = ref<AdminToken | null>(null)
+const tokenToDelete = ref<ClientToken | null>(null)
 
 // 搜索和过滤
 const searchText = ref('')
@@ -111,7 +111,7 @@ function resetForm() {
   tokenForm.expiresAt = ''
 }
 
-function fillFormFromToken(token: AdminToken) {
+function fillFormFromToken(token: ClientToken) {
   tokenForm.name = token.name || ''
   tokenForm.allowedModels = token.allowed_models ? [...token.allowed_models] : []
   tokenForm.maxAmount = token.max_amount ?? null
@@ -167,7 +167,7 @@ function openCreateModal() {
   showCreateModal.value = true
 }
 
-function openEditModal(token: AdminToken) {
+function openEditModal(token: ClientToken) {
   currentToken.value = token
   fillFormFromToken(token)
   showEditModal.value = true
@@ -184,7 +184,7 @@ function closeEditModal() {
   resetForm()
 }
 
-function openDeleteModal(token: AdminToken) {
+function openDeleteModal(token: ClientToken) {
   tokenToDelete.value = token
   showDeleteModal.value = true
 }
@@ -263,7 +263,7 @@ async function submitUpdate() {
   }
 }
 
-async function toggleEnabled(token: AdminToken) {
+async function toggleEnabled(token: ClientToken) {
   try {
     const newState = !token.enabled
     await toggleToken(token.id, newState)
@@ -292,7 +292,7 @@ function formatDate(date: string | null | undefined): string {
   }
 }
 
-function getTokenStatus(token: AdminToken): 'active' | 'disabled' | 'expired' {
+function getTokenStatus(token: ClientToken): 'active' | 'disabled' | 'expired' {
   if (token.expires_at && new Date(token.expires_at) < new Date()) {
     return 'expired'
   }

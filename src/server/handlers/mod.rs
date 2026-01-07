@@ -9,7 +9,7 @@ use crate::server::AppState;
 mod admin_logs;
 mod admin_metrics;
 mod admin_prices;
-mod admin_tokens;
+mod client_tokens;
 mod admin_users;
 mod auth;
 mod auth_keys;
@@ -83,17 +83,17 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/admin/tokens",
-            get(admin_tokens::list_tokens).post(admin_tokens::create_token),
+            get(client_tokens::list_tokens).post(client_tokens::create_token),
         )
         .route(
             "/admin/tokens/{id}",
-            get(admin_tokens::get_token)
-                .put(admin_tokens::update_token)
-                .delete(admin_tokens::delete_token),
+            get(client_tokens::get_token)
+                .put(client_tokens::update_token)
+                .delete(client_tokens::delete_token),
         )
         .route(
             "/admin/tokens/{id}/toggle",
-            post(admin_tokens::toggle_token),
+            post(client_tokens::toggle_token),
         )
         .route(
             "/admin/users",

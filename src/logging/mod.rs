@@ -1,5 +1,5 @@
 pub mod database;
-pub mod database_admin_tokens;
+pub mod database_client_tokens;
 pub mod database_cache;
 pub mod database_keys;
 pub mod database_pricing;

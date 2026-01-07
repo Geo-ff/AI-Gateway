@@ -50,13 +50,13 @@ pub async fn ensure_admin(
         return Ok(AdminIdentity::WebSession(session));
     }
 
-    Err(GatewayError::Config("管理员认证失败".into()))
+    Err(GatewayError::Config("管理员身份认证失败".into()))
 }
 
-// 校验任意有效令牌：
-// - 管理员“身份令牌”直接放行
-// - 其他管理令牌需存在且启用、未过期
-pub async fn ensure_client(
+// 校验 Client Token（外部调用 `/v1/*` 的 API Token）：
+// - 必须存在于 token_store
+// - 必须启用、未过期、未超额
+pub async fn ensure_client_token(
     headers: &HeaderMap,
     app_state: &AppState,
 ) -> Result<String, GatewayError> {

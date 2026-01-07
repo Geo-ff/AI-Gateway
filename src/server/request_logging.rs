@@ -21,26 +21,22 @@ pub async fn log_chat_request(
 
     let api_key = api_key_hint(&app_state.config.logging, api_key_raw);
 
-    // 计算本次消耗金额（仅当有价格与 usage 可用，且非管理员“身份令牌”）
+    // 计算本次消耗金额（仅当有价格与 usage 可用，且有 Client Token）
     let amount_spent: Option<f64> = match response {
         Ok(dual) => {
             let usage = dual.typed.usage.as_ref();
-            if let (Some(u), Some(tok)) = (usage, client_token) {
-                if tok == "admin_token" {
-                    None
-                } else {
-                    match app_state
-                        .log_store
-                        .get_model_price(provider_name, model)
-                        .await
-                    {
-                        Ok(Some((p_pm, c_pm, _))) => {
-                            let p = u.prompt_tokens as f64 * p_pm / 1_000_000.0;
-                            let c = u.completion_tokens as f64 * c_pm / 1_000_000.0;
-                            Some(p + c)
-                        }
-                        _ => None,
+            if let (Some(u), Some(_tok)) = (usage, client_token) {
+                match app_state
+                    .log_store
+                    .get_model_price(provider_name, model)
+                    .await
+                {
+                    Ok(Some((p_pm, c_pm, _))) => {
+                        let p = u.prompt_tokens as f64 * p_pm / 1_000_000.0;
+                        let c = u.completion_tokens as f64 * c_pm / 1_000_000.0;
+                        Some(p + c)
                     }
+                    _ => None,
                 }
             } else {
                 None
@@ -95,8 +91,8 @@ pub async fn log_chat_request(
         tracing::error!("Failed to log request: {}", e);
     }
 
-    // 增量更新 admin_tokens：金额与 tokens（仅非管理员令牌且有 usage/金额时）
-    if let Some(tok) = client_token.filter(|t| *t != "admin_token") {
+    // 增量更新 client_tokens：金额与 tokens（仅当有 usage/金额 与 Client Token 时）
+    if let Some(tok) = client_token {
         if let Some(delta) = amount_spent
             && let Err(e) = app_state.token_store.add_amount_spent(tok, delta).await
         {

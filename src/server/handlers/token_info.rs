@@ -69,7 +69,7 @@ pub async fn token_balance(
             return Err(e);
         }
     };
-    // 使用 admin_tokens.amount_spent 作为权威累计消费
+    // 使用 client_tokens.amount_spent 作为权威累计消费
     let token_row = app_state.token_store.get_token(&token).await?;
     let spent = token_row.as_ref().map(|t| t.amount_spent).unwrap_or(0.0);
     let max_amount = token_row.as_ref().and_then(|t| t.max_amount);
@@ -165,7 +165,7 @@ pub async fn token_usage(
             break;
         }
     }
-    // 总消费额度取自 admin_tokens.amount_spent（权威聚合值）
+    // 总消费额度取自 client_tokens.amount_spent（权威聚合值）
     let token_row = app_state.token_store.get_token(&token).await?;
     let total_cost = token_row.as_ref().map(|t| t.amount_spent).unwrap_or(0.0);
     let prompt_tokens_spent = token_row

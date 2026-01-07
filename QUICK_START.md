@@ -4,10 +4,10 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  1. Admin Token（API 调用认证）                                  │
+│  1. Client Token（/v1 API 调用认证）                              │
 │     ├─ 用途：第三方应用/SDK 调用 /v1/chat/completions 等 API    │
 │     ├─ 格式：随机字符串，如 "my-token-12345"                    │
-│     ├─ 存储：PostgreSQL admin_tokens 表                         │
+│     ├─ 存储：PostgreSQL client_tokens 表                        │
 │     └─ 使用：curl -H "Authorization: Bearer <token>"            │
 │                                                                 │
 │  2. Ed25519 管理员密钥（TUI 登录认证）← 你已有的                  │
@@ -65,7 +65,7 @@ docker start gateway-postgres
 docker exec -it gateway-postgres psql -U postgres -d gateway -c "\dt"
 ```
 
-### 步骤 2：创建 Admin Token（用于 API 调用）
+### 步骤 2：创建 Client Token（用于 API 调用）
 
 **注意**：这个 Token 和 TUI 登录用的管理员密钥是**不同的东西**！
 
@@ -81,7 +81,7 @@ docker exec -it gateway-postgres psql -U postgres -d gateway -c "\dt"
 docker exec -it gateway-postgres psql -U postgres -d gateway
 
 # 创建 Token（在 psql 提示符下执行）
-INSERT INTO admin_tokens (
+INSERT INTO client_tokens (
     name,
     token, 
     enabled, 
@@ -103,7 +103,7 @@ VALUES (
 );
 
 -- 查看结果
-SELECT token, enabled, created_at FROM admin_tokens;
+SELECT token, enabled, created_at FROM client_tokens;
 
 -- 退出
 \q
@@ -131,7 +131,7 @@ pnpm dev
 
 ## ✅ 验证服务（终端执行）
 
-### 步骤 5：测试 Admin Token
+### 步骤 5：测试 Client Token
 
 ```bash
 curl http://localhost:8080/v1/token/balance \
@@ -278,7 +278,7 @@ A: 可以用其他兼容 API，例如：
 sqlite3 data/gateway.db
 
 sqlite> .tables  # 查看所有表
-sqlite> SELECT * FROM admin_tokens;  # 查看 tokens
+sqlite> SELECT * FROM client_tokens;  # 查看 tokens
 sqlite> SELECT * FROM request_logs ORDER BY timestamp DESC LIMIT 5;  # 最近5条日志
 sqlite> .exit
 ```
@@ -305,7 +305,7 @@ curl $BASE_URL/v1/token/balance -H "Authorization: Bearer $TOKEN"
 
 完成这些步骤后，你应该能够：
 - [ ] 启动网关服务器
-- [ ] 创建和管理 Admin Token
+- [ ] 创建和管理 Client Token
 - [ ] 添加 AI Provider 和 API Key
 - [ ] 发送非流式聊天请求
 - [ ] 发送流式聊天请求

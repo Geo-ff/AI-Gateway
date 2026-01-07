@@ -22,7 +22,7 @@
 
 - **Web 前端**: 基于 React/Vue 的管理控制台
 - **TUI 客户端**: 终端界面，使用 Ed25519 签名认证
-- **第三方应用**: 任何支持 OpenAI API 的应用（使用 Admin Token 认证）
+- **第三方应用**: 任何支持 OpenAI API 的应用（使用 Client Token 认证）
 
 ### 2. 网关入口层
 
@@ -33,7 +33,7 @@
 
 #### 中间件栈（按顺序）
 1. **CORS 中间件**: 跨域资源共享，支持开发环境的前端联调
-2. **认证中间件**: 验证 Admin Token 或 TUI Session
+2. **认证中间件**: 验证 Client Token 或 Admin Identity（TUI Session Token / Web Session Cookie）
 3. **请求日志**: 记录所有请求到数据库
 4. **Tower Trace**: 分布式追踪和性能监控
 5. **路由分发**: 将请求分发到对应的处理器
@@ -41,9 +41,10 @@
 ### 3. 路由与认证层
 
 #### 认证模块 (`src/admin/`, `src/server/login.rs`)
-- **Admin Token 验证**: 
-  - 支持令牌白名单、额度限制、过期时间
-  - 追踪用量和成本
+- **Client Token 验证**: 
+  - 用于外部调用 `/v1/*` 的 API Token
+  - 支持模型白名单、额度限制、过期时间
+  - 追踪用量与成本
 - **TUI Session 管理**:
   - Challenge-Response 认证流程
   - Ed25519 数字签名验证
@@ -59,7 +60,7 @@
 | **chat.rs** | 聊天补全 | `POST /v1/chat/completions` |
 | **models.rs** | 模型列表 | `GET /v1/models` |
 | **token_info.rs** | 令牌信息 | `GET /v1/token/balance` |
-| **admin_tokens.rs** | 令牌管理 | `/admin/tokens/*` |
+| **client_tokens.rs** | 令牌管理 | `/admin/tokens/*` |
 | **providers.rs** | 提供商管理 | `/providers/*` |
 | **provider_keys.rs** | API Key 管理 | `/providers/{provider}/keys` |
 | **admin_metrics.rs** | 统计分析 | `/admin/metrics/*` |
@@ -135,7 +136,7 @@
 - request_logs: 请求日志 (时间、模型、用量、成本)
 - model_cache: 模型缓存 (提供商、模型列表、更新时间)
 - providers: 提供商配置 (名称、类型、地址、密钥)
-- admin_tokens: 令牌管理 (令牌、权限、额度、统计)
+- client_tokens: 令牌管理 (令牌、权限、额度、统计)
 - admin_keys: 管理员密钥 (公钥、指纹、启用状态)
 - model_prices: 模型价格 (输入/输出单价)
 - tui_sessions: TUI 会话
@@ -221,7 +222,7 @@ enum GatewayError {
 - ✅ 实时用量统计
 
 ### 5. 安全认证
-- ✅ Admin Token 认证（API 调用）
+- ✅ Client Token 认证（/v1 API 调用）
 - ✅ Ed25519 签名认证（TUI 客户端）
 - ✅ Session 管理和撤销
 - ✅ 防重放攻击（Challenge-Response）
@@ -254,7 +255,7 @@ enum GatewayError {
    ↓ (CORS → Auth → Logging → Tracing → Routing)
 3. 路由到对应的 Handler
    ↓
-4. 验证 Admin Token / TUI Session
+4. 验证 Client Token / Admin Identity
    ↓
 5. 解析模型名称（provider/model）
    ↓
@@ -362,7 +363,7 @@ docker run -p 8080:8080 \
    - 日志中默认脱敏
    - 仅通过管理接口访问
 
-2. **Admin Token**: 
+2. **Client Token**: 
    - 使用强随机生成器
    - 设置合理的过期时间
    - 定期轮换

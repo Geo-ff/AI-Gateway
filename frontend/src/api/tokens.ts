@@ -21,7 +21,7 @@ async function handleJson<T>(resp: Response): Promise<T> {
   }
 }
 
-export interface AdminToken {
+export interface ClientToken {
   id: string
   name: string
   token: string
@@ -56,7 +56,7 @@ export interface UpdateTokenBody {
   expires_at?: string | null
 }
 
-export async function listTokens(): Promise<AdminToken[]> {
+export async function listTokens(): Promise<ClientToken[]> {
   const resp = await fetch(url('/admin/tokens'), {
     method: 'GET',
     credentials: 'include',
@@ -64,7 +64,7 @@ export async function listTokens(): Promise<AdminToken[]> {
   return handleJson(resp)
 }
 
-export async function getToken(id: string): Promise<AdminToken> {
+export async function getToken(id: string): Promise<ClientToken> {
   const resp = await fetch(url(`/admin/tokens/${encodeURIComponent(id)}`), {
     method: 'GET',
     credentials: 'include',
@@ -72,7 +72,7 @@ export async function getToken(id: string): Promise<AdminToken> {
   return handleJson(resp)
 }
 
-export async function createToken(body: CreateTokenBody): Promise<AdminToken> {
+export async function createToken(body: CreateTokenBody): Promise<ClientToken> {
   const resp = await fetch(url('/admin/tokens'), {
     method: 'POST',
     credentials: 'include',
@@ -86,7 +86,7 @@ export async function createToken(body: CreateTokenBody): Promise<AdminToken> {
   throw new Error(text || `HTTP ${resp.status}`)
 }
 
-export async function updateToken(id: string, body: UpdateTokenBody): Promise<AdminToken> {
+export async function updateToken(id: string, body: UpdateTokenBody): Promise<ClientToken> {
   const resp = await fetch(url(`/admin/tokens/${encodeURIComponent(id)}`), {
     method: 'PUT',
     credentials: 'include',

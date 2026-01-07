@@ -7,7 +7,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::auth::{ensure_admin, ensure_client};
+use super::auth::{ensure_admin, ensure_client_token};
 use crate::error::GatewayError;
 use crate::logging::types::{REQ_TYPE_MODELS_LIST, REQ_TYPE_PROVIDER_MODELS_LIST};
 use crate::providers::openai::ModelListResponse;
@@ -24,13 +24,13 @@ pub async fn list_models(
 ) -> Result<Json<ModelListResponse>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    // 令牌校验：优先允许已登录管理员（Cookie/TUI），否则校验 API Token
+    // 鉴权：优先允许已登录管理员身份（Cookie/TUI Session），否则校验 Client Token
     let mut is_admin = false;
     let mut token_for_limits: Option<String> = None;
     if ensure_admin(&headers, &app_state).await.is_ok() {
         is_admin = true;
     } else {
-        match ensure_client(&headers, &app_state).await {
+        match ensure_client_token(&headers, &app_state).await {
             Ok(tok) => token_for_limits = Some(tok),
             Err(e) => {
                 let path = uri
@@ -112,7 +112,7 @@ pub async fn list_provider_models(
         .unwrap_or_else(|| format!("/models/{}", provider_name));
 
     if ensure_admin(&headers, &app_state).await.is_err()
-        && let Err(e) = ensure_client(&headers, &app_state).await
+        && let Err(e) = ensure_client_token(&headers, &app_state).await
     {
         let code = e.status_code().as_u16();
         log_simple_request(

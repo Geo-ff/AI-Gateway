@@ -72,19 +72,17 @@ pub(super) async fn log_stream_success(
             )
         })
         .unwrap_or((None, None, None, None, None));
-    // Compute amount_spent if possible (non-admin tokens only)
-    let amount_spent = if let (Some(u), Some(tok)) = (usage.as_ref(), client_token.as_deref()) {
-        if tok == "admin_token" {
-            None
-        } else {
-            match app_state.log_store.get_model_price(&provider, &model).await {
-                Ok(Some((p_pm, c_pm, _))) => {
-                    let p = u.prompt_tokens as f64 * p_pm / 1_000_000.0;
-                    let c = u.completion_tokens as f64 * c_pm / 1_000_000.0;
-                    Some(p + c)
-                }
-                _ => None,
+    // Compute amount_spent if possible (Client Token only)
+    let amount_spent = if let Some(u) = usage.as_ref()
+        && client_token.is_some()
+    {
+        match app_state.log_store.get_model_price(&provider, &model).await {
+            Ok(Some((p_pm, c_pm, _))) => {
+                let p = u.prompt_tokens as f64 * p_pm / 1_000_000.0;
+                let c = u.completion_tokens as f64 * c_pm / 1_000_000.0;
+                Some(p + c)
             }
+            _ => None,
         }
     } else {
         None
@@ -114,8 +112,8 @@ pub(super) async fn log_stream_success(
         tracing::error!("Failed to log streaming request: {}", e);
     }
 
-    // 增量更新 admin_tokens：金额与 tokens（仅非管理员令牌）
-    if let Some(tok) = client_token.as_deref().filter(|t| *t != "admin_token") {
+    // 增量更新 client_tokens：金额与 tokens（仅当有 Client Token 时）
+    if let Some(tok) = client_token.as_deref() {
         if let Some(delta) = amount_spent
             && let Err(e) = app_state.token_store.add_amount_spent(tok, delta).await
         {

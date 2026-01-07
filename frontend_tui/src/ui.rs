@@ -58,7 +58,7 @@ pub struct AppState {
     pub menu_index: usize,
     // System screen state
     pub system_tab: usize, // 0=tokens, 1=admin_keys
-    pub tokens: Vec<crate::api::AdminTokenOut>,
+    pub tokens: Vec<crate::api::ClientTokenOut>,
     pub selected_token: usize,
     pub token_offset: usize,
     pub admin_keys: Vec<crate::api::AdminKeyOut>,

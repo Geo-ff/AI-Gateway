@@ -15,23 +15,26 @@ servers:
   - url: https://api.example.com
     description: 生产环境服务器
 
-security:
-  - BearerAuth: []
-  - AdminToken: []
-
 components:
   securitySchemes:
-    BearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-      description: TUI Session Token 认证
-
-    AdminToken:
+    # Client Token：外部调用 /v1/* 的 API Token（与 Admin Identity 严格区分）
+    ClientToken:
       type: apiKey
       in: header
       name: Authorization
-      description: Admin Token 认证 (格式: Bearer <token>)
+      description: Client Token 认证（格式: Bearer <token>），用于访问 `/v1/*`
+
+    # Admin Identity：管理员登录态（当前实现为 TUI Session bearer 或 Web Session Cookie；非 JWT）
+    AdminTuiSessionToken:
+      type: http
+      scheme: bearer
+      description: 管理员身份（Admin Identity）的 TUI Session Token（bearer，但非 JWT）
+
+    AdminSessionCookie:
+      type: apiKey
+      in: cookie
+      name: gw_session
+      description: 管理员身份（Admin Identity）的 Web Session Cookie（HttpOnly）
 
   schemas:
     # 错误响应
@@ -122,8 +125,258 @@ components:
           nullable: true
           description: 错误信息
 
-    # 管理员令牌
-    AdminToken:
+    # 管理端：请求日志查询（/admin/logs/*）
+    RequestLogEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          nullable: true
+        timestamp:
+          type: string
+          format: date-time
+        method:
+          type: string
+        path:
+          type: string
+        request_type:
+          type: string
+        model:
+          type: string
+          nullable: true
+        provider:
+          type: string
+          nullable: true
+        api_key:
+          type: string
+          nullable: true
+        client_token:
+          type: string
+          nullable: true
+        amount_spent:
+          type: number
+          format: double
+          nullable: true
+        status_code:
+          type: integer
+        response_time_ms:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          nullable: true
+        completion_tokens:
+          type: integer
+          nullable: true
+        total_tokens:
+          type: integer
+          nullable: true
+        cached_tokens:
+          type: integer
+          nullable: true
+        reasoning_tokens:
+          type: integer
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        success:
+          type: boolean
+
+    RequestLogsResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/RequestLogEntry'
+        next_cursor:
+          type: integer
+          format: int64
+          nullable: true
+
+    OperationLogEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          nullable: true
+        timestamp:
+          type: string
+          format: date-time
+        operation:
+          type: string
+        provider:
+          type: string
+          nullable: true
+        details:
+          type: string
+          nullable: true
+
+    OperationLogsResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperationLogEntry'
+        next_cursor:
+          type: integer
+          format: int64
+          nullable: true
+
+    # 管理端：统计接口（/admin/metrics/*）
+    TopItem:
+      type: object
+      properties:
+        name:
+          type: string
+        count:
+          type: integer
+
+    MetricsSummary:
+      type: object
+      properties:
+        window_minutes:
+          type: integer
+          format: int64
+        total_requests:
+          type: integer
+        success_requests:
+          type: integer
+        error_requests:
+          type: integer
+        error_rate:
+          type: number
+          format: double
+        average_latency_ms:
+          type: number
+          format: double
+        p95_latency_ms:
+          type: number
+          format: double
+          nullable: true
+        total_amount_spent:
+          type: number
+          format: double
+        total_tokens:
+          type: integer
+          format: int64
+        unique_clients:
+          type: integer
+        top_providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopItem'
+        top_models:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopItem'
+        generated_at:
+          type: string
+          format: date-time
+        start_date:
+          type: string
+          nullable: true
+        end_date:
+          type: string
+          nullable: true
+        available_dates:
+          type: array
+          items:
+            type: string
+
+    SeriesPoint:
+      type: object
+      properties:
+        bucket_start:
+          type: string
+          format: date-time
+        requests:
+          type: integer
+        errors:
+          type: integer
+        average_latency_ms:
+          type: number
+          format: double
+        amount_spent:
+          type: number
+          format: double
+        total_tokens:
+          type: integer
+          format: int64
+
+    MetricsSeries:
+      type: object
+      properties:
+        window_minutes:
+          type: integer
+          format: int64
+        interval_minutes:
+          type: integer
+          format: int64
+        points:
+          type: array
+          items:
+            $ref: '#/components/schemas/SeriesPoint'
+        generated_at:
+          type: string
+          format: date-time
+
+    ModelCountItem:
+      type: object
+      properties:
+        name:
+          type: string
+        count:
+          type: integer
+
+    ModelsDistributionResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelCountItem'
+        generated_at:
+          type: string
+          format: date-time
+
+    SeriesModelPoint:
+      type: object
+      properties:
+        bucket_start:
+          type: string
+          format: date-time
+        top_model:
+          type: string
+          nullable: true
+
+    MetricsSeriesModels:
+      type: object
+      properties:
+        window_minutes:
+          type: integer
+          format: int64
+        interval_minutes:
+          type: integer
+          format: int64
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SeriesModelPoint'
+        generated_at:
+          type: string
+          format: date-time
+
+    # 客户端令牌（Client Token）
+    ClientToken:
       type: object
       properties:
         id:
@@ -313,6 +566,196 @@ components:
         role:
           type: string
           enum: [superadmin, admin, cashier, manager]
+          nullable: true
+
+    # ==================== 认证（Auth） ====================
+    ChallengeReq:
+      type: object
+      properties:
+        fingerprint:
+          type: string
+      required:
+        - fingerprint
+
+    ChallengeResp:
+      type: object
+      properties:
+        challenge_id:
+          type: string
+        nonce:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        alg:
+          type: string
+
+    VerifyReq:
+      type: object
+      properties:
+        challenge_id:
+          type: string
+        fingerprint:
+          type: string
+        signature:
+          type: string
+      required:
+        - challenge_id
+        - fingerprint
+        - signature
+
+    VerifyResp:
+      type: object
+      properties:
+        token:
+          type: string
+          description: AdminTuiSessionToken（bearer）
+        expires_at:
+          type: string
+          format: date-time
+        fingerprint:
+          type: string
+
+    AdminKey:
+      type: object
+      properties:
+        fingerprint:
+          type: string
+        comment:
+          type: string
+          nullable: true
+        enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    AddAdminKeyRequest:
+      type: object
+      properties:
+        public_key_b64:
+          type: string
+        comment:
+          type: string
+          nullable: true
+        enabled:
+          type: boolean
+          nullable: true
+      required:
+        - public_key_b64
+
+    CreateLoginCodeRequest:
+      type: object
+      properties:
+        ttl_secs:
+          type: integer
+          format: int64
+          description: 有效期秒数（默认 60）
+        max_uses:
+          type: integer
+          format: int64
+          description: 最大使用次数（默认 1）
+        length:
+          type: integer
+          format: int64
+          description: code 长度（25..=64）
+        magic_url:
+          type: boolean
+          description: 是否返回 login_url
+
+    CreateLoginCodeResponse:
+      type: object
+      properties:
+        code:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        max_uses:
+          type: integer
+          format: int64
+        uses:
+          type: integer
+          format: int64
+        remaining_uses:
+          type: integer
+          format: int64
+        login_url:
+          type: string
+          nullable: true
+
+    CodeStatusInfo:
+      type: object
+      properties:
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        max_uses:
+          type: integer
+          format: int64
+        uses:
+          type: integer
+          format: int64
+        remaining_uses:
+          type: integer
+          format: int64
+        disabled:
+          type: boolean
+
+    CodeStatusResponse:
+      type: object
+      properties:
+        exists:
+          type: boolean
+        info:
+          $ref: '#/components/schemas/CodeStatusInfo'
+          nullable: true
+
+    RedeemCodeRequest:
+      type: object
+      properties:
+        code:
+          type: string
+      required:
+        - code
+
+    SessionInfo:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        user:
+          type: object
+          nullable: true
+          properties:
+            name:
+              type: string
+
+    TuiSession:
+      type: object
+      properties:
+        session_id:
+          type: string
+        fingerprint:
+          type: string
+        issued_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        revoked:
+          type: boolean
+        last_code_at:
+          type: string
+          format: date-time
           nullable: true
 
     # 创建令牌请求
@@ -562,36 +1005,425 @@ components:
             total_tokens:
               type: integer
 
-    # 令牌余额响应
+    # 令牌余额响应（/v1/token/balance）
     TokenBalanceResponse:
       type: object
       properties:
         token:
           type: string
-          description: 令牌字符串
-        enabled:
-          type: boolean
-          description: 是否启用
-        max_amount:
-          type: number
-          format: double
-          nullable: true
-          description: 最大金额限制
+          description: Client Token（明文）
         amount_spent:
           type: number
           format: double
           description: 已消费金额
-        amount_remaining:
+        max_amount:
           type: number
           format: double
           nullable: true
-          description: 剩余金额
+          description: 最大金额限制（可选）
+        remaining:
+          type: number
+          format: double
+          nullable: true
+          description: 剩余金额（可选）
         total_tokens_spent:
           type: integer
           format: int64
           description: 累计总 tokens
+        max_tokens:
+          type: integer
+          format: int64
+          nullable: true
+          description: 最大 tokens 限制（可选，兼容字段）
+
+    # 令牌用量响应（/v1/token/usage）
+    TokenUsageResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: Client Token（明文）
+        limit:
+          type: integer
+          description: 返回条数
+        total_cost:
+          type: number
+          format: double
+          description: 累计消费金额
+        prompt_tokens_spent:
+          type: integer
+          format: int64
+          description: 累计提示/输入 tokens
+        completion_tokens_spent:
+          type: integer
+          format: int64
+          description: 累计补全/回复 tokens
+        total_tokens_spent:
+          type: integer
+          format: int64
+          description: 累计总 tokens
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              timestamp:
+                type: string
+                description: 时间（北京时间字符串）
+              provider:
+                type: string
+                nullable: true
+              model:
+                type: string
+                nullable: true
+              status_code:
+                type: integer
+              response_time_ms:
+                type: integer
+              prompt_tokens:
+                type: integer
+                nullable: true
+              completion_tokens:
+                type: integer
+                nullable: true
+              total_tokens:
+                type: integer
+                nullable: true
+              amount_spent:
+                type: number
+                format: double
+                nullable: true
+              error_message:
+                type: string
+                nullable: true
+
+    # 模型缓存列表（/admin/models/cache）
+    CachedModelEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        provider:
+          type: string
+        object:
+          type: string
+        created:
+          type: integer
+          format: int64
+        owned_by:
+          type: string
+        cached_at:
+          type: string
+          format: date-time
+
+    CachedModelsResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CachedModelEntry'
 
 paths:
+  # ==================== 管理端认证接口 ====================
+  /auth/tui/challenge:
+    post:
+      summary: 请求 TUI 登录挑战
+      description: 发起 Challenge-Response 流程第一步（公开接口）
+      operationId: requestTuiChallenge
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChallengeReq'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChallengeResp'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/tui/verify:
+    post:
+      summary: 验证 TUI 登录挑战
+      description: Challenge-Response 流程第二步，验证签名后签发管理员 TUI Session Token（公开接口）
+      operationId: verifyTuiChallenge
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyReq'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyResp'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/keys:
+    get:
+      summary: 获取管理员公钥列表
+      description: 管理员身份接口（Admin Identity）
+      operationId: listAdminKeys
+      tags:
+        - Auth
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdminKey'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      summary: 添加管理员公钥
+      description: 管理员身份接口（Admin Identity）
+      operationId: addAdminKey
+      tags:
+        - Auth
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddAdminKeyRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminKey'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/keys/{fingerprint}:
+    delete:
+      summary: 删除管理员公钥
+      description: 管理员身份接口（Admin Identity）
+      operationId: deleteAdminKey
+      tags:
+        - Auth
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: fingerprint
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+        '404':
+          description: 不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/tui/sessions:
+    get:
+      summary: 获取 TUI 会话列表
+      description: 管理员身份接口（Admin Identity）
+      operationId: listTuiSessions
+      tags:
+        - Auth
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: fingerprint
+          in: query
+          schema:
+            type: string
+          description: 指纹筛选（可选）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TuiSession'
+
+  /auth/tui/sessions/{session_id}/revoke:
+    post:
+      summary: 撤销 TUI 会话
+      description: 管理员身份接口（Admin Identity）
+      operationId: revokeTuiSession
+      tags:
+        - Auth
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked:
+                    type: boolean
+
+  /auth/login-codes:
+    post:
+      summary: 创建登录凭证
+      description: 仅允许通过管理员 TUI Session Token 创建（不支持 Cookie 会话）
+      operationId: createLoginCode
+      tags:
+        - Auth
+      security:
+        - AdminTuiSessionToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLoginCodeRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateLoginCodeResponse'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/login-codes/status:
+    get:
+      summary: 查询当前登录凭证状态
+      description: 仅允许通过管理员 TUI Session Token 查询（不支持 Cookie 会话）
+      operationId: getLoginCodeStatus
+      tags:
+        - Auth
+      security:
+        - AdminTuiSessionToken: []
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodeStatusResponse'
+
+  /auth/code/redeem:
+    post:
+      summary: 兑换登录凭证
+      description: 兑换成功后通过 Set-Cookie 设置 `gw_session`（公开接口）
+      operationId: redeemLoginCode
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RedeemCodeRequest'
+      responses:
+        '204':
+          description: 成功（Set-Cookie: gw_session=...）
+        '400':
+          description: 请求参数错误/兑换失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/session:
+    get:
+      summary: 查询当前 Cookie 会话
+      description: 根据 `gw_session` Cookie 判断是否已登录（公开接口）
+      operationId: getWebSession
+      tags:
+        - Auth
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionInfo'
+
+  /auth/logout:
+    post:
+      summary: 退出登录（撤销 Cookie 会话）
+      description: 撤销 `gw_session` 并清理 Cookie
+      operationId: logout
+      tags:
+        - Auth
+      responses:
+        '204':
+          description: 成功（Set-Cookie 清理 gw_session）
+
   # ==================== OpenAI 兼容接口 ====================
   /v1/chat/completions:
     post:
@@ -601,7 +1433,7 @@ paths:
       tags:
         - Chat
       security:
-        - AdminToken: []
+        - ClientToken: []
       requestBody:
         required: true
         content:
@@ -641,12 +1473,14 @@ paths:
   /v1/models:
     get:
       summary: 获取模型列表
-      description: 获取所有可用的模型列表
+      description: 获取所有可用的模型列表（支持 Client Token；已登录管理员身份也可访问）
       operationId: listModels
       tags:
         - Models
       security:
-        - AdminToken: []
+        - ClientToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       responses:
         '200':
           description: 成功响应
@@ -661,6 +1495,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /models/{provider}:
+    get:
+      summary: 获取指定提供商模型列表
+      description: 获取指定提供商的模型列表缓存；`refresh=true` 时拉取上游并返回（不落库）
+      operationId: listProviderModels
+      tags:
+        - Models
+      security:
+        - ClientToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+        - name: refresh
+          in: query
+          schema:
+            type: boolean
+          description: 是否从上游刷新（返回但不写入缓存）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsResponse'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 提供商不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /v1/token/balance:
     get:
       summary: 获取令牌余额
@@ -669,7 +1546,7 @@ paths:
       tags:
         - Token
       security:
-        - AdminToken: []
+        - ClientToken: []
       responses:
         '200':
           description: 成功响应
@@ -684,16 +1561,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /v1/token/usage:
+    get:
+      summary: 获取令牌用量
+      description: 获取当前 Client Token 的最近聊天用量明细与累计统计
+      operationId: getTokenUsage
+      tags:
+        - Token
+      security:
+        - ClientToken: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+          description: 返回条数（1..200）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenUsageResponse'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   # ==================== 管理员接口 ====================
   /admin/tokens:
     get:
       summary: 获取令牌列表
-      description: 获取所有管理员令牌列表
-      operationId: listAdminTokens
+      description: 获取所有客户端令牌（Client Token）列表
+      operationId: listClientTokens
       tags:
         - Admin
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       responses:
         '200':
           description: 成功响应
@@ -702,7 +1610,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/AdminToken'
+                  $ref: '#/components/schemas/ClientToken'
         '401':
           description: 未授权
           content:
@@ -712,12 +1620,13 @@ paths:
 
     post:
       summary: 创建令牌
-      description: 创建新的管理员令牌
-      operationId: createAdminToken
+      description: 创建新的客户端令牌（Client Token）
+      operationId: createClientToken
       tags:
         - Admin
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       requestBody:
         required: true
         content:
@@ -730,7 +1639,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AdminToken'
+                $ref: '#/components/schemas/ClientToken'
         '400':
           description: 请求参数错误
           content:
@@ -748,11 +1657,12 @@ paths:
     get:
       summary: 获取令牌详情
       description: 获取指定令牌的详细信息
-      operationId: getAdminToken
+      operationId: getClientToken
       tags:
         - Admin
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: id
           in: path
@@ -766,7 +1676,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AdminToken'
+                $ref: '#/components/schemas/ClientToken'
         '404':
           description: 令牌不存在
           content:
@@ -777,11 +1687,12 @@ paths:
     put:
       summary: 更新令牌
       description: 更新指定令牌的配置
-      operationId: updateAdminToken
+      operationId: updateClientToken
       tags:
         - Admin
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: id
           in: path
@@ -801,7 +1712,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AdminToken'
+                $ref: '#/components/schemas/ClientToken'
         '404':
           description: 令牌不存在
           content:
@@ -811,12 +1722,13 @@ paths:
 
     delete:
       summary: 删除令牌
-      description: 删除指定的管理员令牌
-      operationId: deleteAdminToken
+      description: 删除指定的客户端令牌（Client Token）
+      operationId: deleteClientToken
       tags:
         - Admin
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: id
           in: path
@@ -838,11 +1750,12 @@ paths:
     post:
       summary: 启用/禁用令牌
       description: 启用或禁用指定令牌
-      operationId: toggleAdminToken
+      operationId: toggleClientToken
       tags:
         - Admin
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: id
           in: path
@@ -880,7 +1793,8 @@ paths:
       tags:
         - Admin
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       responses:
         '200':
           description: 成功响应
@@ -904,7 +1818,8 @@ paths:
       tags:
         - Admin
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       requestBody:
         required: true
         content:
@@ -939,7 +1854,8 @@ paths:
       tags:
         - Admin
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: id
           in: path
@@ -968,7 +1884,8 @@ paths:
       tags:
         - Admin
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: id
           in: path
@@ -1003,7 +1920,8 @@ paths:
       tags:
         - Admin
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: id
           in: path
@@ -1030,7 +1948,8 @@ paths:
       tags:
         - Providers
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       responses:
         '200':
           description: 成功响应
@@ -1054,7 +1973,8 @@ paths:
       tags:
         - Providers
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       requestBody:
         required: true
         content:
@@ -1102,7 +2022,8 @@ paths:
       tags:
         - Providers
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: provider
           in: path
@@ -1131,7 +2052,8 @@ paths:
       tags:
         - Providers
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: provider
           in: path
@@ -1178,7 +2100,8 @@ paths:
       tags:
         - Providers
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: provider
           in: path
@@ -1211,7 +2134,8 @@ paths:
       tags:
         - Providers
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: provider
           in: path
@@ -1245,7 +2169,8 @@ paths:
       tags:
         - Providers
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: provider
           in: path
@@ -1289,7 +2214,8 @@ paths:
       tags:
         - Providers
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: provider
           in: path
@@ -1326,67 +2252,28 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  # ==================== 日志查询接口 ====================
-  /admin/logs:
+  /providers/{provider}/keys/raw:
     get:
-      summary: 获取请求日志列表
-      description: 获取系统请求日志，支持分页
-      operationId: listRequestLogs
+      summary: 获取提供商密钥列表（含原文）
+      description: 返回原文密钥与脱敏展示（仅管理员身份可用）
+      operationId: listProviderKeysRaw
       tags:
-        - Logs
+        - Providers
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
-        - name: limit
-          in: query
+        - name: provider
+          in: path
+          required: true
           schema:
-            type: integer
-            default: 100
-          description: 返回记录数量限制
-        - name: cursor
-          in: query
-          schema:
-            type: integer
-          description: 分页游标（上一页最后一条记录的ID）
-      responses:
-        '200':
-          description: 成功响应
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/RequestLog'
-        '401':
-          description: 未授权
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  # ==================== 统计分析接口 ====================
-  /admin/metrics/usage:
-    get:
-      summary: 获取使用量统计
-      description: 获取系统使用量统计信息
-      operationId: getUsageMetrics
-      tags:
-        - Metrics
-      security:
-        - AdminToken: []
-      parameters:
-        - name: start_date
+            type: string
+          description: 提供商名称
+        - name: q
           in: query
           schema:
             type: string
-            format: date
-          description: 开始日期
-        - name: end_date
-          in: query
-          schema:
-            type: string
-            format: date
-          description: 结束日期
+          description: 搜索关键字（可选，匹配原文或脱敏值）
       responses:
         '200':
           description: 成功响应
@@ -1395,16 +2282,481 @@ paths:
               schema:
                 type: object
                 properties:
-                  total_requests:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        value:
+                          type: string
+                          description: 原文密钥
+                        masked:
+                          type: string
+                          description: 脱敏密钥
+                  total:
                     type: integer
-                    description: 总请求数
-                  total_tokens:
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /providers/{provider}/keys/batch:
+    post:
+      summary: 批量添加提供商密钥
+      description: 批量添加密钥，逐条返回成功/失败
+      operationId: addProviderKeysBatch
+      tags:
+        - Providers
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                keys:
+                  type: array
+                  items:
+                    type: string
+              required:
+                - keys
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  added:
                     type: integer
-                    description: 总token数
-                  total_amount:
-                    type: number
-                    format: double
-                    description: 总消费金额
+                  failed:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key:
+                          type: string
+                        status:
+                          type: string
+                        message:
+                          type: string
+                          nullable: true
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      summary: 批量删除提供商密钥
+      description: 批量删除密钥，逐条返回结果
+      operationId: deleteProviderKeysBatch
+      tags:
+        - Providers
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                keys:
+                  type: array
+                  items:
+                    type: string
+              required:
+                - keys
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  deleted:
+                    type: integer
+                  missing:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key:
+                          type: string
+                        status:
+                          type: string
+                        message:
+                          type: string
+                          nullable: true
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ==================== 日志查询接口 ====================
+  /admin/logs/requests:
+    get:
+      summary: 获取请求日志列表
+      description: 获取系统请求日志（可筛选），支持分页游标
+      operationId: listRequestLogs
+      tags:
+        - Logs
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 200
+          description: 返回记录数量限制（1..1000）
+        - name: cursor
+          in: query
+          schema:
+            type: integer
+            format: int64
+          description: 分页游标（上一页最后一条记录的ID）
+        - name: request_type
+          in: query
+          schema:
+            type: string
+          description: 请求类型筛选（可选）
+        - name: provider
+          in: query
+          schema:
+            type: string
+          description: 提供商筛选（可选）
+        - name: model
+          in: query
+          schema:
+            type: string
+          description: 模型筛选（可选）
+        - name: client_token
+          in: query
+          schema:
+            type: string
+          description: Client Token 筛选（可选）
+        - name: api_key
+          in: query
+          schema:
+            type: string
+          description: API Key（原文/脱敏）筛选（可选）
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [success, error]
+          description: 状态筛选（可选）
+        - name: method
+          in: query
+          schema:
+            type: string
+          description: HTTP 方法筛选（可选）
+        - name: path
+          in: query
+          schema:
+            type: string
+          description: 路径筛选（可选）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestLogsResponse'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /admin/logs/chat-completions:
+    get:
+      summary: 获取聊天补全日志列表
+      description: 仅返回 `POST /v1/chat/completions` 的日志
+      operationId: listChatCompletionLogs
+      tags:
+        - Logs
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 200
+          description: 返回记录数量限制（1..1000）
+        - name: cursor
+          in: query
+          schema:
+            type: integer
+            format: int64
+          description: 分页游标（上一页最后一条记录的ID）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestLogsResponse'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /admin/logs/operations:
+    get:
+      summary: 获取操作审计日志列表
+      description: 获取提供商/密钥等管理操作日志，支持分页游标
+      operationId: listOperationLogs
+      tags:
+        - Logs
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 200
+          description: 返回记录数量限制（1..1000）
+        - name: cursor
+          in: query
+          schema:
+            type: integer
+            format: int64
+          description: 分页游标（上一页最后一条记录的ID）
+        - name: operation
+          in: query
+          schema:
+            type: string
+          description: 操作类型筛选（可选）
+        - name: provider
+          in: query
+          schema:
+            type: string
+          description: 提供商筛选（可选）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationLogsResponse'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ==================== 统计分析接口 ====================
+  /admin/metrics/summary:
+    get:
+      summary: 获取统计摘要
+      description: 统计窗口摘要（支持按日期范围或 window_minutes）
+      operationId: getMetricsSummary
+      tags:
+        - Metrics
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: window_minutes
+          in: query
+          schema:
+            type: integer
+          description: 统计窗口（分钟，默认 60；1..1440）
+        - name: start_date
+          in: query
+          schema:
+            type: string
+          description: 开始日期（YYYY-MM-DD，可选）
+        - name: end_date
+          in: query
+          schema:
+            type: string
+          description: 结束日期（YYYY-MM-DD，可选）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsSummary'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /admin/metrics/series:
+    get:
+      summary: 获取统计时序
+      description: 按 bucket 输出请求数、错误数、延迟、金额与 tokens
+      operationId: getMetricsSeries
+      tags:
+        - Metrics
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: window_minutes
+          in: query
+          schema:
+            type: integer
+          description: 统计窗口（分钟，默认 60；1..1440）
+        - name: interval_minutes
+          in: query
+          schema:
+            type: integer
+          description: bucket 粒度（分钟，默认 5）
+        - name: start_date
+          in: query
+          schema:
+            type: string
+          description: 开始日期（YYYY-MM-DD，可选）
+        - name: end_date
+          in: query
+          schema:
+            type: string
+          description: 结束日期（YYYY-MM-DD，可选）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsSeries'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /admin/metrics/models-distribution:
+    get:
+      summary: 获取模型分布
+      description: 返回窗口内 top N 模型分布
+      operationId: getModelsDistribution
+      tags:
+        - Metrics
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: window_minutes
+          in: query
+          schema:
+            type: integer
+          description: 统计窗口（分钟，默认 60；1..1440）
+        - name: start_date
+          in: query
+          schema:
+            type: string
+          description: 开始日期（YYYY-MM-DD，可选）
+        - name: end_date
+          in: query
+          schema:
+            type: string
+          description: 结束日期（YYYY-MM-DD，可选）
+        - name: limit
+          in: query
+          schema:
+            type: integer
+          description: 返回条数（默认 8）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsDistributionResponse'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /admin/metrics/series-models:
+    get:
+      summary: 获取模型时序（Top1）
+      description: 按时间 bucket 输出该 bucket 使用最多的模型（用于趋势展示）
+      operationId: getSeriesModels
+      tags:
+        - Metrics
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: window_minutes
+          in: query
+          schema:
+            type: integer
+          description: 统计窗口（分钟，默认 60；1..1440）
+        - name: interval_minutes
+          in: query
+          schema:
+            type: integer
+          description: bucket 粒度（分钟，默认 5）
+        - name: start_date
+          in: query
+          schema:
+            type: string
+          description: 开始日期（YYYY-MM-DD，可选）
+        - name: end_date
+          in: query
+          schema:
+            type: string
+          description: 结束日期（YYYY-MM-DD，可选）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsSeriesModels'
         '401':
           description: 未授权
           content:
@@ -1413,6 +2765,36 @@ paths:
                 $ref: '#/components/schemas/Error'
 
   # ==================== 模型缓存接口 ====================
+  /admin/models/cache:
+    get:
+      summary: 获取模型缓存列表
+      description: 获取缓存的模型列表（可选按 provider 过滤）
+      operationId: listCachedModels
+      tags:
+        - Models
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: provider
+          in: query
+          schema:
+            type: string
+          description: 按提供商筛选（可选）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CachedModelsResponse'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /models/{provider}/cache:
     post:
       summary: 更新模型缓存
@@ -1421,7 +2803,8 @@ paths:
       tags:
         - Models
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: provider
           in: path
@@ -1453,7 +2836,8 @@ paths:
       tags:
         - Models
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: provider
           in: path
@@ -1481,7 +2865,8 @@ paths:
       tags:
         - Admin
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       parameters:
         - name: provider
           in: query
@@ -1519,7 +2904,8 @@ paths:
       tags:
         - Admin
       security:
-        - AdminToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
       requestBody:
         required: true
         content:
@@ -1560,6 +2946,55 @@ paths:
                 properties:
                   success:
                     type: boolean
+
+  /admin/model-prices/{provider}/{model}:
+    get:
+      summary: 获取单个模型价格
+      description: 获取指定提供商+模型的价格配置
+      operationId: getModelPrice
+      tags:
+        - Admin
+      security:
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: model
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  provider:
+                    type: string
+                  model:
+                    type: string
+                  prompt_price_per_million:
+                    type: number
+                    format: double
+                  completion_price_per_million:
+                    type: number
+                    format: double
+                  currency:
+                    type: string
+                    nullable: true
+        '404':
+          description: 不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
 tags:
   - name: Chat

@@ -1,4 +1,4 @@
-# Token 详解：什么是 Admin Token？
+# Token 详解：什么是 Client Token？
 
 ## 🎫 Token 就像"门票"或"房卡"
 
@@ -18,9 +18,9 @@
 
 ---
 
-## 🔑 在 Gateway Zero 中，Token 的作用
+## 🔑 在 Gateway Zero 中，Client Token 的作用
 
-### 1. 身份识别
+### 1. 访问凭证
 ```
 客户端请求：
   "我想调用 GPT-4"
@@ -38,7 +38,7 @@
   "好的，帮你调用 GPT-4"
 ```
 
-### 2. 权限控制
+### 2. 权限与额度控制
 
 一个 Token 可以设置很多限制：
 
@@ -62,20 +62,21 @@ amount_spent              | 25.5            (已花费 25.5 元)
 
 ---
 
-## 🛠️ 为什么第一个 Token 要手动创建？
+## 🛠️ 如何创建第一个 Client Token？
 
 ### 问题：鸡生蛋，蛋生鸡
 
 ```
-场景1：通过 API 创建 Token
+场景1：通过管理端 API 创建 Client Token
 ┌──────────────────────────────────────┐
 │ POST /admin/tokens                   │
-│ Authorization: Bearer ???            │  ← 需要一个 Token 才能创建 Token！
+│ Authorization: Bearer <admin_session>│  ← 需要管理员身份（TUI Session Token 或 Web Session Cookie）
 │ { "token": "new-token" }             │
 └──────────────────────────────────────┘
 
-这就形成了循环：
-创建 Token 需要 Token → 但我还没有 Token → 无法创建 Token 😵
+说明：
+- `/admin/*` 由 **Admin Identity** 保护（TUI Session Token 或 Web Session Cookie），不是 Client Token
+- `/v1/*` 才使用 **Client Token**
 ```
 
 ### 解决方案：直接在数据库创建
@@ -84,28 +85,28 @@ amount_spent              | 25.5            (已花费 25.5 元)
 绕过 API，直接操作数据库：
 ┌──────────────────────────────────────┐
 │ sqlite3 data/gateway.db              │
-│ INSERT INTO admin_tokens ...         │  ← 直接写入数据库
+│ INSERT INTO client_tokens ...        │  ← 直接写入数据库
 └──────────────────────────────────────┘
 
-现在有了第一个 Token → 可以用它创建更多 Token ✅
+现在有了第一个 Client Token → 可用于调用 `/v1/*` ✅
 ```
 
 ---
 
 ## 📝 Token 的完整生命周期
 
-### 阶段 1：创建 Token
+### 阶段 1：创建 Client Token
 
 **方式 A：手动创建（第一个）**
 ```bash
 sqlite3 data/gateway.db
-INSERT INTO admin_tokens (name, token, ...) VALUES ('my-first-token', 'my-token', ...);
+INSERT INTO client_tokens (name, token, ...) VALUES ('my-first-token', 'my-token', ...);
 ```
 
-**方式 B：通过 API 创建（有了第一个 Token 后）**
+**方式 B：通过管理端 API 创建（需要管理员身份）**
 ```bash
 curl -X POST http://localhost:8080/admin/tokens \
-  -H "Authorization: Bearer my-first-token" \
+  -H "Authorization: Bearer <admin_tui_session_token>" \
   -d '{"max_amount": 50}'
 ```
 
@@ -126,16 +127,16 @@ curl http://localhost:8080/v1/chat/completions \
    // token = "my-test-token-12345"
 
 2. 从数据库查询 Token
-   let admin_token = db.get_token(token).await?;
+   let client_token = db.get_token(token).await?;
    
 3. 验证 Token
-   if !admin_token.enabled {
+   if !client_token.enabled {
        return Error("Token 已禁用");
    }
-   if admin_token.expires_at < now() {
+   if client_token.expires_at < now() {
        return Error("Token 已过期");
    }
-   if admin_token.amount_spent >= admin_token.max_amount {
+   if client_token.amount_spent >= client_token.max_amount {
        return Error("Token 额度已用完");
    }
    
@@ -162,16 +163,16 @@ curl http://localhost:8080/v1/token/usage \
 }
 ```
 
-### 阶段 4：管理 Token
+### 阶段 4：管理 Client Token（管理端）
 
 ```bash
 # 禁用 Token
 curl -X POST http://localhost:8080/admin/tokens/<token-id>/toggle \
-  -H "Authorization: Bearer admin-token"
+  -H "Authorization: Bearer <admin_tui_session_token>"
 
 # 删除 Token
 curl -X DELETE http://localhost:8080/admin/tokens/<token-id> \
-  -H "Authorization: Bearer admin-token"
+  -H "Authorization: Bearer <admin_tui_session_token>"
 ```
 
 ---
@@ -223,7 +224,7 @@ my-test-token-12345  ← 这是明文，类似密码
 ```
 团队成员 A：Token-A (额度 $50，只能用 gpt-3.5)
 团队成员 B：Token-B (额度 $100，可以用 gpt-4)
-管理员：    Token-Admin (无限额度，所有模型)
+管理员身份：Admin Identity（TUI Session / Web Session）
 ```
 
 ### 场景 2：不同应用
@@ -263,7 +264,7 @@ Web 应用：   Token-Web
 ```
 ┌────────────────────────────────────────────────────┐
 │  客户端                                              │
-│    ↓ 使用 Admin Token (my-test-token-12345)       │
+│    ↓ 使用 Client Token (my-test-token-12345)      │
 │  网关                                                │
 │    ↓ 使用 Provider API Key (sk-proj-xxx)          │
 │  AI Provider (OpenAI/Anthropic)                    │

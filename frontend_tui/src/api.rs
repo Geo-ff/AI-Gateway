@@ -96,9 +96,9 @@ pub struct AdminKeyOut {
     pub _last_used_at: Option<String>,
 }
 
-/// 管理员令牌信息
+/// 客户端令牌信息（Client Token）
 #[derive(Debug, Deserialize, Clone)]
-pub struct AdminTokenOut {
+pub struct ClientTokenOut {
     #[serde(default)]
     pub id: String,
     #[serde(default)]
@@ -328,9 +328,9 @@ pub fn list_admin_keys(cfg: &Config, token: &str) -> Result<Vec<AdminKeyOut>, St
     serde_json::from_str(&text).map_err(|e| format!("解析响应失败: {}; body={}", e, text))
 }
 
-/// 获取管理员令牌列表
+/// 获取客户端令牌列表
 ///
-/// 查询所有管理员令牌的信息和使用统计
+/// 查询所有客户端令牌的信息和使用统计
 ///
 /// # Arguments
 ///
@@ -339,9 +339,9 @@ pub fn list_admin_keys(cfg: &Config, token: &str) -> Result<Vec<AdminKeyOut>, St
 ///
 /// # Returns
 ///
-/// * `Ok(Vec<AdminTokenOut>)` - 管理员令牌列表
+/// * `Ok(Vec<ClientTokenOut>)` - 客户端令牌列表
 /// * `Err(String)` - 查询失败的错误信息
-pub fn list_tokens(cfg: &Config, token: &str) -> Result<Vec<AdminTokenOut>, String> {
+pub fn list_tokens(cfg: &Config, token: &str) -> Result<Vec<ClientTokenOut>, String> {
     let client = client()?;
     let url = api_url(cfg, "/admin/tokens");
     let resp = client

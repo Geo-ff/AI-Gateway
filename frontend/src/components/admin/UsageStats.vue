@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref, computed, watch } from 'vue'
 import { useNotify } from '../../composables/useNotify'
-import { listTokens, type AdminToken } from '../../api/tokens'
+import { listTokens, type ClientToken } from '../../api/tokens'
 import { fetchMetricsSummary, type MetricsSummary } from '../../api/metrics'
 
-const tokens = ref<AdminToken[]>([])
+const tokens = ref<ClientToken[]>([])
 const summary = ref<MetricsSummary | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
