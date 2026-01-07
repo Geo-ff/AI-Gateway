@@ -247,3 +247,4 @@
 ✅ 术语对齐：统一 Client Token / Admin Identity 术语，并同步更新 OpenAPI 与文档（全局无残留）
 
 - ✅ P0：新增 `/auth/login` `/auth/me` `/auth/logout`（JWT AccessToken），管理端路由支持 Bearer JWT，并对齐 401/403 鉴权错误码
+- ✅ P1：users 表新增 password_hash（首个用户即管理员），前端改为调用 /auth/login 获取 JWT 驱动 accessToken

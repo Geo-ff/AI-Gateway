@@ -423,6 +423,7 @@ mod tests {
                 username: Some("bob".into()),
                 email: "bob@example.com".into(),
                 phone_number: Some("+1-555-1111".into()),
+                password: None,
                 status: UserStatus::Active,
                 role: UserRole::Admin,
             }),

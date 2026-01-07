@@ -738,11 +738,20 @@ impl DatabaseLogger {
                 phone_number TEXT NOT NULL,
                 status TEXT NOT NULL,
                 role TEXT NOT NULL,
+                password_hash TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )",
             [],
         )?;
+
+        // Best-effort migrations for existing deployments
+        let _ = conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT", []);
+        // Ensure there is at most one superadmin.
+        let _ = conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS users_one_superadmin_uidx ON users(role) WHERE role='superadmin'",
+            [],
+        );
 
         // Schema migrations for request_logs: client_token + amount_spent columns
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN client_token TEXT", []);

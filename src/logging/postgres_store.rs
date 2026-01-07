@@ -267,6 +267,7 @@ impl PgLogStore {
                 phone_number TEXT NOT NULL,
                 status TEXT NOT NULL,
                 role TEXT NOT NULL,
+                password_hash TEXT,
                 created_at TIMESTAMPTZ NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL
             )"#,
@@ -274,6 +275,18 @@ impl PgLogStore {
             )
             .await
             .map_err(|e| GatewayError::Config(format!("Failed to init users: {}", e)))?;
+
+        // Best-effort migrations for existing deployments
+        let _ = client
+            .execute("ALTER TABLE users ADD COLUMN password_hash TEXT", &[])
+            .await;
+        // Ensure there is at most one superadmin.
+        let _ = client
+            .execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS users_one_superadmin_uidx ON users (role) WHERE role='superadmin'",
+                &[],
+            )
+            .await;
 
         Ok(store)
     }

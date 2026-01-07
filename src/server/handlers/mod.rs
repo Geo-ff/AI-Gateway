@@ -46,6 +46,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/auth/login-codes/status",
             get(auth_login::current_code_status),
         )
+        .route("/auth/register", post(auth_jwt::register))
         .route("/auth/login", post(auth_jwt::login))
         .route("/auth/me", get(auth_jwt::me))
         .route("/auth/code/redeem", post(auth_login::redeem_code))

@@ -536,6 +536,9 @@ components:
         phone_number:
           type: string
           nullable: true
+        password:
+          type: string
+          nullable: true
         status:
           type: string
           enum: [active, inactive, invited, suspended]
@@ -563,6 +566,9 @@ components:
           type: string
           nullable: true
         phone_number:
+          type: string
+          nullable: true
+        password:
           type: string
           nullable: true
         status:
@@ -633,6 +639,29 @@ components:
         - email
         - password
 
+    JwtRegisterRequest:
+      type: object
+      properties:
+        first_name:
+          type: string
+          nullable: true
+        last_name:
+          type: string
+          nullable: true
+        username:
+          type: string
+          nullable: true
+        email:
+          type: string
+        phone_number:
+          type: string
+          nullable: true
+        password:
+          type: string
+      required:
+        - email
+        - password
+
     JwtAuthUser:
       type: object
       properties:
@@ -679,6 +708,14 @@ components:
           $ref: '#/components/schemas/JwtAuthUser'
       required:
         - expiresAt
+        - user
+
+    JwtRegisterResponse:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/JwtAuthUser'
+      required:
         - user
 
     AdminKey:
@@ -1251,8 +1288,8 @@ paths:
     post:
       summary: 管理端登录（JWT）
       description: |
-        使用管理员账号密码签发 AccessToken（JWT）。
-        需要配置：`GW_ADMIN_EMAIL`、`GW_ADMIN_PASSWORD`、`GW_JWT_SECRET`（可选 `GW_JWT_TTL_SECS`）。
+        使用用户表中的 `email + password` 登录并签发 AccessToken（JWT）。
+        需要配置：`GW_JWT_SECRET`（可选 `GW_JWT_TTL_SECS`）。
       operationId: authLogin
       tags:
         - Auth
@@ -1277,6 +1314,41 @@ paths:
                 $ref: '#/components/schemas/Error'
         '401':
           description: 登录失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/register:
+    post:
+      summary: 初始化注册（仅首次）
+      description: |
+        当 `users` 表为空时允许创建第一个用户，并自动赋予 `superadmin` 角色（仅首次可用）。
+        注册成功后，可通过 `/auth/login` 登录签发 AccessToken（JWT）。
+      operationId: authRegister
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JwtRegisterRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JwtRegisterResponse'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 系统已初始化（禁止再次注册）
           content:
             application/json:
               schema:

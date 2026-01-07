@@ -1,10 +1,13 @@
-use axum::{Json, http::HeaderMap};
+use std::sync::Arc;
+
+use axum::{Json, extract::State, http::HeaderMap};
 use chrono::{Duration, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::auth::{AccessTokenClaims, ensure_access_token, issue_access_token, jwt_ttl_secs};
 use crate::error::{GatewayError, Result as AppResult};
-use crate::users::UserRole;
+use crate::server::AppState;
+use crate::users::{CreateUserPayload, UserRole, UserStatus, verify_password};
 
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
@@ -34,10 +37,6 @@ pub struct LoginResponse {
 pub struct MeResponse {
     pub expires_at: String,
     pub user: AuthUser,
-}
-
-fn env_required(name: &'static str) -> Result<String, GatewayError> {
-    std::env::var(name).map_err(|_| GatewayError::Config(format!("missing env `{}`", name)))
 }
 
 fn env_optional(name: &'static str) -> Option<String> {
@@ -85,28 +84,28 @@ fn role_allows_admin(role: &str) -> bool {
     )
 }
 
-pub async fn login(Json(payload): Json<LoginRequest>) -> AppResult<Json<LoginResponse>> {
-    let expected_email = env_required("GW_ADMIN_EMAIL")?;
-    let expected_password = env_required("GW_ADMIN_PASSWORD")?;
-
-    if payload.email != expected_email || payload.password != expected_password {
+pub async fn login(
+    State(app_state): State<Arc<AppState>>,
+    Json(payload): Json<LoginRequest>,
+) -> AppResult<Json<LoginResponse>> {
+    let Some(user) = app_state.user_store.get_auth_by_email(payload.email.trim()).await? else {
         return Err(GatewayError::Unauthorized("invalid credentials".into()));
-    }
-
-    let id = env_optional("GW_ADMIN_ID").unwrap_or_else(|| "admin".into());
-    let role = env_optional("GW_ADMIN_ROLE").unwrap_or_else(|| "admin".into());
-    let parsed_role = UserRole::parse(&role);
-    if parsed_role.is_none() {
-        return Err(GatewayError::Config("invalid env `GW_ADMIN_ROLE`".into()));
+    };
+    let Some(password_hash) = user.password_hash.as_deref() else {
+        return Err(GatewayError::Unauthorized("invalid credentials".into()));
+    };
+    if !verify_password(payload.password.as_str(), password_hash)? {
+        return Err(GatewayError::Unauthorized("invalid credentials".into()));
     }
 
     let now = Utc::now();
     let exp = now + Duration::seconds(jwt_ttl_secs() as i64);
+    let role = user.role.as_str().to_string();
     let mut claims = AccessTokenClaims {
-        sub: id,
-        email: expected_email,
+        sub: user.id,
+        email: user.email,
+        permissions: permissions_from_env_or_default(Some(user.role)),
         role,
-        permissions: permissions_from_env_or_default(parsed_role),
         exp: exp.timestamp(),
         iat: Some(now.timestamp()),
     };
@@ -136,4 +135,41 @@ pub async fn me(headers: HeaderMap) -> AppResult<Json<MeResponse>> {
         expires_at: exp.to_rfc3339(),
         user: claims_to_user(&claims),
     }))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterResponse {
+    pub user: AuthUser,
+}
+
+pub async fn register(
+    State(app_state): State<Arc<AppState>>,
+    Json(mut payload): Json<CreateUserPayload>,
+) -> AppResult<(axum::http::StatusCode, Json<RegisterResponse>)> {
+    if app_state.user_store.any_users().await? {
+        return Err(GatewayError::Forbidden(
+            "registration is only allowed when there are no users".into(),
+        ));
+    }
+
+    let password_len = payload.password.as_deref().map(|s| s.trim().len()).unwrap_or(0);
+    if password_len < 7 {
+        return Err(GatewayError::Config(
+            "password must be at least 7 characters long".into(),
+        ));
+    }
+
+    payload.role = UserRole::Superadmin;
+    payload.status = UserStatus::Active;
+
+    let created = app_state.user_store.create_user(payload).await?;
+    let role = created.role;
+    let user = AuthUser {
+        id: created.id,
+        email: created.email,
+        role: role.as_str().to_string(),
+        permissions: permissions_from_env_or_default(Some(role)),
+    };
+    Ok((axum::http::StatusCode::CREATED, Json(RegisterResponse { user })))
 }

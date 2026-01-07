@@ -4,6 +4,41 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::GatewayError;
 
+pub(crate) fn hash_password(password: &str) -> Result<String, GatewayError> {
+    use argon2::{
+        Argon2,
+        PasswordHasher,
+        password_hash::{SaltString, rand_core::OsRng},
+    };
+
+    let salt = SaltString::generate(&mut OsRng);
+    let hashed = Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|e| {
+            GatewayError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("password hash failed: {}", e),
+            ))
+        })?
+        .to_string();
+    Ok(hashed)
+}
+
+pub(crate) fn verify_password(password: &str, password_hash: &str) -> Result<bool, GatewayError> {
+    use argon2::{
+        Argon2,
+        PasswordVerifier,
+        password_hash::PasswordHash,
+    };
+
+    let Ok(parsed) = PasswordHash::new(password_hash) else {
+        return Ok(false);
+    };
+    Ok(Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .is_ok())
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UserStatus {
@@ -89,6 +124,8 @@ pub struct CreateUserPayload {
     pub email: String,
     #[serde(default)]
     pub phone_number: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
     #[serde(default = "default_status_invited")]
     pub status: UserStatus,
     #[serde(default = "default_role_admin")]
@@ -116,9 +153,19 @@ pub struct UpdateUserPayload {
     #[serde(default)]
     pub phone_number: Option<String>,
     #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
     pub status: Option<UserStatus>,
     #[serde(default)]
     pub role: Option<UserRole>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UserAuthRecord {
+    pub id: String,
+    pub email: String,
+    pub role: UserRole,
+    pub password_hash: Option<String>,
 }
 
 #[async_trait]
@@ -130,6 +177,8 @@ pub trait UserStore: Send + Sync {
         payload: UpdateUserPayload,
     ) -> Result<Option<User>, GatewayError>;
     async fn get_user(&self, id: &str) -> Result<Option<User>, GatewayError>;
+    async fn get_auth_by_email(&self, email: &str) -> Result<Option<UserAuthRecord>, GatewayError>;
+    async fn any_users(&self) -> Result<bool, GatewayError>;
     async fn list_users(&self) -> Result<Vec<User>, GatewayError>;
     async fn delete_user(&self, id: &str) -> Result<bool, GatewayError>;
 }

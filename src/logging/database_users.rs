@@ -6,7 +6,16 @@ use uuid::Uuid;
 use crate::error::GatewayError;
 use crate::logging::database::DatabaseLogger;
 use crate::logging::time::{parse_beijing_string, to_beijing_string};
-use crate::users::{CreateUserPayload, UpdateUserPayload, User, UserRole, UserStatus, UserStore};
+use crate::users::{
+    CreateUserPayload,
+    UpdateUserPayload,
+    User,
+    UserAuthRecord,
+    UserRole,
+    UserStatus,
+    UserStore,
+    hash_password,
+};
 
 fn default_username_from_email(email: &str) -> String {
     let base = email
@@ -65,6 +74,13 @@ impl UserStore for DatabaseLogger {
         let first_name = payload.first_name.unwrap_or_default();
         let last_name = payload.last_name.unwrap_or_default();
         let phone_number = payload.phone_number.unwrap_or_default();
+        let password_hash = payload
+            .password
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(hash_password)
+            .transpose()?;
 
         let mut username = payload
             .username
@@ -72,6 +88,18 @@ impl UserStore for DatabaseLogger {
             .unwrap_or_else(|| default_username_from_email(&payload.email));
 
         let conn = self.connection.lock().await;
+        let is_first_user = conn
+            .query_row("SELECT 1 FROM users LIMIT 1", [], |_| Ok(()))
+            .optional()?
+            .is_none();
+        let role = if is_first_user {
+            UserRole::Superadmin
+        } else if matches!(payload.role, UserRole::Superadmin) {
+            UserRole::Admin
+        } else {
+            payload.role
+        };
+
         // best-effort: avoid username collision
         for _ in 0..5 {
             let exists: Option<String> = conn
@@ -88,8 +116,8 @@ impl UserStore for DatabaseLogger {
         }
 
         conn.execute(
-            "INSERT INTO users (id, first_name, last_name, username, email, phone_number, status, role, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO users (id, first_name, last_name, username, email, phone_number, password_hash, status, role, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 &id,
                 &first_name,
@@ -97,8 +125,9 @@ impl UserStore for DatabaseLogger {
                 &username,
                 &payload.email,
                 &phone_number,
+                password_hash,
                 payload.status.as_str(),
-                payload.role.as_str(),
+                role.as_str(),
                 to_beijing_string(&now),
                 to_beijing_string(&now),
             ],
@@ -112,7 +141,7 @@ impl UserStore for DatabaseLogger {
             email: payload.email,
             phone_number,
             status: payload.status,
-            role: payload.role,
+            role,
             created_at: now,
             updated_at: now,
         })
@@ -155,9 +184,16 @@ impl UserStore for DatabaseLogger {
             user.role = v;
         }
         user.updated_at = Utc::now();
+        let password_hash_update = payload
+            .password
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(hash_password)
+            .transpose()?;
 
         conn.execute(
-            "UPDATE users SET first_name = ?2, last_name = ?3, username = ?4, email = ?5, phone_number = ?6, status = ?7, role = ?8, updated_at = ?9 WHERE id = ?1",
+            "UPDATE users SET first_name = ?2, last_name = ?3, username = ?4, email = ?5, phone_number = ?6, status = ?7, role = ?8, password_hash = COALESCE(?9, password_hash), updated_at = ?10 WHERE id = ?1",
             rusqlite::params![
                 &user.id,
                 &user.first_name,
@@ -167,6 +203,7 @@ impl UserStore for DatabaseLogger {
                 &user.phone_number,
                 user.status.as_str(),
                 user.role.as_str(),
+                password_hash_update,
                 to_beijing_string(&user.updated_at),
             ],
         )?;
@@ -181,6 +218,40 @@ impl UserStore for DatabaseLogger {
         )?;
         let row = stmt.query_row([id], |row| row_to_user(row)).optional()?;
         Ok(row)
+    }
+
+    async fn get_auth_by_email(&self, email: &str) -> Result<Option<UserAuthRecord>, GatewayError> {
+        let conn = self.connection.lock().await;
+        let row = conn
+            .query_row(
+                "SELECT id, email, role, password_hash FROM users WHERE email = ?1 LIMIT 1",
+                [email],
+                |row| {
+                    let role_s: String = row.get(2)?;
+                    Ok(UserAuthRecord {
+                        id: row.get(0)?,
+                        email: row.get(1)?,
+                        role: UserRole::parse(&role_s).ok_or_else(|| {
+                            rusqlite::Error::InvalidColumnType(
+                                2,
+                                "role".into(),
+                                rusqlite::types::Type::Text,
+                            )
+                        })?,
+                        password_hash: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    async fn any_users(&self) -> Result<bool, GatewayError> {
+        let conn = self.connection.lock().await;
+        Ok(conn
+            .query_row("SELECT 1 FROM users LIMIT 1", [], |_| Ok(()))
+            .optional()?
+            .is_some())
     }
 
     async fn list_users(&self) -> Result<Vec<User>, GatewayError> {
@@ -223,6 +294,7 @@ mod tests {
                 username: None,
                 email: "alice@example.com".into(),
                 phone_number: Some("+1-555-0000".into()),
+                password: None,
                 status: UserStatus::Active,
                 role: UserRole::Manager,
             })
@@ -245,6 +317,7 @@ mod tests {
                     username: None,
                     email: None,
                     phone_number: None,
+                    password: None,
                     status: Some(UserStatus::Suspended),
                     role: None,
                 },
@@ -278,6 +351,7 @@ mod tests {
                 username: Some("dup".into()),
                 email: "dup1@example.com".into(),
                 phone_number: None,
+                password: None,
                 status: UserStatus::Invited,
                 role: UserRole::Admin,
             })
@@ -292,6 +366,7 @@ mod tests {
                 username: Some("dup".into()),
                 email: "dup2@example.com".into(),
                 phone_number: None,
+                password: None,
                 status: UserStatus::Invited,
                 role: UserRole::Admin,
             })
