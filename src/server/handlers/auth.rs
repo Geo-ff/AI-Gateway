@@ -28,6 +28,8 @@ pub struct AccessTokenClaims {
     pub role: String,
     #[serde(default)]
     pub permissions: Vec<String>,
+    #[serde(default)]
+    pub jti: Option<String>,
     pub exp: i64,
     #[serde(default)]
     pub iat: Option<i64>,
@@ -213,10 +215,10 @@ pub async fn ensure_client_token(
 ) -> Result<String, GatewayError> {
     let provided = bearer_token(headers);
     let Some(tok) = provided else {
-        return Err(GatewayError::Config("missing bearer token".into()));
+        return Err(GatewayError::Unauthorized("missing bearer token".into()));
     };
     let Some(t) = app_state.token_store.get_token(&tok).await? else {
-        return Err(GatewayError::Config("invalid token".into()));
+        return Err(GatewayError::Unauthorized("invalid token".into()));
     };
     if !t.enabled {
         if let Some(max_amount) = t.max_amount
@@ -226,14 +228,14 @@ pub async fn ensure_client_token(
                 .await
             && spent >= max_amount
         {
-            return Err(GatewayError::Config("token budget exceeded".into()));
+            return Err(GatewayError::Unauthorized("token budget exceeded".into()));
         }
-        return Err(GatewayError::Config("token disabled".into()));
+        return Err(GatewayError::Unauthorized("token disabled".into()));
     }
     if let Some(exp) = t.expires_at
         && chrono::Utc::now() > exp
     {
-        return Err(GatewayError::Config("token expired".into()));
+        return Err(GatewayError::Unauthorized("token expired".into()));
     }
     Ok(tok)
 }

@@ -249,3 +249,4 @@
 - ✅ P0：新增 `/auth/login` `/auth/me` `/auth/logout`（JWT AccessToken），管理端路由支持 Bearer JWT，并对齐 401/403 鉴权错误码
 - ✅ P1：users 表新增 password_hash（首个用户即管理员），前端改为调用 /auth/login 获取 JWT 驱动 accessToken
 - ✅ 鉴权一致性：/admin/* 与 /providers/* 全量切到 JWT 优先鉴权，并统一 401/403 返回码
+- ✅ P2：/auth/register 增加 bootstrap code；引入 refresh token + rotation + server-side revocation，前端接入无感续期与 logout 撤销

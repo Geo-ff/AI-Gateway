@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Json,
+    body::Bytes,
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
@@ -11,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::auth::{AdminIdentity, SESSION_COOKIE, ensure_admin};
 use crate::{
     error::{GatewayError, Result as AppResult},
+    refresh_tokens::hash_refresh_token,
     server::{AppState, login::LoginCodeEntry},
 };
 
@@ -257,7 +259,28 @@ pub async fn get_session(
 pub async fn logout(
     State(app): State<Arc<AppState>>,
     headers: HeaderMap,
+    body: Bytes,
 ) -> AppResult<impl IntoResponse> {
+    if !body.is_empty() {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct LogoutPayload {
+            refresh_token: String,
+        }
+
+        if let Ok(payload) = serde_json::from_slice::<LogoutPayload>(&body) {
+            let raw = payload.refresh_token.trim();
+            if !raw.is_empty() {
+                let token_hash = hash_refresh_token(raw);
+                let _ = app
+                    .refresh_token_store
+                    .revoke_refresh_token(&token_hash, chrono::Utc::now())
+                    .await;
+                tracing::info!("logout: refresh token revoked");
+            }
+        }
+    }
+
     if let Some(id) = parse_cookie(&headers, SESSION_COOKIE) {
         let _ = app.login_manager.revoke_session(&id).await?;
         tracing::info!("logout: session revoked");

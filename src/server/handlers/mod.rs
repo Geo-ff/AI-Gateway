@@ -48,6 +48,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/auth/register", post(auth_jwt::register))
         .route("/auth/login", post(auth_jwt::login))
+        .route("/auth/refresh", post(auth_jwt::refresh))
         .route("/auth/me", get(auth_jwt::me))
         .route("/auth/code/redeem", post(auth_login::redeem_code))
         .route("/auth/session", get(auth_login::get_session))

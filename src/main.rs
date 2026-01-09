@@ -5,6 +5,7 @@ mod db;
 mod error;
 mod logging;
 mod providers;
+mod refresh_tokens;
 mod routing;
 mod server;
 mod users;

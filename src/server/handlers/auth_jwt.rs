@@ -3,9 +3,11 @@ use std::sync::Arc;
 use axum::{Json, extract::State, http::HeaderMap};
 use chrono::{Duration, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::auth::{AccessTokenClaims, ensure_access_token, issue_access_token, jwt_ttl_secs};
 use crate::error::{GatewayError, Result as AppResult};
+use crate::refresh_tokens::{RefreshTokenRecord, hash_refresh_token, issue_refresh_token, refresh_ttl_secs};
 use crate::server::AppState;
 use crate::users::{CreateUserPayload, UserRole, UserStatus, verify_password};
 
@@ -13,6 +15,13 @@ use crate::users::{CreateUserPayload, UserRole, UserStatus, verify_password};
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterRequest {
+    pub bootstrap_code: String,
+    #[serde(flatten)]
+    pub payload: CreateUserPayload,
 }
 
 #[derive(Debug, Serialize)]
@@ -28,7 +37,9 @@ pub struct AuthUser {
 #[serde(rename_all = "camelCase")]
 pub struct LoginResponse {
     pub access_token: String,
+    pub refresh_token: String,
     pub expires_at: String,
+    pub refresh_expires_at: String,
     pub user: AuthUser,
 }
 
@@ -106,6 +117,7 @@ pub async fn login(
         email: user.email,
         permissions: permissions_from_env_or_default(Some(user.role)),
         role,
+        jti: Some(Uuid::new_v4().to_string()),
         exp: exp.timestamp(),
         iat: Some(now.timestamp()),
     };
@@ -115,9 +127,29 @@ pub async fn login(
     }
 
     let token = issue_access_token(&claims)?;
+
+    let refresh_token = issue_refresh_token();
+    let refresh_hash = hash_refresh_token(&refresh_token);
+    let refresh_exp = now + Duration::seconds(refresh_ttl_secs());
+    app_state
+        .refresh_token_store
+        .create_refresh_token(RefreshTokenRecord {
+            id: Uuid::new_v4().to_string(),
+            user_id: claims.sub.clone(),
+            token_hash: refresh_hash,
+            created_at: now,
+            expires_at: refresh_exp,
+            revoked_at: None,
+            replaced_by_id: None,
+            last_used_at: None,
+        })
+        .await?;
+
     Ok(Json(LoginResponse {
         access_token: token,
+        refresh_token,
         expires_at: exp.to_rfc3339(),
+        refresh_expires_at: refresh_exp.to_rfc3339(),
         user: claims_to_user(&claims),
     }))
 }
@@ -145,25 +177,38 @@ pub struct RegisterResponse {
 
 pub async fn register(
     State(app_state): State<Arc<AppState>>,
-    Json(mut payload): Json<CreateUserPayload>,
+    Json(mut req): Json<RegisterRequest>,
 ) -> AppResult<(axum::http::StatusCode, Json<RegisterResponse>)> {
+    let expected = std::env::var("GATEWAY_BOOTSTRAP_CODE")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| GatewayError::Unauthorized("registration is disabled".into()))?;
+    if req.bootstrap_code.trim() != expected.trim() {
+        return Err(GatewayError::Unauthorized("invalid bootstrap code".into()));
+    }
+
     if app_state.user_store.any_users().await? {
         return Err(GatewayError::Forbidden(
             "registration is only allowed when there are no users".into(),
         ));
     }
 
-    let password_len = payload.password.as_deref().map(|s| s.trim().len()).unwrap_or(0);
+    let password_len = req
+        .payload
+        .password
+        .as_deref()
+        .map(|s| s.trim().len())
+        .unwrap_or(0);
     if password_len < 7 {
         return Err(GatewayError::Config(
             "password must be at least 7 characters long".into(),
         ));
     }
 
-    payload.role = UserRole::Superadmin;
-    payload.status = UserStatus::Active;
+    req.payload.role = UserRole::Superadmin;
+    req.payload.status = UserStatus::Active;
 
-    let created = app_state.user_store.create_user(payload).await?;
+    let created = app_state.user_store.create_user(req.payload).await?;
     let role = created.role;
     let user = AuthUser {
         id: created.id,
@@ -172,4 +217,102 @@ pub async fn register(
         permissions: permissions_from_env_or_default(Some(role)),
     };
     Ok((axum::http::StatusCode::CREATED, Json(RegisterResponse { user })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_at: String,
+    pub refresh_expires_at: String,
+}
+
+pub async fn refresh(
+    State(app_state): State<Arc<AppState>>,
+    Json(payload): Json<RefreshRequest>,
+) -> AppResult<Json<RefreshResponse>> {
+    let raw = payload.refresh_token.trim();
+    if raw.is_empty() {
+        return Err(GatewayError::Unauthorized("invalid refresh token".into()));
+    }
+    let token_hash = hash_refresh_token(raw);
+
+    let now = Utc::now();
+    let Some(stored) = app_state
+        .refresh_token_store
+        .get_refresh_token_by_hash(&token_hash)
+        .await?
+    else {
+        return Err(GatewayError::Unauthorized("invalid refresh token".into()));
+    };
+    if stored.revoked_at.is_some() {
+        return Err(GatewayError::Unauthorized("invalid refresh token".into()));
+    }
+    if stored.expires_at <= now {
+        return Err(GatewayError::Unauthorized("refresh token expired".into()));
+    }
+
+    let revoked = app_state
+        .refresh_token_store
+        .revoke_refresh_token(&token_hash, now)
+        .await?;
+    if !revoked {
+        return Err(GatewayError::Unauthorized("invalid refresh token".into()));
+    }
+
+    let Some(user) = app_state.user_store.get_user(&stored.user_id).await? else {
+        return Err(GatewayError::Unauthorized("invalid refresh token".into()));
+    };
+
+    let exp = now + Duration::seconds(jwt_ttl_secs() as i64);
+    let role = user.role.as_str().to_string();
+    let mut claims = AccessTokenClaims {
+        sub: user.id,
+        email: user.email,
+        permissions: permissions_from_env_or_default(Some(user.role)),
+        role,
+        jti: Some(Uuid::new_v4().to_string()),
+        exp: exp.timestamp(),
+        iat: Some(now.timestamp()),
+    };
+    if claims.permissions.is_empty() {
+        claims.permissions = vec!["admin:read".into()];
+    }
+    let access_token = issue_access_token(&claims)?;
+
+    let new_refresh_token = issue_refresh_token();
+    let new_hash = hash_refresh_token(&new_refresh_token);
+    let new_id = Uuid::new_v4().to_string();
+    let refresh_exp = now + Duration::seconds(refresh_ttl_secs());
+    app_state
+        .refresh_token_store
+        .create_refresh_token(RefreshTokenRecord {
+            id: new_id.clone(),
+            user_id: claims.sub.clone(),
+            token_hash: new_hash,
+            created_at: now,
+            expires_at: refresh_exp,
+            revoked_at: None,
+            replaced_by_id: None,
+            last_used_at: Some(now),
+        })
+        .await?;
+    let _ = app_state
+        .refresh_token_store
+        .set_refresh_token_replaced_by(&token_hash, &new_id)
+        .await;
+
+    Ok(Json(RefreshResponse {
+        access_token,
+        refresh_token: new_refresh_token,
+        expires_at: exp.to_rfc3339(),
+        refresh_expires_at: refresh_exp.to_rfc3339(),
+    }))
 }

@@ -822,6 +822,24 @@ impl DatabaseLogger {
             [],
         )?;
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS refresh_tokens (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                revoked_at TEXT,
+                replaced_by_id TEXT,
+                last_used_at TEXT
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS refresh_tokens_user_id_idx ON refresh_tokens(user_id)",
+            [],
+        )?;
+
         Ok(Self {
             connection: Arc::new(Mutex::new(conn)),
         })

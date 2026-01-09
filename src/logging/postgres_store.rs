@@ -288,6 +288,29 @@ impl PgLogStore {
             )
             .await;
 
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS refresh_tokens (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                revoked_at TIMESTAMPTZ,
+                replaced_by_id TEXT,
+                last_used_at TIMESTAMPTZ
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init refresh_tokens: {}", e)))?;
+        let _ = client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS refresh_tokens_user_id_idx ON refresh_tokens (user_id)",
+                &[],
+            )
+            .await;
+
         Ok(store)
     }
 }

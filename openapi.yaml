@@ -642,6 +642,9 @@ components:
     JwtRegisterRequest:
       type: object
       properties:
+        bootstrap_code:
+          type: string
+          description: 首次注册 bootstrap code（来自服务端环境变量 `GATEWAY_BOOTSTRAP_CODE`）
         first_name:
           type: string
           nullable: true
@@ -659,6 +662,7 @@ components:
         password:
           type: string
       required:
+        - bootstrap_code
         - email
         - password
 
@@ -688,15 +692,56 @@ components:
         accessToken:
           type: string
           description: AccessToken（JWT）
+        refreshToken:
+          type: string
+          description: RefreshToken（仅用于刷新 AccessToken；服务端仅存储 hash）
         expiresAt:
+          type: string
+          format: date-time
+        refreshExpiresAt:
           type: string
           format: date-time
         user:
           $ref: '#/components/schemas/JwtAuthUser'
       required:
         - accessToken
+        - refreshToken
         - expiresAt
+        - refreshExpiresAt
         - user
+
+    JwtRefreshRequest:
+      type: object
+      properties:
+        refreshToken:
+          type: string
+      required:
+        - refreshToken
+
+    JwtRefreshResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        refreshExpiresAt:
+          type: string
+          format: date-time
+      required:
+        - accessToken
+        - refreshToken
+        - expiresAt
+        - refreshExpiresAt
+
+    JwtLogoutRequest:
+      type: object
+      properties:
+        refreshToken:
+          type: string
 
     JwtMeResponse:
       type: object
@@ -1288,7 +1333,7 @@ paths:
     post:
       summary: 管理端登录（JWT）
       description: |
-        使用用户表中的 `email + password` 登录并签发 AccessToken（JWT）。
+        使用用户表中的 `email + password` 登录并签发 AccessToken（JWT）与 RefreshToken（用于无感续期）。
         需要配置：`GW_JWT_SECRET`（可选 `GW_JWT_TTL_SECS`）。
       operationId: authLogin
       tags:
@@ -1319,11 +1364,42 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /auth/refresh:
+    post:
+      summary: 刷新 AccessToken（JWT）
+      description: |
+        使用 RefreshToken 刷新 AccessToken，并进行 refresh token rotation：
+        - 成功时签发新的 AccessToken 与新的 RefreshToken
+        - 旧 RefreshToken 会被服务端撤销（不可再次使用）
+      operationId: authRefresh
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JwtRefreshRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JwtRefreshResponse'
+        '401':
+          description: RefreshToken 缺失/无效/过期/已撤销
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /auth/register:
     post:
       summary: 初始化注册（仅首次）
       description: |
         当 `users` 表为空时允许创建第一个用户，并自动赋予 `superadmin` 角色（仅首次可用）。
+        需要提供 bootstrap code（来自服务端环境变量 `GATEWAY_BOOTSTRAP_CODE`）。
         注册成功后，可通过 `/auth/login` 登录签发 AccessToken（JWT）。
       operationId: authRegister
       tags:
@@ -1343,6 +1419,12 @@ paths:
                 $ref: '#/components/schemas/JwtRegisterResponse'
         '400':
           description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: bootstrap code 缺失/无效（或服务端未配置）
           content:
             application/json:
               schema:
@@ -1690,10 +1772,17 @@ paths:
       summary: 退出登录
       description: |
         - Cookie 会话：撤销 `gw_session` 并清理 Cookie
-        - AccessToken（JWT）：无状态，服务端不存储 Token，返回 204；前端自行清理本地 Token
+        - RefreshToken：服务端撤销该 RefreshToken（即 server-side revocation），后续 `/auth/refresh` 将返回 401
+        - AccessToken（JWT）：无状态（本 P2 不做 access token revocation），前端自行清理本地 Token
       operationId: logout
       tags:
         - Auth
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JwtLogoutRequest'
       responses:
         '204':
           description: 成功（Set-Cookie 清理 gw_session）
