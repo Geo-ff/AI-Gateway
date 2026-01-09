@@ -383,7 +383,8 @@ mod tests {
             providers: logger.clone(),
             token_store: logger.clone(),
             login_manager: Arc::new(LoginManager::new(logger.clone())),
-            user_store: logger,
+            user_store: logger.clone(),
+            refresh_token_store: logger,
         });
 
         Harness {

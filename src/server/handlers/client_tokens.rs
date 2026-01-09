@@ -674,7 +674,8 @@ mod tests {
             providers: logger.clone(),
             token_store: logger.clone(),
             login_manager: Arc::new(LoginManager::new(logger.clone())),
-            user_store: logger,
+            user_store: logger.clone(),
+            refresh_token_store: logger,
         });
 
         Harness {
@@ -703,6 +704,7 @@ mod tests {
             headers.clone(),
             Json(CreateTokenPayload {
                 id: None,
+                user_id: None,
                 name: Some("  my-token  ".into()),
                 token: None,
                 allowed_models: None,
@@ -819,6 +821,7 @@ mod tests {
             headers.clone(),
             Json(CreateTokenPayload {
                 id: Some("client-id".into()),
+                user_id: None,
                 name: Some("name".into()),
                 token: None,
                 allowed_models: None,
@@ -841,6 +844,7 @@ mod tests {
             headers,
             Json(CreateTokenPayload {
                 id: None,
+                user_id: None,
                 name: Some("   ".into()),
                 token: None,
                 allowed_models: None,

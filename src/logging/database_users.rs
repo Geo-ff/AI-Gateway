@@ -287,6 +287,22 @@ mod tests {
         let db_path = db_path.to_str().unwrap();
         let db = DatabaseLogger::new(db_path).await.unwrap();
 
+        // The first user is force-promoted to `superadmin` for initial bootstrap.
+        let bootstrap = db
+            .create_user(CreateUserPayload {
+                first_name: Some("Bootstrap".into()),
+                last_name: Some("User".into()),
+                username: None,
+                email: "bootstrap@example.com".into(),
+                phone_number: None,
+                password: None,
+                status: UserStatus::Active,
+                role: UserRole::Admin,
+            })
+            .await
+            .unwrap();
+        assert_eq!(bootstrap.role.as_str(), "superadmin");
+
         let created = db
             .create_user(CreateUserPayload {
                 first_name: Some("Alice".into()),
@@ -329,12 +345,17 @@ mod tests {
         assert_eq!(updated.status.as_str(), "suspended");
 
         let users = db.list_users().await.unwrap();
-        assert_eq!(users.len(), 1);
+        assert_eq!(users.len(), 2);
 
         let deleted = db.delete_user(&created.id).await.unwrap();
         assert!(deleted);
         let missing = db.get_user(&created.id).await.unwrap();
         assert!(missing.is_none());
+
+        let deleted_bootstrap = db.delete_user(&bootstrap.id).await.unwrap();
+        assert!(deleted_bootstrap);
+        let missing_bootstrap = db.get_user(&bootstrap.id).await.unwrap();
+        assert!(missing_bootstrap.is_none());
     }
 
     #[tokio::test]
