@@ -4,6 +4,7 @@ mod crypto;
 mod db;
 mod error;
 mod logging;
+mod password_reset_tokens;
 mod providers;
 mod refresh_tokens;
 mod routing;
@@ -14,6 +15,9 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 #[tokio::main]
 async fn main() -> crate::error::Result<()> {
+    // Local development: load `.env` without panicking (no-op if missing).
+    dotenvy::dotenv().ok();
+
     // 使用自定义北京时间格式与环境过滤器
     fmt()
         .with_env_filter(EnvFilter::from_default_env())

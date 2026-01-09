@@ -846,6 +846,22 @@ impl DatabaseLogger {
             [],
         )?;
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used_at TEXT
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS password_reset_tokens_user_id_idx ON password_reset_tokens(user_id)",
+            [],
+        )?;
+
         Ok(Self {
             connection: Arc::new(Mutex::new(conn)),
         })

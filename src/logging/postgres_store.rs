@@ -311,6 +311,29 @@ impl PgLogStore {
             )
             .await;
 
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                used_at TIMESTAMPTZ
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| {
+                GatewayError::Config(format!("Failed to init password_reset_tokens: {}", e))
+            })?;
+        let _ = client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS password_reset_tokens_user_id_idx ON password_reset_tokens (user_id)",
+                &[],
+            )
+            .await;
+
         Ok(store)
     }
 }

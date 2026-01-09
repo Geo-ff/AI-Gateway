@@ -111,6 +111,22 @@ impl RefreshTokenStore for DatabaseLogger {
         Ok(changed > 0)
     }
 
+    async fn revoke_all_refresh_tokens_for_user(
+        &self,
+        user_id: &str,
+        when: DateTime<Utc>,
+    ) -> Result<u64, GatewayError> {
+        let conn = self.connection.lock().await;
+        let changed = conn.execute(
+            "UPDATE refresh_tokens
+             SET revoked_at = COALESCE(revoked_at, ?2),
+                 last_used_at = COALESCE(last_used_at, ?2)
+             WHERE user_id = ?1 AND revoked_at IS NULL",
+            rusqlite::params![user_id, to_beijing_string(&when)],
+        )?;
+        Ok(changed as u64)
+    }
+
     async fn set_refresh_token_replaced_by(
         &self,
         token_hash: &str,
@@ -124,4 +140,3 @@ impl RefreshTokenStore for DatabaseLogger {
         Ok(())
     }
 }
-

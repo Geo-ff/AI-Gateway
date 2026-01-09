@@ -30,6 +30,12 @@ pub trait RefreshTokenStore: Send + Sync {
         when: DateTime<Utc>,
     ) -> Result<bool, GatewayError>;
 
+    async fn revoke_all_refresh_tokens_for_user(
+        &self,
+        user_id: &str,
+        when: DateTime<Utc>,
+    ) -> Result<u64, GatewayError>;
+
     async fn set_refresh_token_replaced_by(
         &self,
         token_hash: &str,
@@ -61,4 +67,3 @@ pub fn hash_refresh_token(token: &str) -> String {
     hasher.update(token.as_bytes());
     hex::encode(hasher.finalize())
 }
-

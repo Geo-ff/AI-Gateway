@@ -1062,6 +1062,26 @@ components:
         newPassword:
           type: string
 
+    ForgotPasswordRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+
+    ResetPasswordRequest:
+      type: object
+      required:
+        - token
+        - newPassword
+      properties:
+        token:
+          type: string
+        newPassword:
+          type: string
+
     # 更新令牌请求
     UpdateTokenRequest:
       type: object
@@ -1594,6 +1614,55 @@ paths:
                 $ref: '#/components/schemas/Error'
         '401':
           description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/forgot-password:
+    post:
+      summary: 忘记密码（发送重置邮件）
+      description: |
+        输入注册邮箱触发找回流程；无论邮箱是否存在，恒返回 204（防信息泄露）。
+        重置链接为一次性且可过期，服务端仅存 token hash。
+      operationId: authForgotPassword
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequest'
+      responses:
+        '204':
+          description: 已触发（不泄露邮箱是否存在）
+
+  /auth/reset-password:
+    post:
+      summary: 重置密码（通过邮件 token）
+      description: |
+        校验 reset token（存在/未使用/未过期）后更新用户密码，并撤销该用户全部 refresh tokens，强制重新登录。
+      operationId: authResetPassword
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+      responses:
+        '204':
+          description: 重置成功（需重新登录）
+        '400':
+          description: 请求参数错误（如密码过短）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: reset token 无效/过期/已使用
           content:
             application/json:
               schema:

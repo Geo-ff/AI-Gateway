@@ -78,6 +78,25 @@ impl RefreshTokenStore for PgLogStore {
         Ok(changed > 0)
     }
 
+    async fn revoke_all_refresh_tokens_for_user(
+        &self,
+        user_id: &str,
+        when: DateTime<Utc>,
+    ) -> Result<u64, GatewayError> {
+        let client = self.pool.pick();
+        let changed = client
+            .execute(
+                "UPDATE refresh_tokens
+                 SET revoked_at = COALESCE(revoked_at, $2),
+                     last_used_at = COALESCE(last_used_at, $2)
+                 WHERE user_id = $1 AND revoked_at IS NULL",
+                &[&user_id, &when],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
+        Ok(changed)
+    }
+
     async fn set_refresh_token_replaced_by(
         &self,
         token_hash: &str,
@@ -94,4 +113,3 @@ impl RefreshTokenStore for PgLogStore {
         Ok(())
     }
 }
-
