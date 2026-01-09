@@ -9,7 +9,7 @@ use axum::{
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::auth::{AdminIdentity, ensure_admin};
+use super::auth::{AdminIdentity, require_superadmin};
 use crate::error::GatewayError;
 use crate::logging::time::BEIJING_OFFSET;
 use crate::logging::types::RequestLog;
@@ -386,7 +386,7 @@ pub async fn models_distribution(
     headers: HeaderMap,
     Query(q): Query<ModelsDistributionQuery>,
 ) -> Result<Json<ModelsDistributionResponse>, GatewayError> {
-    let identity = ensure_admin(&headers, &app_state).await?;
+    let identity = require_superadmin(&headers, &app_state).await?;
     let date_range = app_state
         .log_store
         .get_request_log_date_range(TARGET_METHOD, TARGET_PATH)
@@ -481,7 +481,7 @@ pub async fn series_models(
     headers: HeaderMap,
     Query(q): Query<SeriesModelsQuery>,
 ) -> Result<Json<MetricsSeriesModels>, GatewayError> {
-    let identity = ensure_admin(&headers, &app_state).await?;
+    let identity = require_superadmin(&headers, &app_state).await?;
     let date_range = app_state
         .log_store
         .get_request_log_date_range(TARGET_METHOD, TARGET_PATH)
@@ -567,7 +567,7 @@ pub async fn summary(
     headers: HeaderMap,
     Query(q): Query<MetricsQuery>,
 ) -> Result<Json<MetricsSummary>, GatewayError> {
-    let identity = ensure_admin(&headers, &app_state).await?;
+    let identity = require_superadmin(&headers, &app_state).await?;
     let date_range = app_state
         .log_store
         .get_request_log_date_range(TARGET_METHOD, TARGET_PATH)
@@ -626,7 +626,7 @@ pub async fn series(
     headers: HeaderMap,
     Query(q): Query<SeriesQuery>,
 ) -> Result<Json<MetricsSeries>, GatewayError> {
-    let identity = ensure_admin(&headers, &app_state).await?;
+    let identity = require_superadmin(&headers, &app_state).await?;
     let date_range = app_state
         .log_store
         .get_request_log_date_range(TARGET_METHOD, TARGET_PATH)

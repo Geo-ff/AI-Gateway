@@ -6,7 +6,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use super::auth::ensure_admin;
+use super::auth::require_superadmin;
 use crate::error::GatewayError;
 use crate::logging::types::{REQ_TYPE_PROVIDER_CACHE_DELETE, REQ_TYPE_PROVIDER_CACHE_UPDATE};
 use crate::providers::openai::{Model, ModelListResponse};
@@ -55,7 +55,7 @@ pub async fn list_cached_models(
     headers: axum::http::HeaderMap,
     Query(query): Query<CacheListQuery>,
 ) -> Result<Json<CachedModelsResponse>, GatewayError> {
-    ensure_admin(&headers, &app_state).await?;
+    require_superadmin(&headers, &app_state).await?;
     let provider_filter = query.provider.as_deref();
     let cached = app_state
         .model_cache
@@ -86,7 +86,7 @@ pub async fn update_provider_cache(
     Json(payload): Json<CacheUpdatePayload>,
 ) -> Result<Response, GatewayError> {
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let start_time = chrono::Utc::now();
         let path = format!("/models/{}/cache", provider_name);
         // 记录操作日志与请求日志
@@ -372,7 +372,7 @@ pub async fn delete_provider_cache(
     Json(payload): Json<CacheDeletePayload>,
 ) -> Result<Response, GatewayError> {
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let start_time = chrono::Utc::now();
         let path = format!("/models/{}/cache", provider_name);
         let _ = app_state

@@ -170,14 +170,15 @@ pub fn ensure_access_token(headers: &HeaderMap) -> Result<AccessTokenClaims, Gat
     validate_access_token(&tok)
 }
 
-fn role_allows_admin(role: &str) -> bool {
-    matches!(
-        UserRole::parse(role),
-        Some(UserRole::Admin | UserRole::Superadmin)
-    )
+fn role_allows_superadmin(role: &str) -> bool {
+    matches!(UserRole::parse(role), Some(UserRole::Superadmin))
 }
 
-pub async fn ensure_admin(
+pub fn require_user(headers: &HeaderMap) -> Result<AccessTokenClaims, GatewayError> {
+    ensure_access_token(headers)
+}
+
+pub async fn require_superadmin(
     headers: &HeaderMap,
     app_state: &AppState,
 ) -> Result<AdminIdentity, GatewayError> {
@@ -186,7 +187,7 @@ pub async fn ensure_admin(
             && let Some(secret) = jwt_secret_optional()
         {
             let claims = validate_access_token_with_secret(&token, &secret)?;
-            if !role_allows_admin(&claims.role) {
+            if !role_allows_superadmin(&claims.role) {
                 return Err(GatewayError::Forbidden("permission denied".into()));
             }
             return Ok(AdminIdentity::Jwt(claims));
@@ -204,6 +205,13 @@ pub async fn ensure_admin(
     }
 
     Err(GatewayError::Unauthorized("管理员身份认证失败".into()))
+}
+
+pub async fn ensure_admin(
+    headers: &HeaderMap,
+    app_state: &AppState,
+) -> Result<AdminIdentity, GatewayError> {
+    require_superadmin(headers, app_state).await
 }
 
 // 校验 Client Token（外部调用 `/v1/*` 的 API Token）：

@@ -6,7 +6,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::auth::ensure_admin;
+use super::auth::require_superadmin;
 use crate::error::GatewayError;
 use crate::logging::types::ProviderOpLog;
 use crate::server::AppState;
@@ -34,7 +34,7 @@ pub async fn upsert_model_price(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|s| s.to_string());
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         // audit + request logs on failure
         let _ = app_state
             .log_store
@@ -195,7 +195,7 @@ pub async fn list_model_prices(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|s| s.to_string());
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(
             &app_state,
@@ -256,7 +256,7 @@ pub async fn get_model_price(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|s| s.to_string());
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(
             &app_state,

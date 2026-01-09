@@ -6,7 +6,7 @@ use axum::{
 use serde::Serialize;
 use std::sync::Arc;
 
-use super::auth::ensure_admin;
+use super::auth::require_superadmin;
 use crate::error::GatewayError;
 use crate::server::AppState;
 use crate::server::request_logging::log_simple_request;
@@ -51,7 +51,7 @@ pub async fn list_users(
 ) -> Result<Json<Vec<UserOut>>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(
             &app_state,
@@ -99,7 +99,7 @@ pub async fn get_user(
 ) -> Result<Json<UserOut>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(
             &app_state,
@@ -147,7 +147,7 @@ pub async fn create_user(
 ) -> Result<(axum::http::StatusCode, Json<UserOut>), GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(
             &app_state,
@@ -190,7 +190,7 @@ pub async fn update_user(
 ) -> Result<Json<UserOut>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(
             &app_state,
@@ -253,7 +253,7 @@ pub async fn delete_user(
 ) -> Result<axum::http::StatusCode, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(
             &app_state,

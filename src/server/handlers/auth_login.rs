@@ -9,7 +9,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::auth::{AdminIdentity, SESSION_COOKIE, ensure_admin};
+use super::auth::{AdminIdentity, SESSION_COOKIE, require_superadmin};
 use crate::{
     error::{GatewayError, Result as AppResult},
     refresh_tokens::hash_refresh_token,
@@ -125,7 +125,7 @@ pub async fn create_login_code(
     headers: HeaderMap,
     Json(payload): Json<CreateCodePayload>,
 ) -> AppResult<Json<CreateCodeResponse>> {
-    let identity = ensure_admin(&headers, &app).await?;
+    let identity = require_superadmin(&headers, &app).await?;
     let session = match identity {
         AdminIdentity::TuiSession(session) => session,
         _ => {
@@ -177,7 +177,7 @@ pub async fn current_code_status(
     State(app): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> AppResult<Json<CodeStatusResponse>> {
-    let identity = ensure_admin(&headers, &app).await?;
+    let identity = require_superadmin(&headers, &app).await?;
     let session = match identity {
         AdminIdentity::TuiSession(session) => session,
         _ => {

@@ -9,7 +9,7 @@ use super::auth::{AccessTokenClaims, ensure_access_token, issue_access_token, jw
 use crate::error::{GatewayError, Result as AppResult};
 use crate::refresh_tokens::{RefreshTokenRecord, hash_refresh_token, issue_refresh_token, refresh_ttl_secs};
 use crate::server::AppState;
-use crate::users::{CreateUserPayload, UserRole, UserStatus, verify_password};
+use crate::users::{CreateUserPayload, UpdateUserPayload, UserRole, UserStatus, verify_password};
 
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
@@ -88,13 +88,6 @@ fn claims_to_user(claims: &AccessTokenClaims) -> AuthUser {
     }
 }
 
-fn role_allows_admin(role: &str) -> bool {
-    matches!(
-        UserRole::parse(role),
-        Some(UserRole::Admin | UserRole::Superadmin)
-    )
-}
-
 pub async fn login(
     State(app_state): State<Arc<AppState>>,
     Json(payload): Json<LoginRequest>,
@@ -156,9 +149,6 @@ pub async fn login(
 
 pub async fn me(headers: HeaderMap) -> AppResult<Json<MeResponse>> {
     let claims = ensure_access_token(&headers)?;
-    if !role_allows_admin(&claims.role) {
-        return Err(GatewayError::Forbidden("permission denied".into()));
-    }
     let exp = Utc
         .timestamp_opt(claims.exp, 0)
         .single()
@@ -167,6 +157,66 @@ pub async fn me(headers: HeaderMap) -> AppResult<Json<MeResponse>> {
         expires_at: exp.to_rfc3339(),
         user: claims_to_user(&claims),
     }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangePasswordRequest {
+    pub old_password: String,
+    pub new_password: String,
+}
+
+pub async fn change_password(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<ChangePasswordRequest>,
+) -> AppResult<axum::http::StatusCode> {
+    let claims = ensure_access_token(&headers)?;
+
+    let old_password = payload.old_password.trim();
+    if old_password.is_empty() {
+        return Err(GatewayError::Config("old_password 不能为空".into()));
+    }
+    let new_password = payload.new_password.trim();
+    if new_password.len() < 7 {
+        return Err(GatewayError::Config(
+            "new_password must be at least 7 characters long".into(),
+        ));
+    }
+
+    let Some(user) = app_state.user_store.get_auth_by_email(claims.email.trim()).await? else {
+        return Err(GatewayError::Unauthorized("invalid credentials".into()));
+    };
+    if user.id != claims.sub {
+        return Err(GatewayError::Unauthorized("invalid credentials".into()));
+    }
+    let Some(password_hash) = user.password_hash.as_deref() else {
+        return Err(GatewayError::Config("password not set".into()));
+    };
+    if !verify_password(old_password, password_hash)? {
+        return Err(GatewayError::Config("invalid old_password".into()));
+    }
+
+    let updated = app_state
+        .user_store
+        .update_user(
+            &user.id,
+            UpdateUserPayload {
+                first_name: None,
+                last_name: None,
+                username: None,
+                email: None,
+                phone_number: None,
+                password: Some(new_password.to_string()),
+                status: None,
+                role: None,
+            },
+        )
+        .await?;
+    if updated.is_none() {
+        return Err(GatewayError::NotFound("user not found".into()));
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Serialize)]

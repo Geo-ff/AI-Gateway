@@ -40,7 +40,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: "管理端 AccessToken（JWT），格式: Bearer <jwt>；用于访问 `/admin/*`、`/providers/*` 等管理端接口"
+      description: "AccessToken（JWT），格式: Bearer <jwt>；用于访问 `/auth/me`、`/auth/change-password`、`/me/*` 以及 superadmin-only 的 `/admin/*`、`/providers/*`"
 
   schemas:
     # 错误响应
@@ -388,6 +388,10 @@ components:
         id:
           type: string
           description: 令牌ID（非敏感标识，用于管理接口）
+        user_id:
+          type: string
+          nullable: true
+          description: 归属用户ID（为空表示存量/未绑定；仅 superadmin 可见/可管理）
         name:
           type: string
           description: 令牌名称
@@ -909,6 +913,10 @@ components:
     CreateTokenRequest:
       type: object
       properties:
+        user_id:
+          type: string
+          nullable: true
+          description: 归属用户ID（可选，仅 superadmin 使用；为空则创建为未绑定 token）
         name:
           type: string
           nullable: true
@@ -952,6 +960,107 @@ components:
             type: string
           nullable: true
           description: IP 黑名单（JSON 数组）
+
+    # 用户侧令牌（不返回 token 明文）
+    MyToken:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        allowed_models:
+          type: array
+          items:
+            type: string
+          nullable: true
+        max_tokens:
+          type: integer
+          format: int64
+          nullable: true
+        max_amount:
+          type: number
+          format: double
+          nullable: true
+        amount_spent:
+          type: number
+          format: double
+        prompt_tokens_spent:
+          type: integer
+          format: int64
+        completion_tokens_spent:
+          type: integer
+          format: int64
+        total_tokens_spent:
+          type: integer
+          format: int64
+        usage_count:
+          type: integer
+          format: int64
+        enabled:
+          type: boolean
+        expires_at:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+
+    CreateMyTokenRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+        allowed_models:
+          type: array
+          items:
+            type: string
+          nullable: true
+        max_tokens:
+          type: integer
+          format: int64
+          nullable: true
+        max_amount:
+          type: number
+          format: double
+          nullable: true
+        enabled:
+          type: boolean
+          default: true
+        expires_at:
+          type: string
+          nullable: true
+
+    CreateMyTokenResponse:
+      type: object
+      required:
+        - token
+        - token_info
+      properties:
+        token:
+          type: string
+          description: 仅创建时返回一次的 token 明文
+        token_info:
+          $ref: '#/components/schemas/MyToken'
+
+    ToggleTokenRequest:
+      type: object
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+
+    ChangePasswordRequest:
+      type: object
+      required:
+        - oldPassword
+        - newPassword
+      properties:
+        oldPassword:
+          type: string
+        newPassword:
+          type: string
 
     # 更新令牌请求
     UpdateTokenRequest:
@@ -1458,8 +1567,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-        '403':
-          description: 权限不足
+
+  /auth/change-password:
+    post:
+      summary: 修改密码（已登录）
+      description: 已登录用户输入 oldPassword/newPassword 修改自己的密码
+      operationId: authChangePassword
+      tags:
+        - Auth
+      security:
+        - AccessToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '204':
+          description: 修改成功
+        '400':
+          description: 请求参数错误/旧密码不正确
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未登录/Token 无效/过期
           content:
             application/json:
               schema:
@@ -1951,6 +2085,325 @@ paths:
                 $ref: '#/components/schemas/TokenUsageResponse'
         '401':
           description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /model-prices:
+    get:
+      summary: 获取模型价格（只读）
+      description: 公开只读的模型价格列表（可选按 provider 过滤）
+      operationId: listModelPricesPublic
+      tags:
+        - Public
+      parameters:
+        - name: provider
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Provider 名称（可选）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    provider:
+                      type: string
+                    model:
+                      type: string
+                    prompt_price_per_million:
+                      type: number
+                      format: double
+                    completion_price_per_million:
+                      type: number
+                      format: double
+                    currency:
+                      type: string
+                      nullable: true
+
+  /me/tokens:
+    get:
+      summary: 获取我的令牌列表
+      operationId: listMyTokens
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MyToken'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      summary: 创建我的令牌（返回 token 明文一次）
+      operationId: createMyToken
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMyTokenRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateMyTokenResponse'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /me/tokens/{id}:
+    get:
+      summary: 获取我的令牌详情
+      operationId: getMyToken
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MyToken'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: token 不存在或不属于当前用户
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      summary: 更新我的令牌
+      operationId: updateMyToken
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTokenRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MyToken'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: token 不存在或不属于当前用户
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: 删除我的令牌
+      operationId: deleteMyToken
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 删除成功
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: token 不存在或不属于当前用户
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /me/tokens/{id}/toggle:
+    post:
+      summary: 启用/禁用我的令牌
+      operationId: toggleMyToken
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToggleTokenRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MyToken'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: token 不存在或不属于当前用户
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /me/token/balance:
+    get:
+      summary: 获取我的余额
+      description: 返回当前用户的余额（按 token 汇总）；可选传 token_id 查询单个 token
+      operationId: getMyTokenBalance
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: token_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 可选 token_id
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: token 不存在或不属于当前用户
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /me/token/usage:
+    get:
+      summary: 获取我的用量日志
+      description: 返回当前用户的聊天用量日志（按 token 聚合）；可选传 token_id 只查询单个 token
+      operationId: getMyTokenUsage
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: token_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 可选 token_id
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+          description: 返回条数（1..200）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: token 不存在或不属于当前用户
           content:
             application/json:
               schema:

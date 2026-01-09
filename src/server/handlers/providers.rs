@@ -5,7 +5,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use super::auth::ensure_admin;
+use super::auth::require_superadmin;
 use crate::config::settings::{Provider, ProviderType};
 use crate::error::GatewayError;
 use crate::logging::types::{
@@ -55,7 +55,7 @@ pub async fn list_providers(
     State(app_state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<Vec<ProviderOut>>, GatewayError> {
-    ensure_admin(&headers, &app_state).await?;
+    require_superadmin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     let providers = app_state
@@ -100,7 +100,7 @@ pub async fn get_provider(
     State(app_state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<ProviderOut>, GatewayError> {
-    ensure_admin(&headers, &app_state).await?;
+    require_superadmin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     match app_state
@@ -164,7 +164,7 @@ pub async fn create_provider(
     headers: axum::http::HeaderMap,
     Json(payload): Json<ProviderCreatePayload>,
 ) -> Result<(axum::http::StatusCode, Json<ProviderOut>), GatewayError> {
-    ensure_admin(&headers, &app_state).await?;
+    require_superadmin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     if payload.name.trim().is_empty() {
@@ -269,7 +269,7 @@ pub async fn update_provider(
     headers: axum::http::HeaderMap,
     Json(payload): Json<ProviderUpdatePayload>,
 ) -> Result<(axum::http::StatusCode, Json<ProviderOut>), GatewayError> {
-    ensure_admin(&headers, &app_state).await?;
+    require_superadmin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     let existed = app_state
@@ -327,7 +327,7 @@ pub async fn delete_provider(
     State(app_state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
 ) -> Result<axum::http::StatusCode, GatewayError> {
-    ensure_admin(&headers, &app_state).await?;
+    require_superadmin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
     let deleted = app_state

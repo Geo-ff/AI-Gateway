@@ -47,9 +47,10 @@ impl TokenStore for DatabaseLogger {
         let ip_blacklist_s = encode_json_string_list("ip_blacklist", &payload.ip_blacklist)?;
         let conn = self.connection.lock().await;
         conn.execute(
-            "INSERT INTO client_tokens (id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, 0, 0, ?10, ?11, ?12, ?13)",
+            "INSERT INTO client_tokens (id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, 0, 0, 0, ?11, ?12, ?13, ?14)",
             (
                 &id,
+                &payload.user_id,
                 &name,
                 &token,
                 &allowed_models_s,
@@ -67,6 +68,7 @@ impl TokenStore for DatabaseLogger {
 
         Ok(ClientToken {
             id,
+            user_id: payload.user_id,
             name,
             token,
             allowed_models: payload.allowed_models,
@@ -96,32 +98,34 @@ impl TokenStore for DatabaseLogger {
     ) -> Result<Option<ClientToken>, GatewayError> {
         let conn = self.connection.lock().await;
         use rusqlite::OptionalExtension;
-        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE token = ?1")?;
+        let mut stmt = conn.prepare("SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE token = ?1")?;
         let row_opt = stmt
             .query_row([token], |row| {
                 Ok((
                     row.get::<_, Option<String>>(0)?,
                     row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, Option<i64>>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, Option<String>>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, Option<f64>>(8)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, String>(8)?,
                     row.get::<_, Option<f64>>(9)?,
-                    row.get::<_, Option<i64>>(10)?,
+                    row.get::<_, Option<f64>>(10)?,
                     row.get::<_, Option<i64>>(11)?,
                     row.get::<_, Option<i64>>(12)?,
-                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<i64>>(13)?,
                     row.get::<_, Option<String>>(14)?,
                     row.get::<_, Option<String>>(15)?,
                     row.get::<_, Option<String>>(16)?,
+                    row.get::<_, Option<String>>(17)?,
                 ))
             })
             .optional()?;
         let Some((
             id0,
+            user_id0,
             name0,
             tok,
             allowed,
@@ -229,6 +233,7 @@ impl TokenStore for DatabaseLogger {
 
         Ok(Some(ClientToken {
             id,
+            user_id: user_id0,
             name,
             token: tok,
             allowed_models,
@@ -263,32 +268,34 @@ impl TokenStore for DatabaseLogger {
     async fn get_token(&self, token: &str) -> Result<Option<ClientToken>, GatewayError> {
         let conn = self.connection.lock().await;
         use rusqlite::OptionalExtension;
-        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE token = ?1")?;
+        let mut stmt = conn.prepare("SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE token = ?1")?;
         let row = stmt
             .query_row([token], |row| {
                 Ok((
                     row.get::<_, Option<String>>(0)?,
                     row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, Option<i64>>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, Option<String>>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, Option<f64>>(8)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, String>(8)?,
                     row.get::<_, Option<f64>>(9)?,
-                    row.get::<_, Option<i64>>(10)?,
+                    row.get::<_, Option<f64>>(10)?,
                     row.get::<_, Option<i64>>(11)?,
                     row.get::<_, Option<i64>>(12)?,
-                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<i64>>(13)?,
                     row.get::<_, Option<String>>(14)?,
                     row.get::<_, Option<String>>(15)?,
                     row.get::<_, Option<String>>(16)?,
+                    row.get::<_, Option<String>>(17)?,
                 ))
             })
             .optional()?;
         if let Some((
             id0,
+            user_id,
             name0,
             token,
             allowed,
@@ -329,6 +336,7 @@ impl TokenStore for DatabaseLogger {
             }
             Ok(Some(ClientToken {
                 id,
+                user_id,
                 name,
                 token,
                 allowed_models: parse_allowed_models(allowed),
@@ -357,32 +365,34 @@ impl TokenStore for DatabaseLogger {
     async fn get_token_by_id(&self, id: &str) -> Result<Option<ClientToken>, GatewayError> {
         let conn = self.connection.lock().await;
         use rusqlite::OptionalExtension;
-        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE id = ?1")?;
+        let mut stmt = conn.prepare("SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE id = ?1")?;
         let row = stmt
             .query_row([id], |row| {
                 Ok((
                     row.get::<_, Option<String>>(0)?,
                     row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, Option<i64>>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, Option<String>>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, Option<f64>>(8)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, String>(8)?,
                     row.get::<_, Option<f64>>(9)?,
-                    row.get::<_, Option<i64>>(10)?,
+                    row.get::<_, Option<f64>>(10)?,
                     row.get::<_, Option<i64>>(11)?,
                     row.get::<_, Option<i64>>(12)?,
-                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<i64>>(13)?,
                     row.get::<_, Option<String>>(14)?,
                     row.get::<_, Option<String>>(15)?,
                     row.get::<_, Option<String>>(16)?,
+                    row.get::<_, Option<String>>(17)?,
                 ))
             })
             .optional()?;
         let Some((
             id0,
+            user_id,
             name0,
             token,
             allowed,
@@ -425,6 +435,107 @@ impl TokenStore for DatabaseLogger {
         }
         Ok(Some(ClientToken {
             id,
+            user_id,
+            name,
+            token,
+            allowed_models: parse_allowed_models(allowed),
+            max_tokens,
+            max_amount,
+            enabled: enabled_i != 0,
+            expires_at: match expires {
+                Some(s) => Some(parse_beijing_string(&s)?),
+                None => None,
+            },
+            created_at: parse_beijing_string(&created_at_s)?,
+            amount_spent: amount_spent.unwrap_or(0.0),
+            prompt_tokens_spent: prompt_tokens_spent.unwrap_or(0),
+            completion_tokens_spent: completion_tokens_spent.unwrap_or(0),
+            total_tokens_spent: total_tokens_spent.unwrap_or(0),
+            remark,
+            organization_id,
+            ip_whitelist: decode_json_string_list("ip_whitelist", ip_whitelist_s)?,
+            ip_blacklist: decode_json_string_list("ip_blacklist", ip_blacklist_s)?,
+        }))
+    }
+
+    async fn get_token_by_id_scoped(
+        &self,
+        user_id: &str,
+        id: &str,
+    ) -> Result<Option<ClientToken>, GatewayError> {
+        let conn = self.connection.lock().await;
+        use rusqlite::OptionalExtension;
+        let mut stmt = conn.prepare("SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE id = ?1 AND user_id = ?2")?;
+        let row = stmt
+            .query_row((id, user_id), |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, Option<f64>>(9)?,
+                    row.get::<_, Option<f64>>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, Option<i64>>(12)?,
+                    row.get::<_, Option<i64>>(13)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, Option<String>>(15)?,
+                    row.get::<_, Option<String>>(16)?,
+                    row.get::<_, Option<String>>(17)?,
+                ))
+            })
+            .optional()?;
+        let Some((
+            id0,
+            user_id,
+            name0,
+            token,
+            allowed,
+            max_tokens,
+            enabled_i,
+            expires,
+            created_at_s,
+            max_amount,
+            amount_spent,
+            prompt_tokens_spent,
+            completion_tokens_spent,
+            total_tokens_spent,
+            remark,
+            organization_id,
+            ip_whitelist_s,
+            ip_blacklist_s,
+        )) = row
+        else {
+            return Ok(None);
+        };
+        let needs_id_backfill = id0.as_deref().filter(|s| !s.is_empty()).is_none();
+        let needs_name_backfill = name0.as_deref().filter(|s| !s.trim().is_empty()).is_none();
+        let id = id0
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| client_token_id_for_token(&token));
+        let name = normalize_client_token_name(name0.clone(), &id);
+        if needs_id_backfill {
+            let _ = conn.execute(
+                "UPDATE client_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
+                (&token, &id),
+            );
+        }
+        if needs_name_backfill {
+            let _ = conn.execute(
+                "UPDATE client_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
+                (&token, &name),
+            );
+        }
+        Ok(Some(ClientToken {
+            id,
+            user_id,
             name,
             token,
             allowed_models: parse_allowed_models(allowed),
@@ -449,32 +560,34 @@ impl TokenStore for DatabaseLogger {
 
     async fn list_tokens(&self) -> Result<Vec<ClientToken>, GatewayError> {
         let conn = self.connection.lock().await;
-        let mut stmt = conn.prepare("SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens ORDER BY created_at DESC")?;
+        let mut stmt = conn.prepare("SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens ORDER BY created_at DESC")?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, Option<String>>(0)?,
                 row.get::<_, Option<String>>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<i64>>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, Option<f64>>(8)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, String>(8)?,
                 row.get::<_, Option<f64>>(9)?,
-                row.get::<_, Option<i64>>(10)?,
+                row.get::<_, Option<f64>>(10)?,
                 row.get::<_, Option<i64>>(11)?,
                 row.get::<_, Option<i64>>(12)?,
-                row.get::<_, Option<String>>(13)?,
+                row.get::<_, Option<i64>>(13)?,
                 row.get::<_, Option<String>>(14)?,
                 row.get::<_, Option<String>>(15)?,
                 row.get::<_, Option<String>>(16)?,
+                row.get::<_, Option<String>>(17)?,
             ))
         })?;
         let mut out = Vec::new();
         for r in rows {
             let (
                 id0,
+                user_id,
                 name0,
                 token,
                 allowed,
@@ -514,6 +627,101 @@ impl TokenStore for DatabaseLogger {
             }
             out.push(ClientToken {
                 id,
+                user_id,
+                name,
+                token,
+                allowed_models: parse_allowed_models(allowed),
+                max_tokens,
+                max_amount,
+                enabled: enabled_i != 0,
+                expires_at: match expires {
+                    Some(s) => parse_beijing_string(&s).ok(),
+                    None => None,
+                },
+                created_at: parse_beijing_string(&created_at_s).unwrap_or(Utc::now()),
+                amount_spent: amount_spent.unwrap_or(0.0),
+                prompt_tokens_spent: prompt_tokens_spent.unwrap_or(0),
+                completion_tokens_spent: completion_tokens_spent.unwrap_or(0),
+                total_tokens_spent: total_tokens_spent.unwrap_or(0),
+                remark,
+                organization_id,
+                ip_whitelist: decode_json_string_list("ip_whitelist", ip_whitelist_s)?,
+                ip_blacklist: decode_json_string_list("ip_blacklist", ip_blacklist_s)?,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn list_tokens_by_user(&self, user_id: &str) -> Result<Vec<ClientToken>, GatewayError> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare("SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE user_id = ?1 ORDER BY created_at DESC")?;
+        let rows = stmt.query_map([user_id], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, Option<f64>>(9)?,
+                row.get::<_, Option<f64>>(10)?,
+                row.get::<_, Option<i64>>(11)?,
+                row.get::<_, Option<i64>>(12)?,
+                row.get::<_, Option<i64>>(13)?,
+                row.get::<_, Option<String>>(14)?,
+                row.get::<_, Option<String>>(15)?,
+                row.get::<_, Option<String>>(16)?,
+                row.get::<_, Option<String>>(17)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (
+                id0,
+                user_id,
+                name0,
+                token,
+                allowed,
+                max_tokens,
+                enabled_i,
+                expires,
+                created_at_s,
+                max_amount,
+                amount_spent,
+                prompt_tokens_spent,
+                completion_tokens_spent,
+                total_tokens_spent,
+                remark,
+                organization_id,
+                ip_whitelist_s,
+                ip_blacklist_s,
+            ) = r?;
+            let needs_id_backfill = id0.as_deref().filter(|s| !s.is_empty()).is_none();
+            let needs_name_backfill = name0.as_deref().filter(|s| !s.trim().is_empty()).is_none();
+            let id = id0
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| client_token_id_for_token(&token));
+            let name = normalize_client_token_name(name0.clone(), &id);
+            if needs_id_backfill {
+                let _ = conn.execute(
+                    "UPDATE client_tokens SET id = ?2 WHERE token = ?1 AND (id IS NULL OR id = '')",
+                    (&token, &id),
+                );
+            }
+            if needs_name_backfill {
+                let _ = conn.execute(
+                    "UPDATE client_tokens SET name = ?2 WHERE token = ?1 AND (name IS NULL OR name = '')",
+                    (&token, &name),
+                );
+            }
+            out.push(ClientToken {
+                id,
+                user_id,
                 name,
                 token,
                 allowed_models: parse_allowed_models(allowed),

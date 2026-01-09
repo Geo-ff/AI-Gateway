@@ -16,6 +16,7 @@ use crate::{
 #[derive(Debug, Serialize)]
 pub struct ClientTokenOut {
     pub id: String,
+    pub user_id: Option<String>,
     pub name: String,
     pub token: String,
     pub allowed_models: Option<Vec<String>>,
@@ -39,6 +40,7 @@ impl From<ClientToken> for ClientTokenOut {
     fn from(t: ClientToken) -> Self {
         Self {
             id: t.id,
+            user_id: t.user_id,
             name: t.name,
             token: t.token,
             allowed_models: t.allowed_models,
@@ -63,7 +65,7 @@ impl From<ClientToken> for ClientTokenOut {
     }
 }
 
-use super::auth::ensure_admin;
+use super::auth::require_superadmin;
 use crate::server::request_logging::log_simple_request;
 use chrono::Utc;
 
@@ -174,7 +176,7 @@ pub async fn list_tokens(
 ) -> Result<Json<Vec<ClientTokenOut>>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(
             &app_state,
@@ -235,7 +237,7 @@ pub async fn get_token(
 ) -> Result<Json<ClientTokenOut>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(
             &app_state,
@@ -293,7 +295,7 @@ pub async fn create_token(
 ) -> Result<(axum::http::StatusCode, Json<ClientTokenOut>), GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(
             &app_state,
@@ -383,7 +385,7 @@ pub async fn toggle_token(
 ) -> Result<Json<serde_json::Value>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(
             &app_state,
@@ -446,7 +448,7 @@ pub async fn delete_token(
 ) -> Result<axum::http::StatusCode, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(
             &app_state,
@@ -507,7 +509,7 @@ pub async fn update_token(
 ) -> Result<Json<ClientTokenOut>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let code = e.status_code().as_u16();
         log_simple_request(
             &app_state,

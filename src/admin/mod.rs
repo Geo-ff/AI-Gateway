@@ -28,6 +28,7 @@ pub(crate) fn normalize_client_token_name(name: Option<String>, id: &str) -> Str
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientToken {
     pub id: String,
+    pub user_id: Option<String>,
     pub name: String,
     pub token: String,
     pub allowed_models: Option<Vec<String>>, // None 表示不限制
@@ -50,6 +51,8 @@ pub struct ClientToken {
 pub struct CreateTokenPayload {
     #[serde(default)]
     pub id: Option<String>,
+    #[serde(default)]
+    pub user_id: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
@@ -124,7 +127,13 @@ pub trait TokenStore: Send + Sync {
     async fn set_enabled(&self, token: &str, enabled: bool) -> Result<bool, GatewayError>;
     async fn get_token(&self, token: &str) -> Result<Option<ClientToken>, GatewayError>;
     async fn get_token_by_id(&self, id: &str) -> Result<Option<ClientToken>, GatewayError>;
+    async fn get_token_by_id_scoped(
+        &self,
+        user_id: &str,
+        id: &str,
+    ) -> Result<Option<ClientToken>, GatewayError>;
     async fn list_tokens(&self) -> Result<Vec<ClientToken>, GatewayError>;
+    async fn list_tokens_by_user(&self, user_id: &str) -> Result<Vec<ClientToken>, GatewayError>;
     async fn add_amount_spent(&self, token: &str, delta: f64) -> Result<(), GatewayError>;
     async fn add_usage_spent(
         &self,
@@ -199,26 +208,28 @@ pub(crate) fn decode_json_string_list(
 
 fn row_to_client_token(r: &tokio_postgres::Row) -> Result<ClientToken, GatewayError> {
     let id_opt: Option<String> = r.get(0);
-    let name_opt: Option<String> = r.get(1);
-    let token: String = r.get(2);
-    let allowed_s: Option<String> = r.get(3);
-    let max_tokens: Option<i64> = r.get(4);
-    let enabled: bool = r.get::<usize, Option<bool>>(5).unwrap_or(true);
-    let expires_s: Option<String> = r.get(6);
-    let created_s: String = r.get(7);
-    let max_amount: Option<f64> = r.get(8);
-    let amount_spent: f64 = r.get::<usize, Option<f64>>(9).unwrap_or(0.0);
-    let prompt_tokens_spent: i64 = r.get::<usize, Option<i64>>(10).unwrap_or(0);
-    let completion_tokens_spent: i64 = r.get::<usize, Option<i64>>(11).unwrap_or(0);
-    let total_tokens_spent: i64 = r.get::<usize, Option<i64>>(12).unwrap_or(0);
-    let remark: Option<String> = r.get(13);
-    let organization_id: Option<String> = r.get(14);
-    let ip_whitelist_s: Option<String> = r.get(15);
-    let ip_blacklist_s: Option<String> = r.get(16);
+    let user_id: Option<String> = r.get(1);
+    let name_opt: Option<String> = r.get(2);
+    let token: String = r.get(3);
+    let allowed_s: Option<String> = r.get(4);
+    let max_tokens: Option<i64> = r.get(5);
+    let enabled: bool = r.get::<usize, Option<bool>>(6).unwrap_or(true);
+    let expires_s: Option<String> = r.get(7);
+    let created_s: String = r.get(8);
+    let max_amount: Option<f64> = r.get(9);
+    let amount_spent: f64 = r.get::<usize, Option<f64>>(10).unwrap_or(0.0);
+    let prompt_tokens_spent: i64 = r.get::<usize, Option<i64>>(11).unwrap_or(0);
+    let completion_tokens_spent: i64 = r.get::<usize, Option<i64>>(12).unwrap_or(0);
+    let total_tokens_spent: i64 = r.get::<usize, Option<i64>>(13).unwrap_or(0);
+    let remark: Option<String> = r.get(14);
+    let organization_id: Option<String> = r.get(15);
+    let ip_whitelist_s: Option<String> = r.get(16);
+    let ip_blacklist_s: Option<String> = r.get(17);
     let id = id_opt.unwrap_or_else(|| client_token_id_for_token(&token));
     let name = normalize_client_token_name(name_opt, &id);
     Ok(ClientToken {
         id,
+        user_id,
         name,
         token,
         allowed_models: parse_allowed_models(allowed_s),
@@ -329,6 +340,7 @@ async fn ensure_client_tokens_table_pg(client: &tokio_postgres::Client) -> Resul
         .execute(
             r#"CREATE TABLE IF NOT EXISTS client_tokens (
                 id TEXT UNIQUE,
+                user_id TEXT,
                 name TEXT,
                 token TEXT PRIMARY KEY,
                 allowed_models TEXT,
@@ -357,6 +369,9 @@ async fn ensure_client_tokens_table_pg(client: &tokio_postgres::Client) -> Resul
         .await;
     let _ = client
         .execute("ALTER TABLE client_tokens ADD COLUMN name TEXT", &[])
+        .await;
+    let _ = client
+        .execute("ALTER TABLE client_tokens ADD COLUMN user_id TEXT", &[])
         .await;
     let _ = client
         .execute(
@@ -406,6 +421,12 @@ async fn ensure_client_tokens_table_pg(client: &tokio_postgres::Client) -> Resul
     let _ = client
         .execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS client_tokens_id_uidx ON client_tokens(id)",
+            &[],
+        )
+        .await;
+    let _ = client
+        .execute(
+            "CREATE INDEX IF NOT EXISTS client_tokens_user_id_idx ON client_tokens(user_id)",
             &[],
         )
         .await;
@@ -462,14 +483,15 @@ impl TokenStore for PgTokenStore {
         let ip_blacklist_s = encode_json_string_list("ip_blacklist", &payload.ip_blacklist)?;
         self.client
             .execute(
-                "INSERT INTO client_tokens (id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, 0, 0, $10, $11, $12, $13)",
-                &[&id, &name, &token, &allowed_models_s, &payload.max_tokens, &payload.enabled, &expires_s, &to_beijing_string(&now), &payload.max_amount, &payload.remark, &payload.organization_id, &ip_whitelist_s, &ip_blacklist_s],
+                "INSERT INTO client_tokens (id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, 0, 0, 0, $11, $12, $13, $14)",
+                &[&id, &payload.user_id, &name, &token, &allowed_models_s, &payload.max_tokens, &payload.enabled, &expires_s, &to_beijing_string(&now), &payload.max_amount, &payload.remark, &payload.organization_id, &ip_whitelist_s, &ip_blacklist_s],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
 
         Ok(ClientToken {
             id,
+            user_id: payload.user_id,
             name,
             token,
             allowed_models: payload.allowed_models,
@@ -500,7 +522,7 @@ impl TokenStore for PgTokenStore {
         // read existing
         let row = self.client
             .query_opt(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE token = $1",
+                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE token = $1",
                 &[&token],
             )
             .await
@@ -567,7 +589,7 @@ impl TokenStore for PgTokenStore {
     async fn get_token(&self, token: &str) -> Result<Option<ClientToken>, GatewayError> {
         let row = self.client
             .query_opt(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE token = $1",
+                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE token = $1",
                 &[&token],
             )
             .await
@@ -582,8 +604,27 @@ impl TokenStore for PgTokenStore {
     async fn get_token_by_id(&self, id: &str) -> Result<Option<ClientToken>, GatewayError> {
         let row = self.client
             .query_opt(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE id = $1",
+                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE id = $1",
                 &[&id],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
+        match row {
+            Some(r) => Ok(Some(row_to_client_token(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_token_by_id_scoped(
+        &self,
+        user_id: &str,
+        id: &str,
+    ) -> Result<Option<ClientToken>, GatewayError> {
+        let row = self
+            .client
+            .query_opt(
+                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE id = $1 AND user_id = $2",
+                &[&id, &user_id],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
@@ -596,8 +637,22 @@ impl TokenStore for PgTokenStore {
     async fn list_tokens(&self) -> Result<Vec<ClientToken>, GatewayError> {
         let rows = self.client
             .query(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens ORDER BY created_at DESC",
+                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens ORDER BY created_at DESC",
                 &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
+        rows.into_iter()
+            .map(|r| row_to_client_token(&r))
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    async fn list_tokens_by_user(&self, user_id: &str) -> Result<Vec<ClientToken>, GatewayError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE user_id = $1 ORDER BY created_at DESC",
+                &[&user_id],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
@@ -632,13 +687,13 @@ impl TokenStore for PgTokenStore {
         let row = self
             .client
             .query_opt(
-                "SELECT id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE id = $1",
+                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE id = $1",
                 &[&id],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         let Some(r) = row else { return Ok(None) };
-        let token: String = r.get(2);
+        let token: String = r.get(3);
         self.update_token(&token, payload).await
     }
 

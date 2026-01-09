@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use super::auth::ensure_admin;
+use super::auth::require_superadmin;
 use crate::error::GatewayError;
 use crate::server::AppState;
 use crate::server::storage_traits::TuiSessionRecord;
@@ -43,7 +43,7 @@ pub async fn list_tui_sessions(
     headers: axum::http::HeaderMap,
     Query(q): Query<SessionQuery>,
 ) -> Result<Json<Vec<TuiSessionOut>>, GatewayError> {
-    ensure_admin(&headers, &app).await?;
+    require_superadmin(&headers, &app).await?;
     let list = app
         .login_manager
         .list_tui_sessions(q.fingerprint.as_deref())
@@ -59,7 +59,7 @@ pub async fn revoke_tui_session(
     headers: axum::http::HeaderMap,
     Path(session_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, GatewayError> {
-    ensure_admin(&headers, &app).await?;
+    require_superadmin(&headers, &app).await?;
     let ok = app.login_manager.revoke_tui_session(&session_id).await?;
     Ok(Json(serde_json::json!({"revoked": ok})))
 }

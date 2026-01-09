@@ -7,7 +7,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use super::auth::ensure_admin;
+use super::auth::require_superadmin;
 use crate::error::GatewayError;
 use crate::logging::types::{
     ProviderOpLog, REQ_TYPE_PROVIDER_KEY_ADD, REQ_TYPE_PROVIDER_KEY_DELETE,
@@ -59,7 +59,7 @@ pub async fn add_provider_key(
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|s| s.to_string());
     // 鉴权失败也要记录操作日志与请求日志
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let start_time = chrono::Utc::now();
         let _ = app_state
             .log_store
@@ -155,7 +155,7 @@ pub async fn add_provider_keys_batch(
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|s| s.to_string());
 
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let start_time = chrono::Utc::now();
         let _ = app_state
             .log_store
@@ -286,7 +286,7 @@ pub async fn delete_provider_key(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|s| s.to_string());
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let start_time = chrono::Utc::now();
         let _ = app_state
             .log_store
@@ -397,7 +397,7 @@ pub async fn delete_provider_keys_batch(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|s| s.to_string());
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let start_time = chrono::Utc::now();
         let _ = app_state
             .log_store
@@ -535,7 +535,7 @@ pub async fn list_provider_keys(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|s| s.to_string());
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let start_time = chrono::Utc::now();
         let _ = app_state
             .log_store
@@ -639,7 +639,7 @@ pub async fn list_provider_keys_raw(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|s| s.to_string());
-    if let Err(e) = ensure_admin(&headers, &app_state).await {
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
         let start_time = chrono::Utc::now();
         let _ = app_state
             .log_store

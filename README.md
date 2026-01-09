@@ -57,6 +57,12 @@ RUST_LOG=info cargo run
 - **JWT AccessToken + RefreshToken**：`/auth/login` 登录发放；AccessToken 过期可用 `/auth/refresh` 无感续期（refresh rotation）
 - **TUI/Web Session**：用于 TUI challenge/verify 与 `gw_session` Cookie 会话（仍保持兼容）
 
+## RBAC v1（P3）
+
+- `superadmin`：拥有全部管理端权限（所有 `/admin/*`、`/providers/*`）。
+- 其余角色一律视为普通用户：仅可通过用户侧接口查看/管理自己的资源（`/me/*`），不可访问管理端接口（403）。
+- ClientToken 引入资源归属：`client_tokens.user_id` 为空视为存量/未绑定 token，仅 `superadmin` 可见/可管理；用户侧创建的 token 会自动绑定当前用户。
+
 ## 管理端 JWT 生命周期（P2）
 
 - 登录：`POST /auth/login` 返回 `accessToken + refreshToken`（refresh token 服务端仅存储 hash）
@@ -78,4 +84,3 @@ cargo check
 ## API 规范
 
 接口与请求/响应以 `openapi.yaml` 为准（含 `/auth/login`、`/auth/register`、`/auth/refresh`、`/auth/logout` 等）。
-

@@ -19,6 +19,9 @@ mod auth_tui;
 mod auth_tui_admin;
 mod cache;
 mod chat;
+mod me_token_info;
+mod me_tokens;
+mod model_prices;
 mod models;
 mod provider_keys;
 mod providers;
@@ -50,6 +53,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/auth/login", post(auth_jwt::login))
         .route("/auth/refresh", post(auth_jwt::refresh))
         .route("/auth/me", get(auth_jwt::me))
+        .route("/auth/change-password", post(auth_jwt::change_password))
         .route("/auth/code/redeem", post(auth_login::redeem_code))
         .route("/auth/session", get(auth_login::get_session))
         .route("/auth/logout", post(auth_login::logout))
@@ -137,6 +141,20 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/admin/logs/operations",
             get(admin_logs::list_operation_logs),
         )
+        .route("/model-prices", get(model_prices::list_model_prices))
+        .route(
+            "/me/tokens",
+            get(me_tokens::list_my_tokens).post(me_tokens::create_my_token),
+        )
+        .route(
+            "/me/tokens/{id}",
+            get(me_tokens::get_my_token)
+                .put(me_tokens::update_my_token)
+                .delete(me_tokens::delete_my_token),
+        )
+        .route("/me/tokens/{id}/toggle", post(me_tokens::toggle_my_token))
+        .route("/me/token/balance", get(me_token_info::my_token_balance))
+        .route("/me/token/usage", get(me_token_info::my_token_usage))
         .route("/v1/token/balance", get(token_info::token_balance))
         .route("/v1/token/usage", get(token_info::token_usage))
 }

@@ -8,7 +8,7 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use super::auth::{AdminIdentity, ensure_admin};
+use super::auth::{AdminIdentity, require_superadmin};
 use crate::error::GatewayError;
 use crate::logging::types::RequestLog;
 use crate::server::AppState;
@@ -173,7 +173,7 @@ pub async fn list_request_logs(
     headers: HeaderMap,
     Query(query): Query<LogsQuery>,
 ) -> Result<Json<RequestLogsResponse>, GatewayError> {
-    let identity = ensure_admin(&headers, &app_state).await?;
+    let identity = require_superadmin(&headers, &app_state).await?;
     let limit = query
         .limit
         .unwrap_or(DEFAULT_LOG_LIMIT)
@@ -260,7 +260,7 @@ pub async fn list_chat_completion_logs(
     headers: HeaderMap,
     Query(query): Query<ChatCompletionsQuery>,
 ) -> Result<Json<RequestLogsResponse>, GatewayError> {
-    let identity = ensure_admin(&headers, &app_state).await?;
+    let identity = require_superadmin(&headers, &app_state).await?;
     let limit = query
         .limit
         .unwrap_or(DEFAULT_LOG_LIMIT)
@@ -375,7 +375,7 @@ pub async fn list_operation_logs(
     headers: HeaderMap,
     Query(query): Query<OpsQuery>,
 ) -> Result<Json<OperationLogsResponse>, GatewayError> {
-    let identity = ensure_admin(&headers, &app_state).await?;
+    let identity = require_superadmin(&headers, &app_state).await?;
     let limit = query
         .limit
         .unwrap_or(DEFAULT_LOG_LIMIT)

@@ -7,7 +7,7 @@ use axum::{
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
-use super::auth::ensure_admin;
+use super::auth::require_superadmin;
 use crate::error::GatewayError;
 use crate::server::AppState;
 use crate::server::login::LoginManager;
@@ -38,7 +38,7 @@ pub async fn list_keys(
     State(app): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<Vec<AdminKeyOut>>, GatewayError> {
-    ensure_admin(&headers, &app).await?;
+    require_superadmin(&headers, &app).await?;
     let keys = app.login_manager.list_admin_keys().await?;
     let out = keys
         .into_iter()
@@ -58,7 +58,7 @@ pub async fn add_key(
     headers: axum::http::HeaderMap,
     Json(payload): Json<AddKeyPayload>,
 ) -> Result<Json<AdminKeyOut>, GatewayError> {
-    ensure_admin(&headers, &app).await?;
+    require_superadmin(&headers, &app).await?;
     let raw = B64_STANDARD
         .decode(payload.public_key_b64.as_bytes())
         .map_err(|_| GatewayError::Config("public_key_b64 无法解码".into()))?;
@@ -95,7 +95,7 @@ pub async fn delete_key(
     headers: axum::http::HeaderMap,
     Path(fingerprint): Path<String>,
 ) -> Result<Json<serde_json::Value>, GatewayError> {
-    ensure_admin(&headers, &app).await?;
+    require_superadmin(&headers, &app).await?;
     // 安全保护：禁止删除最后一把启用中的管理员密钥
     let keys = app.login_manager.list_admin_keys().await?;
     let enabled_count = keys.iter().filter(|k| k.enabled).count();

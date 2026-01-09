@@ -70,6 +70,7 @@ fn ensure_client_tokens_table_sqlite(conn: &Connection) -> Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS client_tokens (
             id TEXT,
+            user_id TEXT,
             name TEXT,
             token TEXT PRIMARY KEY,
             allowed_models TEXT,
@@ -109,6 +110,7 @@ fn ensure_client_tokens_table_sqlite(conn: &Connection) -> Result<()> {
         [],
     );
     let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN id TEXT", []);
+    let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN user_id TEXT", []);
     let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN name TEXT", []);
     let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN remark TEXT", []);
     let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN organization_id TEXT", []);
@@ -116,6 +118,10 @@ fn ensure_client_tokens_table_sqlite(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN ip_blacklist TEXT", []);
     let _ = conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS client_tokens_id_uidx ON client_tokens(id)",
+        [],
+    );
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS client_tokens_user_id_idx ON client_tokens(user_id)",
         [],
     );
 
