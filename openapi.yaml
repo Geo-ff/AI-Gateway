@@ -22,7 +22,7 @@ components:
       type: apiKey
       in: header
       name: Authorization
-      description: Client Token 认证（格式: Bearer <token>），用于访问 `/v1/*`
+      description: "Client Token 认证（格式: Bearer <token>），用于访问 `/v1/*`"
 
     # Admin Identity：管理员登录态（当前实现为 TUI Session bearer 或 Web Session Cookie；非 JWT）
     AdminTuiSessionToken:
@@ -40,7 +40,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: 管理端 AccessToken（JWT），格式: Bearer <jwt>；用于访问 `/admin/*`、`/providers/*` 等管理端接口
+      description: "管理端 AccessToken（JWT），格式: Bearer <jwt>；用于访问 `/admin/*`、`/providers/*` 等管理端接口"
 
   schemas:
     # 错误响应
@@ -1030,7 +1030,7 @@ components:
       properties:
         model:
           type: string
-          description: 模型名称 (格式: provider/model 或 model)
+          description: "模型名称 (格式: provider/model 或 model)"
         messages:
           type: array
           items:
@@ -1662,7 +1662,7 @@ paths:
               $ref: '#/components/schemas/RedeemCodeRequest'
       responses:
         '204':
-          description: 成功（Set-Cookie: gw_session=...）
+          description: "成功（Set-Cookie: gw_session=...）"
         '400':
           description: 请求参数错误/兑换失败
           content:
