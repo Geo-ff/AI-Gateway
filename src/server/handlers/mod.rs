@@ -9,7 +9,6 @@ use crate::server::AppState;
 mod admin_logs;
 mod admin_metrics;
 mod admin_prices;
-mod client_tokens;
 mod admin_users;
 mod auth;
 mod auth_jwt;
@@ -20,6 +19,7 @@ mod auth_tui;
 mod auth_tui_admin;
 mod cache;
 mod chat;
+mod client_tokens;
 mod me_token_info;
 mod me_tokens;
 mod model_prices;
@@ -55,8 +55,14 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/auth/refresh", post(auth_jwt::refresh))
         .route("/auth/me", get(auth_jwt::me))
         .route("/auth/change-password", post(auth_jwt::change_password))
-        .route("/auth/forgot-password", post(auth_password_reset::forgot_password))
-        .route("/auth/reset-password", post(auth_password_reset::reset_password))
+        .route(
+            "/auth/forgot-password",
+            post(auth_password_reset::forgot_password),
+        )
+        .route(
+            "/auth/reset-password",
+            post(auth_password_reset::reset_password),
+        )
         .route("/auth/code/redeem", post(auth_login::redeem_code))
         .route("/auth/session", get(auth_login::get_session))
         .route("/auth/logout", post(auth_login::logout))

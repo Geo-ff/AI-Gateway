@@ -147,8 +147,8 @@ fn validate_access_token_with_secret(
     let claims_json = B64_URL_SAFE_NO_PAD
         .decode(claims_b64)
         .map_err(|_| GatewayError::Unauthorized("invalid token".into()))?;
-    let claims: AccessTokenClaims =
-        serde_json::from_slice(&claims_json).map_err(|_| GatewayError::Unauthorized("invalid token".into()))?;
+    let claims: AccessTokenClaims = serde_json::from_slice(&claims_json)
+        .map_err(|_| GatewayError::Unauthorized("invalid token".into()))?;
 
     let now = Utc::now().timestamp();
     if claims.exp <= now {

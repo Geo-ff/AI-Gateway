@@ -7,13 +7,7 @@ use crate::error::GatewayError;
 use crate::logging::database::DatabaseLogger;
 use crate::logging::time::{parse_beijing_string, to_beijing_string};
 use crate::users::{
-    CreateUserPayload,
-    UpdateUserPayload,
-    User,
-    UserAuthRecord,
-    UserRole,
-    UserStatus,
-    UserStore,
+    CreateUserPayload, UpdateUserPayload, User, UserAuthRecord, UserRole, UserStatus, UserStore,
     hash_password,
 };
 
@@ -157,7 +151,7 @@ impl UserStore for DatabaseLogger {
         let mut stmt = conn.prepare(
             "SELECT id, first_name, last_name, username, email, phone_number, status, role, created_at, updated_at FROM users WHERE id = ?1",
         )?;
-        let row = stmt.query_row([id], |row| row_to_user(row)).optional()?;
+        let row = stmt.query_row([id], row_to_user).optional()?;
         let Some(mut user) = row else {
             return Ok(None);
         };
@@ -216,7 +210,7 @@ impl UserStore for DatabaseLogger {
         let mut stmt = conn.prepare(
             "SELECT id, first_name, last_name, username, email, phone_number, status, role, created_at, updated_at FROM users WHERE id = ?1",
         )?;
-        let row = stmt.query_row([id], |row| row_to_user(row)).optional()?;
+        let row = stmt.query_row([id], row_to_user).optional()?;
         Ok(row)
     }
 
@@ -259,7 +253,7 @@ impl UserStore for DatabaseLogger {
         let mut stmt = conn.prepare(
             "SELECT id, first_name, last_name, username, email, phone_number, status, role, created_at, updated_at FROM users ORDER BY created_at DESC",
         )?;
-        let rows = stmt.query_map([], |row| row_to_user(row))?;
+        let rows = stmt.query_map([], row_to_user)?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);

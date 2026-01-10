@@ -4,7 +4,9 @@ use uuid::Uuid;
 
 use crate::error::GatewayError;
 use crate::logging::postgres_store::PgLogStore;
-use crate::users::{CreateUserPayload, UpdateUserPayload, User, UserAuthRecord, UserRole, UserStore, hash_password};
+use crate::users::{
+    CreateUserPayload, UpdateUserPayload, User, UserAuthRecord, UserRole, UserStore, hash_password,
+};
 
 fn default_username_from_email(email: &str) -> String {
     let base = email

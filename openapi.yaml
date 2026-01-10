@@ -24,7 +24,7 @@ components:
       name: Authorization
       description: "Client Token 认证（格式: Bearer <token>），用于访问 `/v1/*`"
 
-    # Admin Identity：管理员登录态（当前实现为 TUI Session bearer 或 Web Session Cookie；非 JWT）
+    # Admin Identity：管理员身份（可来自 JWT AccessToken / TUI Session bearer / Web Session Cookie）
     AdminTuiSessionToken:
       type: http
       scheme: bearer

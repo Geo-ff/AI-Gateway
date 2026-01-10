@@ -83,11 +83,7 @@ impl PasswordResetTokenStore for DatabaseLogger {
                    AND used_at IS NULL
                    AND expires_at > ?3
                  LIMIT 1",
-                rusqlite::params![
-                    user_id,
-                    to_beijing_string(&since),
-                    to_beijing_string(&now)
-                ],
+                rusqlite::params![user_id, to_beijing_string(&since), to_beijing_string(&now)],
                 |_row| Ok(1i64),
             )
             .optional()?;
@@ -129,4 +125,3 @@ impl PasswordResetTokenStore for DatabaseLogger {
         Ok(record_opt)
     }
 }
-

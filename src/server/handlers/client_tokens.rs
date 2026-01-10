@@ -273,9 +273,9 @@ pub async fn get_token(
             log_simple_request(
                 &app_state,
                 start_time,
-            "GET",
-            "/admin/tokens/{id}",
-            "client_tokens_get",
+                "GET",
+                "/admin/tokens/{id}",
+                "client_tokens_get",
                 None,
                 None,
                 provided_token.as_deref(),

@@ -142,6 +142,7 @@ pub trait TokenStore: Send + Sync {
         completion: i64,
         total: i64,
     ) -> Result<(), GatewayError>;
+    #[allow(dead_code)]
     async fn delete_token(&self, token: &str) -> Result<bool, GatewayError>;
     async fn delete_token_by_id(&self, id: &str) -> Result<bool, GatewayError>;
     async fn update_token_by_id(
@@ -324,16 +325,21 @@ async fn find_legacy_tokens_table_pg(
     Ok(None)
 }
 
-async fn ensure_client_tokens_table_pg(client: &tokio_postgres::Client) -> Result<(), GatewayError> {
-    if !table_exists_pg(client, CLIENT_TOKENS_TABLE).await? {
-        if let Some(legacy) = find_legacy_tokens_table_pg(client).await? {
-            let sql = format!(
-                "ALTER TABLE {} RENAME TO {}",
-                quote_pg_ident(&legacy),
-                CLIENT_TOKENS_TABLE
-            );
-            let _ = client.execute(&sql, &[]).await;
-        }
+async fn ensure_client_tokens_table_pg(
+    client: &tokio_postgres::Client,
+) -> Result<(), GatewayError> {
+    let legacy = if !table_exists_pg(client, CLIENT_TOKENS_TABLE).await? {
+        find_legacy_tokens_table_pg(client).await?
+    } else {
+        None
+    };
+    if let Some(legacy) = legacy {
+        let sql = format!(
+            "ALTER TABLE {} RENAME TO {}",
+            quote_pg_ident(&legacy),
+            CLIENT_TOKENS_TABLE
+        );
+        let _ = client.execute(&sql, &[]).await;
     }
 
     client
@@ -413,10 +419,16 @@ async fn ensure_client_tokens_table_pg(client: &tokio_postgres::Client) -> Resul
         )
         .await;
     let _ = client
-        .execute("ALTER TABLE client_tokens ADD COLUMN ip_whitelist TEXT", &[])
+        .execute(
+            "ALTER TABLE client_tokens ADD COLUMN ip_whitelist TEXT",
+            &[],
+        )
         .await;
     let _ = client
-        .execute("ALTER TABLE client_tokens ADD COLUMN ip_blacklist TEXT", &[])
+        .execute(
+            "ALTER TABLE client_tokens ADD COLUMN ip_blacklist TEXT",
+            &[],
+        )
         .await;
     let _ = client
         .execute(

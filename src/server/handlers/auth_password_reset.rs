@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::error::{GatewayError, Result as AppResult};
 use crate::password_reset_tokens::{
-    hash_password_reset_token, issue_password_reset_token, PasswordResetTokenRecord,
+    PasswordResetTokenRecord, hash_password_reset_token, issue_password_reset_token,
 };
 use crate::server::AppState;
 use crate::users::UpdateUserPayload;
@@ -26,7 +26,10 @@ pub struct ResetPasswordRequest {
 }
 
 fn env_non_empty(name: &'static str) -> Option<String> {
-    std::env::var(name).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    std::env::var(name)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn reset_password_ttl_secs() -> i64 {

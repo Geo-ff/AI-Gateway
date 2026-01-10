@@ -35,8 +35,8 @@ pub trait PasswordResetTokenStore: Send + Sync {
 }
 
 pub fn issue_password_reset_token() -> String {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64_URL_SAFE_NO_PAD;
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64_URL_SAFE_NO_PAD;
     use rand::Rng;
 
     let mut bytes = [0u8; 32];
@@ -50,4 +50,3 @@ pub fn hash_password_reset_token(token: &str) -> String {
     hasher.update(token.as_bytes());
     hex::encode(hasher.finalize())
 }
-

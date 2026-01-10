@@ -39,8 +39,9 @@ fn sqlite_table_has_columns(conn: &Connection, table: &str, required: &[&str]) -
 }
 
 fn find_legacy_tokens_table_sqlite(conn: &Connection) -> Result<Option<String>> {
-    let mut stmt =
-        conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")?;
+    let mut stmt = conn.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+    )?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     for r in rows {
         let name = r?;
@@ -48,7 +49,11 @@ fn find_legacy_tokens_table_sqlite(conn: &Connection) -> Result<Option<String>> 
             continue;
         }
         // Heuristic: locate a token table by core columns.
-        if sqlite_table_has_columns(conn, &name, &["token", "enabled", "created_at", "allowed_models"])? {
+        if sqlite_table_has_columns(
+            conn,
+            &name,
+            &["token", "enabled", "created_at", "allowed_models"],
+        )? {
             return Ok(Some(name));
         }
     }
@@ -56,15 +61,18 @@ fn find_legacy_tokens_table_sqlite(conn: &Connection) -> Result<Option<String>> 
 }
 
 fn ensure_client_tokens_table_sqlite(conn: &Connection) -> Result<()> {
-    if !sqlite_table_exists(conn, CLIENT_TOKENS_TABLE)? {
-        if let Some(legacy) = find_legacy_tokens_table_sqlite(conn)? {
-            let sql = format!(
-                "ALTER TABLE {} RENAME TO {}",
-                quote_sqlite_ident(&legacy),
-                CLIENT_TOKENS_TABLE
-            );
-            let _ = conn.execute(&sql, []);
-        }
+    let legacy = if !sqlite_table_exists(conn, CLIENT_TOKENS_TABLE)? {
+        find_legacy_tokens_table_sqlite(conn)?
+    } else {
+        None
+    };
+    if let Some(legacy) = legacy {
+        let sql = format!(
+            "ALTER TABLE {} RENAME TO {}",
+            quote_sqlite_ident(&legacy),
+            CLIENT_TOKENS_TABLE
+        );
+        let _ = conn.execute(&sql, []);
     }
 
     conn.execute(
@@ -113,7 +121,10 @@ fn ensure_client_tokens_table_sqlite(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN user_id TEXT", []);
     let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN name TEXT", []);
     let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN remark TEXT", []);
-    let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN organization_id TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE client_tokens ADD COLUMN organization_id TEXT",
+        [],
+    );
     let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN ip_whitelist TEXT", []);
     let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN ip_blacklist TEXT", []);
     let _ = conn.execute(

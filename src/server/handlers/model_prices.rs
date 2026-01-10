@@ -56,4 +56,3 @@ pub async fn list_model_prices(
     .await;
     Ok(Json(out))
 }
-

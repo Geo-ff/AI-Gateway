@@ -6,8 +6,7 @@ use crate::error::GatewayError;
 
 pub(crate) fn hash_password(password: &str) -> Result<String, GatewayError> {
     use argon2::{
-        Argon2,
-        PasswordHasher,
+        Argon2, PasswordHasher,
         password_hash::{SaltString, rand_core::OsRng},
     };
 
@@ -15,21 +14,17 @@ pub(crate) fn hash_password(password: &str) -> Result<String, GatewayError> {
     let hashed = Argon2::default()
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| {
-            GatewayError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("password hash failed: {}", e),
-            ))
+            GatewayError::Io(std::io::Error::other(format!(
+                "password hash failed: {}",
+                e
+            )))
         })?
         .to_string();
     Ok(hashed)
 }
 
 pub(crate) fn verify_password(password: &str, password_hash: &str) -> Result<bool, GatewayError> {
-    use argon2::{
-        Argon2,
-        PasswordVerifier,
-        password_hash::PasswordHash,
-    };
+    use argon2::{Argon2, PasswordVerifier, password_hash::PasswordHash};
 
     let Ok(parsed) = PasswordHash::new(password_hash) else {
         return Ok(false);

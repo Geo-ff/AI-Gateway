@@ -359,7 +359,11 @@ pub async fn update_my_token(
         return Err(ge);
     }
 
-    let Some(updated) = app_state.token_store.update_token_by_id(&id, payload).await? else {
+    let Some(updated) = app_state
+        .token_store
+        .update_token_by_id(&id, payload)
+        .await?
+    else {
         let ge = GatewayError::NotFound("token not found".into());
         let code = ge.status_code().as_u16();
         log_simple_request(

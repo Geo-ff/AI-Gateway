@@ -181,7 +181,9 @@ pub async fn current_code_status(
     let session = match identity {
         AdminIdentity::TuiSession(session) => session,
         _ => {
-            return Err(GatewayError::Forbidden("仅 TUI 会话可查询登录凭证状态".into()));
+            return Err(GatewayError::Forbidden(
+                "仅 TUI 会话可查询登录凭证状态".into(),
+            ));
         }
     };
 

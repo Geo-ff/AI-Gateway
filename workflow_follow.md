@@ -1,13 +1,15 @@
 ### 前后端对接
 
-#### 项目最新状态（2026-01-06 更新）
+#### 项目最新状态（2026-01-10 更新）
+
+✅ P0 完成清单：captok 已接入 Auth(JWT+refresh)+Users 真数据 CRUD+Keys/Token(=ClientToken) 真数据 CRUD+toggle；后端 OpenAPI/.env.example 已对齐并拆分前端/后端状态避免误判
 
 **前端模块精简：**
 - ✅ 保留模块：keys、channels、users、chats、dashboard、auth、settings
 - ❌ 删除模块：apps（已在重构中移除）
 
 #### 当前情况
-前端已补充最小请求层与 Users 模块 API 适配层（DTO↔Domain 字段映射），但 Users 页面仍在使用 mock data，Schema 定义如下：
+前端已完成 Auth（JWT+refresh 单飞重试）接入，并已将 Users/Keys(Token=ClientToken) 页面从 mock data 切换为真实接口（/admin/users*、/admin/tokens*），Schema 定义如下：
   | 模块     | Schema 文件                          | 用途             |
   |----------|--------------------------------------|------------------|
   | Keys     | /home/Geoff001/Code/Project/captok/src/features/keys/data/schema.ts     | API 密钥数据结构 |
@@ -29,11 +31,12 @@
 | 用户管理 | src/users.rs | User, CreateUserPayload, UpdateUserPayload, UserStore | 用户数据结构与 CRUD 存储抽象 |
 
 #### 当前任务（实时更新）
-1. ✅ 前端为 Users 模块增加 API 适配层（camelCase ↔ snake_case 字段映射）
-2. 🟡 前端对接用户接口：`/admin/users`（GET/POST）与 `/admin/users/{id}`（GET/PUT/DELETE）（API 层已就绪，页面仍使用 mock data，待接入）
-3. ✅ 统一时间字段格式：前端已支持解析后端北京时间字符串（`%Y-%m-%d %H:%M:%S`）为 `Date`（UTC），建议后端逐步切换 ISO-8601
-4. 认证接口仍待实现：`/auth/login`、`/auth/logout`、`/auth/me`
-5. ✅ 后端 ClientToken 已添加 `id`、`name` 字段，并将管理端令牌 CRUD 从 `{token}` 切换为 `{id}`（避免在 URL/日志中暴露敏感 token）
+1. ✅ 前端：Auth 已接入（`/auth/login`、`/auth/me`、`/auth/refresh`、`/auth/logout`；自动注入 Bearer；401 自动 refresh 单飞重试）
+2. ✅ 前端：Users 页面已接入真实接口并完成 CRUD（`/admin/users`、`/admin/users/{id}`；不再使用 mock）
+3. ✅ 前端：Keys/Token 页面已接入真实接口并完成 CRUD+toggle（`/admin/tokens`、`/admin/tokens/{id}`、`/admin/tokens/{id}/toggle`；不再使用 mock）
+4. ✅ 后端：Auth/Users/Tokens 端点已实现且错误结构/状态码统一（401/403；`{code,message}`），OpenAPI 已对齐
+5. ✅ 配置提示：gateway_zero `.env.example` 已补齐 `GW_JWT_SECRET`/`GATEWAY_BOOTSTRAP_CODE` 等；captok `.env.example` 已补齐 `VITE_API_BASE_URL`
+
 #### 任务完成情况（实时更新）
 1. ✅ 后端数据模型的定义和分布已指出
 2. ✅ api规范文件已完成，路径：/home/Geoff001/Code/Project/Graduation_Project/gateway_zero/openapi.yaml
@@ -58,7 +61,7 @@
 |---------|---------|---------|
 | **Keys** (API 密钥) | **ClientToken** (客户端令牌) | ⚠️ 部分对应，字段差异大 |
 | **Channels** (渠道) | **Provider** (提供商) | ⚠️ 概念相近，结构不同 |
-| **Users** (用户) | **User**（用户管理模块） | 🟡 已实现，需前端做字段映射 |
+| **Users** (用户) | **User**（用户管理模块） | ✅ 后端已实现；✅ 前端已接入（字段映射 + CRUD） |
 
 ---
 
@@ -168,8 +171,8 @@
 
 | 优先级 | 调整项 | 说明 |
 |-------|-------|------|
-| 🟢 低 | 前端补齐字段映射与请求层 | 将 Users 模块从 mock data 迁移到真实接口 |
-| 🔴 高 | 实现认证授权系统 | JWT / Session |
+| ✅ 完成 | 前端补齐字段映射与请求层 | Users 模块已从 mock data 迁移到真实接口（/admin/users*） |
+| ✅ 完成 | 实现认证授权系统 | JWT + refresh token rotation + logout revocation；前端已接入并支持 401 自动续期 |
 | 🟡 中 | 角色权限控制 | RBAC 模型 |
 
 ---
@@ -191,13 +194,14 @@
 | **统计** | `/admin/metrics/usage` | GET | 使用量统计 |
 | **价格** | `/admin/model-prices` | GET/POST | 模型价格 |
 
-#### 5.2 前端需要但后端缺失的端点
+#### 5.2 前端需要的认证端点（后端已实现，前端已接入）
 
-| 模块 | 端点建议 | 方法 | 说明 |
+| 模块 | 端点 | 方法 | 状态/说明 |
 |-----|---------|-----|------|
-| **认证** | `/auth/login` | POST | 用户登录 |
-| | `/auth/logout` | POST | 用户登出 |
-| | `/auth/me` | GET | 当前用户信息 |
+| **认证** | `/auth/login` | POST | ✅ 后端已实现；✅ 前端已接入 |
+| | `/auth/logout` | POST | ✅ 后端已实现；✅ 前端已接入 |
+| | `/auth/me` | GET | ✅ 后端已实现；✅ 前端已接入 |
+| | `/auth/refresh` | POST | ✅ 后端已实现；✅ 前端已接入（401 自动刷新后重试） |
 
 ---
 
@@ -217,13 +221,13 @@
 ```
 阶段一：基础对接（优先）
 ├── 1. ✅ 前端创建 API 适配层（字段映射） 
-├── 1.1 配置 `VITE_API_BASE_URL` 并接入 Users 页面（替换 mock data）
+├── 1.1 ✅ 配置 `VITE_API_BASE_URL` 并接入 Users 页面（替换 mock data）
 ├── 2. ✅ 后端 ClientToken 添加 name、id 字段（管理端 CRUD 按 `{id}`）
-└── 3. 对接 Keys 模块基础 CRUD
+└── 3. ✅ 对接 Keys/Token（ClientToken）管理端 CRUD + toggle（/admin/tokens*）
 
 阶段二：功能完善
 ├── 4. ✅ 后端新增用户管理模块（已完成）
-├── 5. 实现认证授权系统
+├── 5. ✅ 实现认证授权系统（邮件密码找回前端还未实现界面对接）
 └── 6. 对接 Channels/Provider 模块
 
 阶段三：增强功能

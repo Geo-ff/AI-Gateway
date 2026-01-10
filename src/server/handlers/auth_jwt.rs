@@ -7,7 +7,9 @@ use uuid::Uuid;
 
 use super::auth::{AccessTokenClaims, ensure_access_token, issue_access_token, jwt_ttl_secs};
 use crate::error::{GatewayError, Result as AppResult};
-use crate::refresh_tokens::{RefreshTokenRecord, hash_refresh_token, issue_refresh_token, refresh_ttl_secs};
+use crate::refresh_tokens::{
+    RefreshTokenRecord, hash_refresh_token, issue_refresh_token, refresh_ttl_secs,
+};
 use crate::server::AppState;
 use crate::users::{CreateUserPayload, UpdateUserPayload, UserRole, UserStatus, verify_password};
 
@@ -92,7 +94,11 @@ pub async fn login(
     State(app_state): State<Arc<AppState>>,
     Json(payload): Json<LoginRequest>,
 ) -> AppResult<Json<LoginResponse>> {
-    let Some(user) = app_state.user_store.get_auth_by_email(payload.email.trim()).await? else {
+    let Some(user) = app_state
+        .user_store
+        .get_auth_by_email(payload.email.trim())
+        .await?
+    else {
         return Err(GatewayError::Unauthorized("invalid credentials".into()));
     };
     let Some(password_hash) = user.password_hash.as_deref() else {
@@ -184,7 +190,11 @@ pub async fn change_password(
         ));
     }
 
-    let Some(user) = app_state.user_store.get_auth_by_email(claims.email.trim()).await? else {
+    let Some(user) = app_state
+        .user_store
+        .get_auth_by_email(claims.email.trim())
+        .await?
+    else {
         return Err(GatewayError::Unauthorized("invalid credentials".into()));
     };
     if user.id != claims.sub {
@@ -266,7 +276,10 @@ pub async fn register(
         role: role.as_str().to_string(),
         permissions: permissions_from_env_or_default(Some(role)),
     };
-    Ok((axum::http::StatusCode::CREATED, Json(RegisterResponse { user })))
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(RegisterResponse { user }),
+    ))
 }
 
 #[derive(Debug, Deserialize)]

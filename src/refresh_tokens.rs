@@ -52,8 +52,8 @@ pub fn refresh_ttl_secs() -> i64 {
 }
 
 pub fn issue_refresh_token() -> String {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64_URL_SAFE_NO_PAD;
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64_URL_SAFE_NO_PAD;
     use rand::Rng;
 
     let mut bytes = [0u8; 32];

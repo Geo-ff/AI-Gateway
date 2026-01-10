@@ -48,7 +48,10 @@ pub async fn my_token_balance(
         }
     };
 
-    let tokens = app_state.token_store.list_tokens_by_user(&claims.sub).await?;
+    let tokens = app_state
+        .token_store
+        .list_tokens_by_user(&claims.sub)
+        .await?;
     if let Some(token_id) = q.token_id.as_deref() {
         let Some(t) = tokens.into_iter().find(|t| t.id == token_id) else {
             let ge = GatewayError::NotFound("token not found".into());
@@ -185,7 +188,10 @@ pub async fn my_token_usage(
 
     let limit = q.limit.unwrap_or(20).clamp(1, 200);
     let fetch_limit = (limit * 5).min(1000);
-    let tokens = app_state.token_store.list_tokens_by_user(&claims.sub).await?;
+    let tokens = app_state
+        .token_store
+        .list_tokens_by_user(&claims.sub)
+        .await?;
     let selected: Vec<_> = if let Some(token_id) = q.token_id.as_deref() {
         let Some(t) = tokens.iter().find(|t| t.id == token_id) else {
             let ge = GatewayError::NotFound("token not found".into());
@@ -274,4 +280,3 @@ pub async fn my_token_usage(
         "items": chat_items,
     })))
 }
-

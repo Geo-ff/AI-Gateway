@@ -34,16 +34,12 @@ pub struct LoadBalancing {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BalanceStrategy {
+    #[default]
     FirstAvailable,
     RoundRobin,
     Random,
-}
-
-impl Default for BalanceStrategy {
-    fn default() -> Self {
-        Self::FirstAvailable
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

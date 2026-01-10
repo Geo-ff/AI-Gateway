@@ -84,4 +84,3 @@ impl PasswordResetTokenStore for PgLogStore {
         }))
     }
 }
-
