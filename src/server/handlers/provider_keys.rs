@@ -131,14 +131,14 @@ pub async fn add_provider_key(
         None,
         Some(provider_name),
         provided_token.as_deref(),
-        201,
+        200,
         None,
     )
     .await;
 
     Ok((
-        axum::http::StatusCode::CREATED,
-        Json(serde_json::json!({"status":"ok"})),
+        axum::http::StatusCode::OK,
+        Json(serde_json::json!({ "success": true })),
     )
         .into_response())
 }
@@ -267,7 +267,8 @@ pub async fn add_provider_keys_batch(
     Ok((
         axum::http::StatusCode::OK,
         Json(serde_json::json!({
-            "success": success,
+            "status": "ok",
+            "added": success,
             "failed": failed,
             "results": results,
         })),
@@ -365,7 +366,7 @@ pub async fn delete_provider_key(
         .await;
         Ok((
             axum::http::StatusCode::OK,
-            Json(serde_json::json!({"status":"ok"})),
+            Json(serde_json::json!({ "success": true })),
         )
             .into_response())
     } else {
@@ -516,7 +517,8 @@ pub async fn delete_provider_keys_batch(
     Ok((
         axum::http::StatusCode::OK,
         Json(serde_json::json!({
-            "removed": removed,
+            "status": "ok",
+            "deleted": removed,
             "missing": not_found,
             "results": results,
         })),
@@ -620,10 +622,7 @@ pub async fn list_provider_keys(
 
     Ok((
         axum::http::StatusCode::OK,
-        Json(serde_json::json!({
-            "keys": filtered,
-            "total": keys.len(),
-        })),
+        Json(serde_json::json!({ "keys": filtered })),
     )
         .into_response())
 }

@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::GatewayError;
-use crate::logging::time::{parse_beijing_string, to_beijing_string};
+use crate::logging::time::{parse_beijing_string, parse_datetime_string, to_beijing_string};
 
 const CLIENT_TOKEN_ID_PREFIX: &str = "atk_";
 
@@ -490,7 +490,12 @@ impl TokenStore for PgTokenStore {
         let name = normalize_client_token_name(payload.name.clone(), &id);
         let now = Utc::now();
         let allowed_models_s = join_allowed_models(&payload.allowed_models);
-        let expires_s = payload.expires_at.clone();
+        let expires_at = payload
+            .expires_at
+            .as_deref()
+            .map(parse_datetime_string)
+            .transpose()?;
+        let expires_s = expires_at.as_ref().map(to_beijing_string);
         let ip_whitelist_s = encode_json_string_list("ip_whitelist", &payload.ip_whitelist)?;
         let ip_blacklist_s = encode_json_string_list("ip_blacklist", &payload.ip_blacklist)?;
         self.client
@@ -510,10 +515,7 @@ impl TokenStore for PgTokenStore {
             max_tokens: payload.max_tokens,
             max_amount: payload.max_amount,
             enabled: payload.enabled,
-            expires_at: match expires_s {
-                Some(s) => Some(parse_beijing_string(&s)?),
-                None => None,
-            },
+            expires_at,
             created_at: now,
             amount_spent: 0.0,
             prompt_tokens_spent: 0,
@@ -558,7 +560,10 @@ impl TokenStore for PgTokenStore {
             current.enabled = v;
         }
         if let Some(v) = payload.expires_at {
-            current.expires_at = v.and_then(|s| parse_beijing_string(&s).ok());
+            current.expires_at = match v {
+                None => None,
+                Some(s) => Some(parse_datetime_string(&s)?),
+            };
         }
         if let Some(v) = payload.remark {
             current.remark = v;

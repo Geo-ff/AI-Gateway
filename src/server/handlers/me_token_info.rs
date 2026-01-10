@@ -123,8 +123,8 @@ pub async fn my_token_balance(
                 "total_tokens_spent": t.total_tokens_spent,
                 "max_tokens": t.max_tokens,
                 "enabled": t.enabled,
-                "expires_at": t.expires_at.as_ref().map(crate::logging::time::to_beijing_string),
-                "created_at": crate::logging::time::to_beijing_string(&t.created_at),
+                "expires_at": t.expires_at.as_ref().map(crate::logging::time::to_iso8601_utc_string),
+                "created_at": crate::logging::time::to_iso8601_utc_string(&t.created_at),
             })
         })
         .collect();
@@ -236,7 +236,7 @@ pub async fn my_token_usage(
     for (token_id, l) in all_logs.into_iter() {
         chat_items.push(serde_json::json!({
             "token_id": token_id,
-            "timestamp": crate::logging::time::to_beijing_string(&l.timestamp),
+            "timestamp": crate::logging::time::to_iso8601_utc_string(&l.timestamp),
             "provider": l.provider,
             "model": l.model,
             "status_code": l.status_code,

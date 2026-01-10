@@ -39,8 +39,8 @@ impl From<User> for UserOut {
             phone_number: u.phone_number,
             status: u.status,
             role: u.role,
-            created_at: crate::logging::time::to_beijing_string(&u.created_at),
-            updated_at: crate::logging::time::to_beijing_string(&u.updated_at),
+            created_at: crate::logging::time::to_iso8601_utc_string(&u.created_at),
+            updated_at: crate::logging::time::to_iso8601_utc_string(&u.updated_at),
         }
     }
 }

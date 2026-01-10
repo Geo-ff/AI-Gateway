@@ -52,6 +52,18 @@ struct ErrorBody {
 }
 
 impl GatewayError {
+    fn user_message(&self) -> String {
+        match self {
+            GatewayError::TimeParse(s)
+            | GatewayError::Config(s)
+            | GatewayError::NotFound(s)
+            | GatewayError::RateLimited(s)
+            | GatewayError::Unauthorized(s)
+            | GatewayError::Forbidden(s) => s.clone(),
+            _ => self.to_string(),
+        }
+    }
+
     pub fn status_code(&self) -> StatusCode {
         match self {
             GatewayError::Balance(BalanceError::NoProvidersAvailable)
@@ -91,7 +103,7 @@ impl IntoResponse for GatewayError {
         let status = self.status_code();
         let body = ErrorBody {
             code: self.code(),
-            message: self.to_string(),
+            message: self.user_message(),
         };
         (status, Json(body)).into_response()
     }

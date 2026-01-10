@@ -28,7 +28,7 @@ pub struct ClientTokenOut {
     pub total_tokens_spent: i64,
     pub usage_count: i64,
     pub enabled: bool,
-    pub expires_at: Option<String>, // 以北京时间字符串返回
+    pub expires_at: Option<String>, // ISO-8601 / RFC3339 (UTC)
     pub created_at: String,
     pub remark: Option<String>,
     pub organization_id: Option<String>,
@@ -55,8 +55,8 @@ impl From<ClientToken> for ClientTokenOut {
             expires_at: t
                 .expires_at
                 .as_ref()
-                .map(crate::logging::time::to_beijing_string),
-            created_at: crate::logging::time::to_beijing_string(&t.created_at),
+                .map(crate::logging::time::to_iso8601_utc_string),
+            created_at: crate::logging::time::to_iso8601_utc_string(&t.created_at),
             remark: t.remark,
             organization_id: t.organization_id,
             ip_whitelist: t.ip_whitelist,

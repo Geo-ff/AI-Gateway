@@ -150,7 +150,7 @@ pub async fn token_usage(
             continue;
         }
         chat_items.push(serde_json::json!({
-            "timestamp": crate::logging::time::to_beijing_string(&l.timestamp),
+            "timestamp": crate::logging::time::to_iso8601_utc_string(&l.timestamp),
             "provider": l.provider,
             "model": l.model,
             "status_code": l.status_code,

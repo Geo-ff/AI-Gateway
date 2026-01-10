@@ -939,7 +939,7 @@ components:
         expires_at:
           type: string
           nullable: true
-          description: 过期时间 (北京时间字符串)
+          description: 过期时间（优先 ISO-8601 / RFC3339；兼容旧格式 YYYY-MM-DD HH:mm:ss 按北京时间解释）
         remark:
           type: string
           nullable: true
@@ -1109,7 +1109,7 @@ components:
         expires_at:
           type: string
           nullable: true
-          description: 过期时间 (北京时间字符串)
+          description: 过期时间（优先 ISO-8601 / RFC3339；兼容旧格式 YYYY-MM-DD HH:mm:ss 按北京时间解释）
         remark:
           type: string
           nullable: true
@@ -1345,7 +1345,8 @@ components:
             properties:
               timestamp:
                 type: string
-                description: 时间（北京时间字符串）
+                format: date-time
+                description: 时间（ISO-8601 / RFC3339）
               provider:
                 type: string
                 nullable: true

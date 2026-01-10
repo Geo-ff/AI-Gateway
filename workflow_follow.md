@@ -3,17 +3,18 @@
 #### 项目最新状态（2026-01-10 更新）
 
 ✅ P0 完成清单：captok 已接入 Auth(JWT+refresh)+Users 真数据 CRUD+Keys/Token(=ClientToken) 真数据 CRUD+toggle；后端 OpenAPI/.env.example 已对齐并拆分前端/后端状态避免误判
+✅ P1 完成清单：captok Channels 已对接 Provider 全量 CRUD+keys 管理（含 raw 列表用于删除）；后端 /providers* 响应已与 OpenAPI 对齐并统一错误/时间为 ISO-8601；workflow 状态已按“后端/前端/验证”拆分避免误判
 
 **前端模块精简：**
 - ✅ 保留模块：keys、channels、users、chats、dashboard、auth、settings
 - ❌ 删除模块：apps（已在重构中移除）
 
 #### 当前情况
-前端已完成 Auth（JWT+refresh 单飞重试）接入，并已将 Users/Keys(Token=ClientToken) 页面从 mock data 切换为真实接口（/admin/users*、/admin/tokens*），Schema 定义如下：
+前端已完成 Auth（JWT+refresh 单飞重试）接入，并已将 Users/Keys(Token=ClientToken)/Channels(Provider) 页面从 mock data 切换为真实接口（/admin/users*、/admin/tokens*、/providers*），Schema/DTO 定义如下：
   | 模块     | Schema 文件                          | 用途             |
   |----------|--------------------------------------|------------------|
   | Keys     | /home/Geoff001/Code/Project/captok/src/features/keys/data/schema.ts     | API 密钥数据结构 |
-  | Channels | /home/Geoff001/Code/Project/captok/src/features/channels/data/schema.ts | 渠道数据结构     |
+  | Channels | /home/Geoff001/Code/Project/captok/src/features/channels/api/providers-api.ts | Provider DTO↔Domain |
   | Users    | /home/Geoff001/Code/Project/captok/src/features/users/data/schema.ts    | 用户数据结构     |
 
 **备注：** chats 和 dashboard 模块暂无 Schema 定义，使用模拟数据。
@@ -30,12 +31,18 @@
 | 配置设置 | src/config/settings.rs | Provider, Settings, LoadBalancing, ServerConfig, LoggingConfig | 提供商配置、系统设置、负载均衡 |
 | 用户管理 | src/users.rs | User, CreateUserPayload, UpdateUserPayload, UserStore | 用户数据结构与 CRUD 存储抽象 |
 
-#### 当前任务（实时更新）
-1. ✅ 前端：Auth 已接入（`/auth/login`、`/auth/me`、`/auth/refresh`、`/auth/logout`；自动注入 Bearer；401 自动 refresh 单飞重试）
-2. ✅ 前端：Users 页面已接入真实接口并完成 CRUD（`/admin/users`、`/admin/users/{id}`；不再使用 mock）
-3. ✅ 前端：Keys/Token 页面已接入真实接口并完成 CRUD+toggle（`/admin/tokens`、`/admin/tokens/{id}`、`/admin/tokens/{id}/toggle`；不再使用 mock）
-4. ✅ 后端：Auth/Users/Tokens 端点已实现且错误结构/状态码统一（401/403；`{code,message}`），OpenAPI 已对齐
-5. ✅ 配置提示：gateway_zero `.env.example` 已补齐 `GW_JWT_SECRET`/`GATEWAY_BOOTSTRAP_CODE` 等；captok `.env.example` 已补齐 `VITE_API_BASE_URL`
+#### 当前任务（实时更新：后端实现 / 前端接入 / 已验证 拆分）
+
+| 功能 | 后端实现状态 | 前端接入状态 | 已验证状态 | 备注 |
+|------|-------------|-------------|-----------|------|
+| Auth（JWT+refresh） | ✅ | ✅ | ✅（命令） | `/auth/login` `/auth/me` `/auth/refresh` `/auth/logout`；401 refresh 单飞重试 |
+| Users（Admin Users CRUD） | ✅ | ✅ | ✅（命令） | `/admin/users*`；DTO↔Domain 映射 |
+| Keys/Tokens（ClientToken CRUD+toggle） | ✅ | ✅ | ✅（命令） | `/admin/tokens*` `/admin/tokens/{id}/toggle`；expires_at 输入兼容 RFC3339/旧北京格式；时间输出 ISO-8601 |
+| Channels（Providers CRUD+keys） | ✅ | ✅ | ✅（命令） | `/providers*` + `/providers/{provider}/keys(/raw)`；标识策略：`id = name`，不支持改名 |
+| 错误响应结构 | ✅ | ✅（handle-server-error） | ✅（命令） | `{code,message}`；401/403/400/500 统一语义 |
+| 时间字段输出 | ✅ | ✅（前端按 ISO-8601 解析） | ✅（命令） | 后端统一输出 ISO-8601 / RFC3339(UTC)；DB 仍存北京字符串 |
+
+注：✅（命令）= `gateway_zero` 通过 `cargo fmt --check`/`cargo clippy -- -D warnings`/`cargo test`；`captok` 通过 `npm run lint`/`npm run build`（仍建议手动点 UI 链路再确认交互与提示）。
 
 #### 任务完成情况（实时更新）
 1. ✅ 后端数据模型的定义和分布已指出
@@ -53,14 +60,14 @@
 ## 前后端 API 对比分析报告
 
 > 📅 更新时间：2025-12-30
-> 🔄 本次更新：前端项目精简（删除 apps 模块），核心模块 Schema 无变化
+> 🔄 本次更新：Channels 从 mock 切换为 Provider 真接口（CRUD+keys）；时间输出统一为 ISO-8601；错误结构对齐 handle-server-error
 
 ### 一、概念映射关系
 
 | 前端模块 | 后端对应 | 映射关系 |
 |---------|---------|---------|
 | **Keys** (API 密钥) | **ClientToken** (客户端令牌) | ⚠️ 部分对应，字段差异大 |
-| **Channels** (渠道) | **Provider** (提供商) | ⚠️ 概念相近，结构不同 |
+| **Channels** (渠道) | **Provider** (提供商) | ✅ 已按 Provider 配置对接（P1：CRUD+keys） |
 | **Users** (用户) | **User**（用户管理模块） | ✅ 后端已实现；✅ 前端已接入（字段映射 + CRUD） |
 
 ---
@@ -111,33 +118,34 @@
 
 | 前端字段 | 后端字段 | 状态 | 说明 |
 |---------|---------|------|------|
-| `id` | ❌ 无 | 🔴 缺失 | 后端用 `name` 作为标识 |
+| `id` | `name` | 🟢 已对齐 | 标识策略：前端 `id = name`；后端路径参数 `{provider}` 即 `name`（不支持改名） |
 | `name` | `name` | 🟢 对应 | 完全一致 |
 | `status` | ❌ 无 | 🔴 缺失 | 后端无启用/禁用状态 |
-| `organizationId` | ❌ 无 | 🔴 缺失 | 后端无组织概念 |
-| `upstreamEndpointType` | `api_type` | 🟡 转换 | 语义相近 |
-| `gatewayEndpointType` | ❌ 无 | 🔴 缺失 | 后端无网关端点类型 |
-| ❌ 无 | `base_url` | 🔵 新增 | 后端特有 |
-| ❌ 无 | `api_keys` | 🔵 新增 | 后端特有 |
-| ❌ 无 | `models_endpoint` | 🔵 新增 | 后端特有 |
+| `apiType` | `api_type` | 🟢 对应 | openai/anthropic/zhipu；未知值前端兜底为 unknown |
+| `baseUrl` | `base_url` | 🟢 对应 | 必填配置字段 |
+| `apiKeys` | `api_keys` | 🟢 对应 | `/providers*` 返回脱敏列表；原文列表用 `/providers/{provider}/keys/raw` |
+| `modelsEndpoint` | `models_endpoint` | 🟢 对应 | 可选字段 |
 
-**前端特有字段（后端缺失）：**
+**P1 已排除/留到 P2+ 的字段（后端缺失或未做）：**
 
 | 字段 | 说明 |
 |-----|------|
-| `performanceMetrics` | 性能指标（延迟、成功率、请求数） |
-| `quota` / `usedQuota` | 额度管理 |
-| `tags` | 标签分类 |
-| `providerKeys` | 密钥轮换管理 |
-| `keyRotationStrategy` | 密钥轮换策略 |
-| `isFavorite` | 收藏功能 |
+| `organizationId` | 组织维度（P2+） |
+| `collectionId` | 合集（P2+） |
+| `gatewayEndpointType` | 网关端点类型（P2+） |
+| `performanceMetrics` | 性能指标（延迟、成功率、请求数）（P2+） |
+| `quota` / `usedQuota` | 额度管理（P2+） |
+| `tags` | 标签分类（P2+） |
+| `providerKeys` | 密钥轮换/权重等高级管理（P2+；P1 仅做 keys 增删查） |
+| `keyRotationStrategy` | 密钥轮换策略（P2+） |
+| `isFavorite` | 收藏功能（P2+） |
 
 #### 3.2 调整建议
 
 | 优先级 | 调整项 | 负责方 | 说明 |
 |-------|-------|-------|------|
-| 🔴 高 | 前端适配 `base_url` | 前端 | 必要配置字段 |
-| 🔴 高 | 前端适配 `api_keys` | 前端 | 与 `providerKeys` 整合 |
+| ✅ 完成 | 前端适配 `base_url` | 前端 | 已在 Channels 页面中作为必填配置字段 |
+| ✅ 完成 | 前端适配 `api_keys` | 前端 | 已通过 `/providers/{provider}/keys(/raw)` 管理，列表/新增/删除可用 |
 | 🟡 中 | 添加 `status` 字段 | 后端 | 渠道启用/禁用控制 |
 | 🟡 中 | 性能指标统计 | 后端 | 从日志聚合计算 |
 | 🟢 低 | `tags` 标签 | 后端 | 可选功能 |
@@ -228,7 +236,7 @@
 阶段二：功能完善
 ├── 4. ✅ 后端新增用户管理模块（已完成）
 ├── 5. ✅ 实现认证授权系统（邮件密码找回前端还未实现界面对接）
-└── 6. 对接 Channels/Provider 模块
+└── 6. ✅ 对接 Channels/Provider 模块（/providers* + keys 管理）
 
 阶段三：增强功能
 ├── 7. IP 白/黑名单功能

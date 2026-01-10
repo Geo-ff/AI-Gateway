@@ -1,5 +1,5 @@
 use crate::error::GatewayError;
-use chrono::{DateTime, FixedOffset, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, SecondsFormat, TimeZone, Utc};
 
 // 北京时间时区 (UTC+8)
 pub const BEIJING_OFFSET: FixedOffset = FixedOffset::east_opt(8 * 3600).unwrap();
@@ -12,6 +12,11 @@ pub fn to_beijing_string(dt: &DateTime<Utc>) -> String {
         .to_string()
 }
 
+/// 将 UTC 时间转换为 ISO-8601 / RFC3339（UTC, `Z`）
+pub fn to_iso8601_utc_string(dt: &DateTime<Utc>) -> String {
+    dt.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
 /// 从北京时间字符串解析为 UTC 时间
 pub fn parse_beijing_string(s: &str) -> crate::error::Result<DateTime<Utc>> {
     use chrono::NaiveDateTime;
@@ -22,6 +27,16 @@ pub fn parse_beijing_string(s: &str) -> crate::error::Result<DateTime<Utc>> {
         .single()
         .ok_or_else(|| GatewayError::TimeParse("Invalid local datetime".into()))?;
     Ok(beijing_dt.with_timezone(&Utc))
+}
+
+/// 解析时间字符串为 UTC：
+/// - 优先 RFC3339 / ISO-8601（带时区偏移或 `Z`）
+/// - 回退兼容旧格式：`YYYY-MM-DD HH:mm:ss`（按北京时间解释）
+pub fn parse_datetime_string(s: &str) -> crate::error::Result<DateTime<Utc>> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    parse_beijing_string(s)
 }
 
 // tracing_subscriber 自定义时间格式：输出北京时间，与数据库一致

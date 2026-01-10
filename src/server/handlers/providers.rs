@@ -14,7 +14,7 @@ use crate::logging::types::{
 };
 use crate::server::AppState;
 use crate::server::request_logging::log_simple_request;
-use crate::server::util::{bearer_token, token_for_log};
+use crate::server::util::{bearer_token, mask_key, token_for_log};
 use chrono::Utc;
 
 #[derive(Debug, Deserialize)]
@@ -37,15 +37,17 @@ pub struct ProviderOut {
     pub name: String,
     pub api_type: ProviderType,
     pub base_url: String,
+    pub api_keys: Vec<String>,
     pub models_endpoint: Option<String>,
 }
 
-impl From<Provider> for ProviderOut {
-    fn from(p: Provider) -> Self {
+impl ProviderOut {
+    fn from_provider(p: Provider) -> Self {
         Self {
             name: p.name,
             api_type: p.api_type,
             base_url: p.base_url,
+            api_keys: p.api_keys.into_iter().map(|k| mask_key(&k)).collect(),
             models_endpoint: p.models_endpoint,
         }
     }
@@ -60,11 +62,11 @@ pub async fn list_providers(
     let provided_token = bearer_token(&headers);
     let providers = app_state
         .providers
-        .list_providers()
+        .list_providers_with_keys(&app_state.config.logging.key_log_strategy)
         .await
         .map_err(GatewayError::Db)?
         .into_iter()
-        .map(ProviderOut::from)
+        .map(ProviderOut::from_provider)
         .collect();
     // audit log
     let _ = app_state
@@ -109,7 +111,12 @@ pub async fn get_provider(
         .await
         .map_err(GatewayError::Db)?
     {
-        Some(p) => {
+        Some(mut p) => {
+            p.api_keys = app_state
+                .providers
+                .get_provider_keys(&name, &app_state.config.logging.key_log_strategy)
+                .await
+                .map_err(GatewayError::Db)?;
             let _ = app_state
                 .log_store
                 .log_provider_op(ProviderOpLog {
@@ -134,7 +141,7 @@ pub async fn get_provider(
                 None,
             )
             .await;
-            Ok(Json(ProviderOut::from(p)))
+            Ok(Json(ProviderOut::from_provider(p)))
         }
         None => {
             let token_log = token_for_log(provided_token.as_deref());
@@ -163,7 +170,7 @@ pub async fn create_provider(
     State(app_state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<ProviderCreatePayload>,
-) -> Result<(axum::http::StatusCode, Json<ProviderOut>), GatewayError> {
+) -> Result<Json<ProviderOut>, GatewayError> {
     require_superadmin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
@@ -256,11 +263,11 @@ pub async fn create_provider(
         None,
         Some(p.name.clone()),
         token_for_log,
-        201,
+        200,
         None,
     )
     .await;
-    Ok((axum::http::StatusCode::CREATED, Json(ProviderOut::from(p))))
+    Ok(Json(ProviderOut::from_provider(p)))
 }
 
 pub async fn update_provider(
@@ -268,7 +275,7 @@ pub async fn update_provider(
     State(app_state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<ProviderUpdatePayload>,
-) -> Result<(axum::http::StatusCode, Json<ProviderOut>), GatewayError> {
+) -> Result<Json<ProviderOut>, GatewayError> {
     require_superadmin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
@@ -277,7 +284,27 @@ pub async fn update_provider(
         .provider_exists(&name)
         .await
         .map_err(GatewayError::Db)?;
-    let p = Provider {
+    if !existed {
+        let token_log = token_for_log(provided_token.as_deref());
+        log_simple_request(
+            &app_state,
+            start_time,
+            "PUT",
+            &format!("/providers/{}", name),
+            REQ_TYPE_PROVIDER_UPDATE,
+            None,
+            Some(name.clone()),
+            token_log,
+            404,
+            Some("not found".into()),
+        )
+        .await;
+        return Err(GatewayError::NotFound(format!(
+            "Provider '{}' not found",
+            name
+        )));
+    }
+    let mut p = Provider {
         name: name.clone(),
         api_type: payload.api_type,
         base_url: payload.base_url,
@@ -289,11 +316,11 @@ pub async fn update_provider(
         .upsert_provider(&p)
         .await
         .map_err(GatewayError::Db)?;
-    let code = if existed {
-        axum::http::StatusCode::OK
-    } else {
-        axum::http::StatusCode::CREATED
-    };
+    p.api_keys = app_state
+        .providers
+        .get_provider_keys(&name, &app_state.config.logging.key_log_strategy)
+        .await
+        .map_err(GatewayError::Db)?;
     let _ = app_state.log_store.log_provider_op(ProviderOpLog {
         id: None,
         timestamp: start_time,
@@ -315,18 +342,18 @@ pub async fn update_provider(
         None,
         Some(p.name.clone()),
         token_log,
-        if existed { 200 } else { 201 },
+        200,
         None,
     )
     .await;
-    Ok((code, Json(ProviderOut::from(p))))
+    Ok(Json(ProviderOut::from_provider(p)))
 }
 
 pub async fn delete_provider(
     Path(name): Path<String>,
     State(app_state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
-) -> Result<axum::http::StatusCode, GatewayError> {
+) -> Result<Json<serde_json::Value>, GatewayError> {
     require_superadmin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
@@ -356,11 +383,11 @@ pub async fn delete_provider(
             None,
             Some(name),
             token_log,
-            204,
+            200,
             None,
         )
         .await;
-        Ok(axum::http::StatusCode::NO_CONTENT)
+        Ok(Json(serde_json::json!({ "success": true })))
     } else {
         let token_log = token_for_log(provided_token.as_deref());
         log_simple_request(

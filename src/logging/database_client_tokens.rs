@@ -7,7 +7,7 @@ use crate::admin::{
 };
 use crate::error::GatewayError;
 use crate::logging::database::DatabaseLogger;
-use crate::logging::time::{parse_beijing_string, to_beijing_string};
+use crate::logging::time::{parse_beijing_string, parse_datetime_string, to_beijing_string};
 
 fn join_allowed_models(v: &Option<Vec<String>>) -> Option<String> {
     v.as_ref().map(|list| list.join(","))
@@ -42,7 +42,12 @@ impl TokenStore for DatabaseLogger {
         let name = normalize_client_token_name(payload.name.clone(), &id);
         let now = Utc::now();
         let allowed_models_s = join_allowed_models(&payload.allowed_models);
-        let expires_at_s = payload.expires_at.clone();
+        let expires_at = payload
+            .expires_at
+            .as_deref()
+            .map(parse_datetime_string)
+            .transpose()?;
+        let expires_at_s = expires_at.as_ref().map(to_beijing_string);
         let ip_whitelist_s = encode_json_string_list("ip_whitelist", &payload.ip_whitelist)?;
         let ip_blacklist_s = encode_json_string_list("ip_blacklist", &payload.ip_blacklist)?;
         let conn = self.connection.lock().await;
@@ -76,7 +81,7 @@ impl TokenStore for DatabaseLogger {
             max_amount: payload.max_amount,
             enabled: payload.enabled,
             expires_at: match expires_at_s {
-                Some(s) => Some(parse_beijing_string(&s)?),
+                Some(_) => expires_at,
                 None => None,
             },
             created_at: now,
@@ -197,7 +202,10 @@ impl TokenStore for DatabaseLogger {
             enabled = v;
         }
         if let Some(v) = payload.expires_at {
-            expires_at = v;
+            expires_at = match v {
+                None => None,
+                Some(s) => Some(to_beijing_string(&parse_datetime_string(&s)?)),
+            };
         }
         if let Some(v) = payload.remark {
             remark = v;

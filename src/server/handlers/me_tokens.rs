@@ -48,8 +48,8 @@ impl From<ClientToken> for MyTokenOut {
             expires_at: t
                 .expires_at
                 .as_ref()
-                .map(crate::logging::time::to_beijing_string),
-            created_at: crate::logging::time::to_beijing_string(&t.created_at),
+                .map(crate::logging::time::to_iso8601_utc_string),
+            created_at: crate::logging::time::to_iso8601_utc_string(&t.created_at),
         }
     }
 }
