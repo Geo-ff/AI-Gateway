@@ -2,6 +2,13 @@
 
 Gateway Zero 是一个基于 Rust + Axum 的 AI API 网关：对外提供 OpenAI 兼容的 `/v1/*` 接口，并提供管理端 API（用户/Provider/Token/日志等）。
 
+## 前端路线（重要）
+
+- `gateway_zero/frontend`（内置旧 Web 前端）与 `gateway_zero/frontend_tui`（内置旧 TUI）为历史遗留/过渡形态：仅用于开发调试与兼容，后续不作为主产品入口。
+- 长期主前端为独立仓库 `captok`（`/home/Geoff001/Code/Project/captok`）。
+- 当 `captok` 与后端对接完成并覆盖所有核心功能后，将停止维护并计划弃用/移除上述两个内置前端（具体时间以里程碑为准）。
+- 迁移原则：新功能只在 `captok` 实现；旧前端仅接收关键 bug/安全修复；不再新增功能与文档默认启动步骤。
+
 ## 文档入口
 
 - 快速上手：`QUICK_START.md`
@@ -44,7 +51,7 @@ Gateway Zero 是一个基于 Rust + Axum 的 AI API 网关：对外提供 OpenAI
 RUST_LOG=info cargo run
 ```
 
-也可参考 `start.sh`（包含启动 Postgres 容器与前端的示例脚本）。
+也可参考 `start.sh`（包含启动 Postgres 容器与**旧前端**的示例脚本；仅用于开发调试，后续将随前端路线调整）。
 
 ## 认证模型（重要）
 

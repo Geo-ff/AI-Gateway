@@ -252,3 +252,4 @@
 - ✅ P2：/auth/register 增加 bootstrap code；引入 refresh token + rotation + server-side revocation，前端接入无感续期与 logout 撤销
 - ✅ P3：落地 RBAC v1（仅 superadmin 可访问 /admin/* /providers/*），ClientToken 绑定 user_id 并新增用户侧只读/自管接口（/model-prices、/me/*、/auth/change-password）
 - ✅ P4：实现 Resend 邮件找回密码（/auth/forgot-password + /auth/reset-password），reset token 一次性可过期且仅存 hash，重置后撤销 refresh tokens
+- ✅ P5：文档声明 gateway_zero 内置 frontend/frontend_tui 为过渡形态，captok 为长期主前端并规划弃用旧前端
