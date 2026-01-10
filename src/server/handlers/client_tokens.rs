@@ -667,6 +667,9 @@ mod tests {
             .await
             .unwrap();
 
+        let refresh_token_store = logger.clone();
+        let password_reset_token_store = logger.clone();
+
         let app_state = Arc::new(AppState {
             config: settings,
             log_store: logger.clone(),
@@ -675,7 +678,8 @@ mod tests {
             token_store: logger.clone(),
             login_manager: Arc::new(LoginManager::new(logger.clone())),
             user_store: logger.clone(),
-            refresh_token_store: logger,
+            refresh_token_store,
+            password_reset_token_store,
         });
 
         Harness {
