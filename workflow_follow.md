@@ -44,6 +44,57 @@
 
 注：✅（命令）= `gateway_zero` 通过 `cargo fmt --check`/`cargo clippy -- -D warnings`/`cargo test`；`captok` 通过 `npm run lint`/`npm run build`（仍建议手动点 UI 链路再确认交互与提示）。
 
+#### 接口测试记录（curl 冒烟 P0/P1）
+
+- 测试时间(UTC)：2026-01-11T14:45:36Z
+- BASE_URL：http://localhost:8080
+- git：a167e14
+- 脚本：`scripts/smoke_p0_p1.sh`
+- 完整逐用例报告（含脱敏日志+逐接口断言）：`scripts/_smoke/smoke_20260111T144536Z_120918.md`
+- 汇总：Pass=49 / Fail=0 / Total=49
+
+| 覆盖链路 | 关键断言（摘录） | 结果 |
+|---|---|---|
+| 连通性 | `GET /auth/me` 预期 `401` 且 `{code,message}` | Pass |
+| Auth（login/me/refresh/logout + rotation） | 必需字段存在（`accessToken/refreshToken/expiresAt/...`）；`expiresAt/refreshExpiresAt` 可解析；旧 refresh 二次 refresh=`401`；logout 后 refresh=`401` | Pass |
+| Admin Users CRUD | `/admin/users*` 列表/创建/读取/更新/删除全链路；时间字段 `created_at/updated_at` 可解析 | Pass |
+| Admin Tokens CRUD+toggle | `/admin/tokens*` 创建/读取/更新/删除；toggle 生效；`created_at` 可解析；不记录 token 明文 | Pass |
+| Providers CRUD + keys（含 raw） | `/providers*` CRUD；`/keys` 增删查；`/keys/raw` 结构校验（不记录 key 原文） | Pass |
+| 失败结构抽样 | `401/403/404` 各抽样 1+ 用例，均为 `{code,message}` | Pass |
+
+<details><summary>关键日志片段（脱敏）</summary>
+
+```text
+== Gateway Zero curl smoke (P0/P1) ==
+time_utc: 2026-01-11T14:45:36Z
+git_sha : a167e14
+base_url: http://localhost:8080
+email   : mahougeg…(len=19)
+
+CASE: C1 POST /auth/login -> 200
+REQ : POST /auth/login (expect 200)
+ACT : 200 => Pass
+
+CASE: C3 POST /auth/refresh -> 200 (rotation)
+REQ : POST /auth/refresh (expect 200)
+ACT : 200 => Pass
+
+CASE: D2 POST /admin/users -> 201
+REQ : POST /admin/users (expect 201)
+ACT : 201 => Pass
+
+CASE: E5 POST /admin/tokens/{id}/toggle -> 200
+REQ : POST /admin/tokens/atk_32aad85f82f2c4dc0902a3fc/toggle (expect 200)
+ACT : 200 => Pass
+
+CASE: F10 DELETE /providers/{provider} -> 200
+REQ : DELETE /providers/smoke_20260111T144536Z_120918_provider (expect 200)
+ACT : 200 => Pass
+```
+</details>
+
+✅ 生成并执行 P0/P1 curl 冒烟测试并回填结果
+
 #### 任务完成情况（实时更新）
 1. ✅ 后端数据模型的定义和分布已指出
 2. ✅ api规范文件已完成，路径：/home/Geoff001/Code/Project/Graduation_Project/gateway_zero/openapi.yaml

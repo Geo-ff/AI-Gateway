@@ -2,3 +2,12 @@
 /frontend_tui/target
 .DS_Store
 .env
+scripts/smoke_p0_p1.sh
+.gitignore
+scripts/_smoke/smoke_20260111T143645Z_117341.md
+scripts/_smoke/smoke_20260111T144422Z_119905.md
+scripts/_smoke/smoke_20260111T144536Z_120918.md
+scripts/_smoke/smoke_20260111T143645Z_117341.log
+scripts/_smoke/smoke_20260111T144422Z_119905.log
+.gitignore
+scripts/_smoke/smoke_20260111T144536Z_120918.log
