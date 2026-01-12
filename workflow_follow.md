@@ -4,6 +4,7 @@
 
 ✅ P0 完成清单：captok 已接入 Auth(JWT+refresh)+Users 真数据 CRUD+Keys/Token(=ClientToken) 真数据 CRUD+toggle；后端 OpenAPI/.env.example 已对齐并拆分前端/后端状态避免误判
 ✅ P1 完成清单：captok Channels 已对接 Provider 全量 CRUD+keys 管理（含 raw 列表用于删除）；后端 /providers* 响应已与 OpenAPI 对齐并统一错误/时间为 ISO-8601；workflow 状态已按“后端/前端/验证”拆分避免误判
+✅ 已接入 OpenAPI 契约测试 CI 并分层（fast read / slow write）
 
 **前端模块精简：**
 - ✅ 保留模块：keys、channels、users、chats、dashboard、auth、settings

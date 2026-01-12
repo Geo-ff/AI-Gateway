@@ -1,0 +1,170 @@
+name: contract-fast (read)
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gaussdb
+          POSTGRES_PASSWORD: MyPassword123@abc
+          POSTGRES_DB: postgres
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd "pg_isready -U gaussdb -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/_contract/requirements.txt
+
+      - name: Install Postgres client tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Generate CI .env (do not commit)
+        env:
+          CONTRACT_EMAIL: ${{ secrets.CONTRACT_EMAIL }}
+          CONTRACT_PASSWORD: ${{ secrets.CONTRACT_PASSWORD }}
+          GATEWAY_BOOTSTRAP_CODE: ${{ secrets.GATEWAY_BOOTSTRAP_CODE }}
+          GW_JWT_SECRET: ${{ secrets.GW_JWT_SECRET }}
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import os
+          import re
+          from pathlib import Path
+
+          def parse_env_text(text: str) -> dict[str, str]:
+              env: dict[str, str] = {}
+              for raw in text.splitlines():
+                  line = raw.rstrip("\r")
+                  if not line.strip() or line.lstrip().startswith("#"):
+                      continue
+                  m = re.match(r"^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*([=:])\\s*(.*)\\s*$", line)
+                  if not m:
+                      continue
+                  key, _sep, val = m.group(1), m.group(2), m.group(3)
+                  if val.startswith('"') and val.endswith('"') and len(val) >= 2:
+                      val = val[1:-1]
+                  env[key] = val
+              return env
+
+          defaults: dict[str, str] = {}
+          example = Path(".env.example")
+          if example.exists():
+              defaults = parse_env_text(example.read_text(encoding="utf-8"))
+
+          def pick(name: str, default_key: str) -> str:
+              return (os.getenv(name) or "").strip() or (defaults.get(default_key) or "").strip()
+
+          email = pick("CONTRACT_EMAIL", "EMAIL")
+          password = pick("CONTRACT_PASSWORD", "PASSWORD")
+          bootstrap = pick("GATEWAY_BOOTSTRAP_CODE", "GATEWAY_BOOTSTRAP_CODE")
+          jwt_secret = pick("GW_JWT_SECRET", "GW_JWT_SECRET")
+          missing = [k for k, v in {"EMAIL": email, "PASSWORD": password, "GW_JWT_SECRET": jwt_secret}.items() if not v]
+          if missing:
+              raise SystemExit(f"missing required config for CI .env: {', '.join(missing)}")
+
+          lines = [
+              "GATEWAY_BASE_URL=http://localhost:8080",
+              f"EMAIL={email}",
+              f"PASSWORD={password}",
+              f"GATEWAY_BOOTSTRAP_CODE={bootstrap}",
+              f"GW_JWT_SECRET={jwt_secret}",
+          ]
+          Path(".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Wait for Postgres readiness
+        env:
+          PGPASSWORD: MyPassword123@abc
+        run: |
+          for i in {1..60}; do
+            if pg_isready -h 127.0.0.1 -p 15432 -U gaussdb -d postgres >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Postgres not ready on 127.0.0.1:15432" >&2
+          exit 1
+
+      - name: Build backend
+        run: cargo build --locked --quiet
+
+      - name: Start backend (background)
+        run: |
+          mkdir -p scripts/_contract
+          ./target/debug/gateway > scripts/_contract/server_ci.log 2>&1 &
+          echo $! > "$RUNNER_TEMP/gateway.pid"
+
+      - name: Wait for backend readiness (/auth/me => 401/200)
+        env:
+          GATEWAY_BASE_URL: http://localhost:8080
+        run: |
+          for i in {1..90}; do
+            code="$(curl -sS -o /dev/null -w "%{http_code}" "$GATEWAY_BASE_URL/auth/me" || true)"
+            if [[ "$code" == "401" || "$code" == "200" ]]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Gateway not ready at $GATEWAY_BASE_URL (expected 401/200 from /auth/me)" >&2
+          exit 1
+
+      - name: Contract tests (read)
+        run: bash scripts/contract_p0_p1.sh
+
+      - name: Upload contract reports (redacted)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-fast-reports
+          path: |
+            scripts/_contract/contract_*.md
+            scripts/_contract/contract_*.log
+
+      - name: Cleanup backend
+        if: always()
+        run: |
+          rm -f .env
+          if [[ -f "$RUNNER_TEMP/gateway.pid" ]]; then
+            pid="$(cat "$RUNNER_TEMP/gateway.pid")"
+            kill "$pid" >/dev/null 2>&1 || true
+            for i in {1..30}; do
+              if ps -p "$pid" >/dev/null 2>&1; then
+                sleep 1
+              else
+                break
+              fi
+            done
+            kill -9 "$pid" >/dev/null 2>&1 || true
+          fi
