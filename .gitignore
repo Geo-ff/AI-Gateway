@@ -11,3 +11,11 @@ scripts/_smoke/smoke_20260111T143645Z_117341.log
 scripts/_smoke/smoke_20260111T144422Z_119905.log
 .gitignore
 scripts/_smoke/smoke_20260111T144536Z_120918.log
+scripts/_contract/.venv/
+scripts/_contract/contract_*.md
+scripts/_contract/contract_*.log
+scripts/_contract/contractw_*.md
+scripts/_contract/contractw_*.log
+scripts/_contract/server_*.log
+.hypothesis/
+scripts/_contract/__pycache__/run_contract.cpython-312.pyc

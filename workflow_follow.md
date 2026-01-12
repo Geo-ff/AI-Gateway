@@ -95,6 +95,13 @@ ACT : 200 => Pass
 
 ✅ 生成并执行 P0/P1 curl 冒烟测试并回填结果
 
+#### 接口测试记录（OpenAPI 契约 / schema-based）
+
+- 2026-01-12T02:48:32Z：基于 `openapi.yaml` 的 schema-based 契约测试（Schemathesis，GET-only 覆盖 `/auth/me` `/admin/users*` `/admin/tokens*` `/providers*` `/providers/*/keys*`）=> Fail（Fail=1：`GET /providers/{provider}/keys/raw` 返回 `404` 但 OpenAPI 未声明）；报告：`scripts/_contract/contract_20260112T024832Z_491e57.md`
+- 2026-01-12T03:18:11Z：修复 OpenAPI（补充 `GET /providers/{provider}/keys/raw` 的 `404` response）后复跑 => Pass（Fail=0）；报告：`scripts/_contract/contract_20260112T031811Z_6ba1ea.md`
+- 2026-01-12T03:50:21Z：write profile（write+cleanup + fixture 注入真实 `{id}/{provider}`，最小写入 Users/Tokens/Providers/Keys 并清理）=> Pass（Fail=0）；报告：`scripts/_contract/contractw_20260112T035021Z_423232.md`
+- 2026-01-12T03:52:53Z：write profile（补充 DELETE 清理链路的 OpenAPI validate；write_chain=17）=> Pass（Fail=0）；报告：`scripts/_contract/contractw_20260112T035253Z_fc1479.md`
+
 #### 任务完成情况（实时更新）
 1. ✅ 后端数据模型的定义和分布已指出
 2. ✅ api规范文件已完成，路径：/home/Geoff001/Code/Project/Graduation_Project/gateway_zero/openapi.yaml
