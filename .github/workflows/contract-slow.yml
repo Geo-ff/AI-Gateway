@@ -142,7 +142,8 @@ jobs:
           RUST_LOG: info
           RUST_BACKTRACE: "1"
         run: |
-          ./target/debug/gateway > scripts/_contract/server_ci.log 2>&1 &
+          nohup ./target/debug/gateway > scripts/_contract/server_ci.log 2>&1 &
+          disown || true
           echo $! > "$RUNNER_TEMP/gateway.pid"
           sleep 1
           pid="$(cat "$RUNNER_TEMP/gateway.pid")"
@@ -159,6 +160,9 @@ jobs:
         env:
           GATEWAY_BASE_URL: http://127.0.0.1:8080
         run: |
+          mkdir -p scripts/_contract
+          readiness_log="scripts/_contract/readiness_ci.log"
+          : > "$readiness_log"
           LOGIN_BODY="$(
             python3 - <<'PY'
             from __future__ import annotations
@@ -187,20 +191,37 @@ jobs:
             PY
           )"
 
+          last_me=""
+          last_login=""
           for i in {1..120}; do
+            pid="$(cat "$RUNNER_TEMP/gateway.pid" 2>/dev/null || true)"
+            if [[ -n "$pid" ]] && ! kill -0 "$pid" >/dev/null 2>&1; then
+              echo "Gateway process exited during readiness wait (pid=$pid)" >&2
+              echo "--- server log (tail) ---" >&2
+              tail -n 200 scripts/_contract/server_ci.log >&2 || true
+              exit 1
+            fi
             code_me="$(curl -sS -o /dev/null -w "%{http_code}" "$GATEWAY_BASE_URL/auth/me" || true)"
+            last_me="$code_me"
             if [[ "$code_me" == "401" || "$code_me" == "200" ]]; then
               code_login="$(curl -sS -o /dev/null -w "%{http_code}" \
                 -X POST "$GATEWAY_BASE_URL/auth/login" \
                 -H "Content-Type: application/json" \
                 --data "$LOGIN_BODY" || true)"
+              last_login="$code_login"
               if [[ "$code_login" == "200" || "$code_login" == "401" ]]; then
                 exit 0
               fi
             fi
+            printf "tick=%s me=%s login=%s\n" "$i" "$last_me" "$last_login" >>"$readiness_log"
             sleep 1
           done
           echo "Gateway not ready at $GATEWAY_BASE_URL (expected /auth/me=401/200 and /auth/login=200/401)" >&2
+          echo "last_me=$last_me last_login=$last_login" >&2
+          echo "--- listeners (ss -ltnp | grep 8080) ---" >&2
+          ss -ltnp 2>/dev/null | rg -n ":8080\\b" >&2 || true
+          echo "--- curl /auth/me (verbose) ---" >&2
+          curl -v "$GATEWAY_BASE_URL/auth/me" >&2 || true
           echo "--- server log (tail) ---" >&2
           tail -n 200 scripts/_contract/server_ci.log >&2 || true
           exit 1
@@ -230,6 +251,7 @@ jobs:
             scripts/_contract/build_ci.log
             scripts/_contract/server_ci.log
             scripts/_contract/contract_ci.log
+            scripts/_contract/readiness_ci.log
 
       - name: Fail job if readiness/tests failed
         if: always()
