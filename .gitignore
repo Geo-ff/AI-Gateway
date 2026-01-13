@@ -29,6 +29,9 @@ __pycache__/
 scripts/_biz/.venv/
 scripts/_biz/biz_*.md
 scripts/_biz/biz_*.log
+scripts/_biz/biz3_*.md
+scripts/_biz/biz3_*.log
+scripts/_biz/biz3_*.server.log
 scripts/_biz/__pycache__/
 scripts/_biz/biz2_20260113T090505Z_ed4a5c.log
 scripts/_biz/biz2_20260113T090505Z_ed4a5c.md

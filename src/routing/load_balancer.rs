@@ -1,11 +1,47 @@
 use crate::config::{BalanceStrategy, Provider};
 use rand::Rng;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+#[derive(Debug, Default)]
+pub struct LoadBalancerState {
+    provider_counter: AtomicUsize,
+    per_provider_key_counter: Mutex<HashMap<String, usize>>,
+}
+
+impl LoadBalancerState {
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn next_provider_index(&self, len: usize) -> usize {
+        if len == 0 {
+            return 0;
+        }
+        self.provider_counter.fetch_add(1, Ordering::Relaxed) % len
+    }
+
+    fn next_key_index(&self, provider_name: &str, len: usize) -> usize {
+        if len == 0 {
+            return 0;
+        }
+        let mut map = self
+            .per_provider_key_counter
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let counter = map.entry(provider_name.to_string()).or_insert(0);
+        let idx = *counter % len;
+        *counter = counter.wrapping_add(1);
+        idx
+    }
+}
 
 pub struct LoadBalancer {
     providers: Vec<Provider>,
     strategy: BalanceStrategy,
-    round_robin_counter: AtomicUsize,
+    state: Arc<LoadBalancerState>,
 }
 
 #[derive(Debug)]
@@ -31,11 +67,20 @@ pub struct SelectedProvider {
 }
 
 impl LoadBalancer {
+    #[allow(dead_code)]
     pub fn new(providers: Vec<Provider>, strategy: BalanceStrategy) -> Self {
+        Self::with_state(providers, strategy, Arc::new(LoadBalancerState::default()))
+    }
+
+    pub fn with_state(
+        providers: Vec<Provider>,
+        strategy: BalanceStrategy,
+        state: Arc<LoadBalancerState>,
+    ) -> Self {
         Self {
             providers,
             strategy,
-            round_robin_counter: AtomicUsize::new(0),
+            state,
         }
     }
 
@@ -47,8 +92,7 @@ impl LoadBalancer {
         let provider = match self.strategy {
             BalanceStrategy::FirstAvailable => &self.providers[0],
             BalanceStrategy::RoundRobin => {
-                let index =
-                    self.round_robin_counter.fetch_add(1, Ordering::Relaxed) % self.providers.len();
+                let index = self.state.next_provider_index(self.providers.len());
                 &self.providers[index]
             }
             BalanceStrategy::Random => {
@@ -74,8 +118,9 @@ impl LoadBalancer {
         match self.strategy {
             BalanceStrategy::FirstAvailable => Ok(provider.api_keys[0].clone()),
             BalanceStrategy::RoundRobin => {
-                let index =
-                    self.round_robin_counter.load(Ordering::Relaxed) % provider.api_keys.len();
+                let index = self
+                    .state
+                    .next_key_index(&provider.name, provider.api_keys.len());
                 Ok(provider.api_keys[index].clone())
             }
             BalanceStrategy::Random => {
@@ -84,5 +129,44 @@ impl LoadBalancer {
                 Ok(provider.api_keys[index].clone())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{BalanceStrategy, ProviderType};
+
+    fn provider(name: &str, keys: &[&str]) -> Provider {
+        Provider {
+            name: name.to_string(),
+            api_type: ProviderType::OpenAI,
+            base_url: "http://example.invalid".to_string(),
+            api_keys: keys.iter().map(|s| s.to_string()).collect(),
+            models_endpoint: None,
+        }
+    }
+
+    #[test]
+    fn round_robin_persists_across_instances_and_rotates_keys_per_provider() {
+        let providers = vec![provider("p0", &["k0a", "k0b"]), provider("p1", &["k1a", "k1b"])];
+        let state = Arc::new(LoadBalancerState::default());
+
+        let mut out: Vec<(String, String)> = Vec::new();
+        for _ in 0..4 {
+            let lb = LoadBalancer::with_state(providers.clone(), BalanceStrategy::RoundRobin, state.clone());
+            let s = lb.select_provider().unwrap();
+            out.push((s.provider.name, s.api_key));
+        }
+
+        assert_eq!(
+            out,
+            vec![
+                ("p0".to_string(), "k0a".to_string()),
+                ("p1".to_string(), "k1a".to_string()),
+                ("p0".to_string(), "k0b".to_string()),
+                ("p1".to_string(), "k1b".to_string()),
+            ]
+        );
     }
 }

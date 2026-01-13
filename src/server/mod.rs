@@ -17,6 +17,7 @@ use crate::logging::DatabaseLogger;
 use crate::logging::postgres_store::PgLogStore;
 use crate::password_reset_tokens::PasswordResetTokenStore;
 use crate::refresh_tokens::RefreshTokenStore;
+use crate::routing::LoadBalancerState;
 use crate::server::storage_traits::{
     AdminPublicKeyRecord, LoginStore, ModelCache, ProviderStore, RequestLogStore,
 };
@@ -44,6 +45,7 @@ type StoreTuple = (
 #[derive(Clone)]
 pub struct AppState {
     pub config: Settings,
+    pub load_balancer_state: Arc<LoadBalancerState>,
     pub log_store: Arc<dyn RequestLogStore + Send + Sync>,
     pub model_cache: Arc<dyn ModelCache + Send + Sync>,
     pub providers: Arc<dyn ProviderStore + Send + Sync>,
@@ -122,6 +124,7 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
 
     let app_state = AppState {
         config,
+        load_balancer_state: Arc::new(LoadBalancerState::default()),
         log_store: log_store_arc,
         model_cache: model_cache_arc,
         providers: provider_store_arc,

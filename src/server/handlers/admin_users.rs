@@ -381,6 +381,7 @@ mod tests {
 
         let app_state = Arc::new(AppState {
             config: settings,
+            load_balancer_state: Arc::new(crate::routing::LoadBalancerState::default()),
             log_store: logger.clone(),
             model_cache: logger.clone(),
             providers: logger.clone(),

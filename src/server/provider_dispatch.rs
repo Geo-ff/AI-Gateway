@@ -28,12 +28,19 @@ pub async fn select_provider_for_model(
                 .get_provider_keys(provider_name, &app_state.config.logging.key_log_strategy)
                 .await
                 .unwrap_or_default();
-            if let Some(api_key) = db_keys.first().cloned() {
-                let selected = SelectedProvider { provider, api_key };
-                return Ok((selected, parsed_model));
-            } else {
+            if db_keys.is_empty() {
                 return Err(GatewayError::from(BalanceError::NoApiKeysAvailable));
             }
+            // Provider pinned by model prefix: still apply key strategy for this provider.
+            let mut provider = provider;
+            provider.api_keys = db_keys;
+            let lb = LoadBalancer::with_state(
+                vec![provider],
+                app_state.config.load_balancing.strategy.clone(),
+                app_state.load_balancer_state.clone(),
+            );
+            let selected = lb.select_provider().map_err(GatewayError::from)?;
+            return Ok((selected, parsed_model));
         } else {
             // 指定供应商不存在
             return Err(GatewayError::NotFound(format!(
@@ -61,8 +68,11 @@ pub async fn select_provider(app_state: &AppState) -> Result<SelectedProvider, B
 
     // 仅保留至少一个可用密钥的供应商
     providers.retain(|p| !p.api_keys.is_empty());
-    let load_balancer =
-        LoadBalancer::new(providers, app_state.config.load_balancing.strategy.clone());
+    let load_balancer = LoadBalancer::with_state(
+        providers,
+        app_state.config.load_balancing.strategy.clone(),
+        app_state.load_balancer_state.clone(),
+    );
     let selected = load_balancer.select_provider()?;
     Ok(selected)
 }
