@@ -75,7 +75,7 @@ jobs:
                   line = raw.rstrip("\r")
                   if not line.strip() or line.lstrip().startswith("#"):
                       continue
-                  m = re.match(r"^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*([=:])\\s*(.*)\\s*$", line)
+                  m = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*([=:])\s*(.*)\s*$", line)
                   if not m:
                       continue
                   key, _sep, val = m.group(1), m.group(2), m.group(3)
