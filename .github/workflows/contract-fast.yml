@@ -31,6 +31,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare artifact dir
+        run: mkdir -p scripts/_contract
+
       - name: Setup Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
@@ -118,15 +121,18 @@ jobs:
           exit 1
 
       - name: Build backend
-        run: cargo build --locked --quiet
+        run: |
+          set -o pipefail
+          cargo build --locked 2>&1 | tee scripts/_contract/build_ci.log
 
       - name: Start backend (background)
         run: |
-          mkdir -p scripts/_contract
           ./target/debug/gateway > scripts/_contract/server_ci.log 2>&1 &
           echo $! > "$RUNNER_TEMP/gateway.pid"
 
       - name: Wait for backend readiness (/auth/me => 401/200)
+        id: wait_gateway
+        continue-on-error: true
         env:
           GATEWAY_BASE_URL: http://localhost:8080
         run: |
@@ -138,19 +144,42 @@ jobs:
             sleep 1
           done
           echo "Gateway not ready at $GATEWAY_BASE_URL (expected 401/200 from /auth/me)" >&2
+          echo "--- server log (tail) ---" >&2
+          tail -n 200 scripts/_contract/server_ci.log >&2 || true
           exit 1
 
       - name: Contract tests (read)
-        run: bash scripts/contract_p0_p1.sh
+        id: contract_tests
+        if: steps.wait_gateway.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bash scripts/contract_p0_p1.sh 2>&1 | tee scripts/_contract/contract_ci.log
 
       - name: Upload contract reports (redacted)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: contract-fast-reports
+          if-no-files-found: ignore
           path: |
             scripts/_contract/contract_*.md
             scripts/_contract/contract_*.log
+            scripts/_contract/build_ci.log
+            scripts/_contract/server_ci.log
+            scripts/_contract/contract_ci.log
+
+      - name: Fail job if readiness/tests failed
+        if: always()
+        run: |
+          if [[ "${{ steps.wait_gateway.outcome }}" != "success" ]]; then
+            echo "Gateway readiness check failed" >&2
+            exit 1
+          fi
+          if [[ "${{ steps.contract_tests.outcome }}" == "failure" ]]; then
+            echo "Contract tests failed" >&2
+            exit 1
+          fi
 
       - name: Cleanup backend
         if: always()
