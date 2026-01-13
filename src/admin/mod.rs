@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::GatewayError;
-use crate::logging::time::{parse_beijing_string, parse_datetime_string, to_beijing_string};
+use crate::logging::time::{parse_datetime_string, to_beijing_string};
 
 const CLIENT_TOKEN_ID_PREFIX: &str = "atk_";
 
@@ -208,24 +208,135 @@ pub(crate) fn decode_json_string_list(
 }
 
 fn row_to_client_token(r: &tokio_postgres::Row) -> Result<ClientToken, GatewayError> {
-    let id_opt: Option<String> = r.get(0);
-    let user_id: Option<String> = r.get(1);
-    let name_opt: Option<String> = r.get(2);
-    let token: String = r.get(3);
-    let allowed_s: Option<String> = r.get(4);
-    let max_tokens: Option<i64> = r.get(5);
-    let enabled: bool = r.get::<usize, Option<bool>>(6).unwrap_or(true);
-    let expires_s: Option<String> = r.get(7);
-    let created_s: String = r.get(8);
-    let max_amount: Option<f64> = r.get(9);
-    let amount_spent: f64 = r.get::<usize, Option<f64>>(10).unwrap_or(0.0);
-    let prompt_tokens_spent: i64 = r.get::<usize, Option<i64>>(11).unwrap_or(0);
-    let completion_tokens_spent: i64 = r.get::<usize, Option<i64>>(12).unwrap_or(0);
-    let total_tokens_spent: i64 = r.get::<usize, Option<i64>>(13).unwrap_or(0);
-    let remark: Option<String> = r.get(14);
-    let organization_id: Option<String> = r.get(15);
-    let ip_whitelist_s: Option<String> = r.get(16);
-    let ip_blacklist_s: Option<String> = r.get(17);
+    let id_opt = r
+        .try_get::<usize, Option<String>>(0)
+        .ok()
+        .flatten()
+        .or_else(|| r.try_get::<usize, String>(0).ok());
+    let user_id = r
+        .try_get::<usize, Option<String>>(1)
+        .ok()
+        .flatten()
+        .or_else(|| r.try_get::<usize, String>(1).ok());
+    let name_opt = r
+        .try_get::<usize, Option<String>>(2)
+        .ok()
+        .flatten()
+        .or_else(|| r.try_get::<usize, String>(2).ok());
+    let token: String = r.try_get(3).map_err(|e| {
+        GatewayError::Config(format!("DB decode error: client_tokens.token: {}", e))
+    })?;
+    let allowed_s = r
+        .try_get::<usize, Option<String>>(4)
+        .ok()
+        .flatten()
+        .or_else(|| r.try_get::<usize, String>(4).ok());
+    let max_tokens = r
+        .try_get::<usize, Option<i64>>(5)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            r.try_get::<usize, Option<i32>>(5)
+                .ok()
+                .flatten()
+                .map(|v| v as i64)
+        });
+    let enabled = r
+        .try_get::<usize, bool>(6)
+        .ok()
+        .or_else(|| r.try_get::<usize, Option<bool>>(6).ok().flatten())
+        .unwrap_or(true);
+    let expires_at = if let Ok(dt) = r.try_get::<usize, Option<DateTime<Utc>>>(7) {
+        dt
+    } else if let Ok(raw) = r.try_get::<usize, Option<String>>(7) {
+        raw.and_then(|s| parse_datetime_string(&s).ok())
+    } else if let Ok(raw) = r.try_get::<usize, String>(7) {
+        parse_datetime_string(&raw).ok()
+    } else {
+        None
+    };
+    let created_at = if let Ok(dt) = r.try_get::<usize, DateTime<Utc>>(8) {
+        dt
+    } else if let Ok(raw) = r.try_get::<usize, String>(8) {
+        parse_datetime_string(&raw).unwrap_or(Utc::now())
+    } else {
+        Utc::now()
+    };
+    let max_amount = r
+        .try_get::<usize, Option<f64>>(9)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            r.try_get::<usize, Option<i64>>(9)
+                .ok()
+                .flatten()
+                .map(|v| v as f64)
+        })
+        .or_else(|| {
+            r.try_get::<usize, Option<i32>>(9)
+                .ok()
+                .flatten()
+                .map(|v| v as f64)
+        });
+    let amount_spent = r
+        .try_get::<usize, Option<f64>>(10)
+        .ok()
+        .flatten()
+        .or_else(|| r.try_get::<usize, f64>(10).ok())
+        .unwrap_or(0.0);
+    let prompt_tokens_spent = r
+        .try_get::<usize, Option<i64>>(11)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            r.try_get::<usize, Option<i32>>(11)
+                .ok()
+                .flatten()
+                .map(|v| v as i64)
+        })
+        .unwrap_or(0);
+    let completion_tokens_spent = r
+        .try_get::<usize, Option<i64>>(12)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            r.try_get::<usize, Option<i32>>(12)
+                .ok()
+                .flatten()
+                .map(|v| v as i64)
+        })
+        .unwrap_or(0);
+    let total_tokens_spent = r
+        .try_get::<usize, Option<i64>>(13)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            r.try_get::<usize, Option<i32>>(13)
+                .ok()
+                .flatten()
+                .map(|v| v as i64)
+        })
+        .unwrap_or(0);
+    let remark = r
+        .try_get::<usize, Option<String>>(14)
+        .ok()
+        .flatten()
+        .or_else(|| r.try_get::<usize, String>(14).ok());
+    let organization_id = r
+        .try_get::<usize, Option<String>>(15)
+        .ok()
+        .flatten()
+        .or_else(|| r.try_get::<usize, String>(15).ok());
+    let ip_whitelist_s = r
+        .try_get::<usize, Option<String>>(16)
+        .ok()
+        .flatten()
+        .or_else(|| r.try_get::<usize, String>(16).ok());
+    let ip_blacklist_s = r
+        .try_get::<usize, Option<String>>(17)
+        .ok()
+        .flatten()
+        .or_else(|| r.try_get::<usize, String>(17).ok());
     let id = id_opt.unwrap_or_else(|| client_token_id_for_token(&token));
     let name = normalize_client_token_name(name_opt, &id);
     Ok(ClientToken {
@@ -237,8 +348,8 @@ fn row_to_client_token(r: &tokio_postgres::Row) -> Result<ClientToken, GatewayEr
         max_tokens,
         max_amount,
         enabled,
-        expires_at: expires_s.and_then(|s| parse_beijing_string(&s).ok()),
-        created_at: parse_beijing_string(&created_s).unwrap_or(Utc::now()),
+        expires_at,
+        created_at,
         amount_spent,
         prompt_tokens_spent,
         completion_tokens_spent,
@@ -316,7 +427,7 @@ async fn find_legacy_tokens_table_pg(
         .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
 
     for r in rows {
-        let name: String = r.get(0);
+        let name: String = r.try_get(0).unwrap_or_default();
         if name == CLIENT_TOKENS_TABLE {
             continue;
         }
@@ -452,7 +563,10 @@ async fn ensure_client_tokens_table_pg(
         .await
     {
         for r in rows {
-            let tok: String = r.get(0);
+            let tok: String = r.try_get(0).unwrap_or_default();
+            if tok.is_empty() {
+                continue;
+            }
             let id = client_token_id_for_token(&tok);
             let name = normalize_client_token_name(None, &id);
             let _ = client
@@ -710,7 +824,9 @@ impl TokenStore for PgTokenStore {
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         let Some(r) = row else { return Ok(None) };
-        let token: String = r.get(3);
+        let token: String = r.try_get(3).map_err(|e| {
+            GatewayError::Config(format!("DB decode error: client_tokens.token: {}", e))
+        })?;
         self.update_token(&token, payload).await
     }
 

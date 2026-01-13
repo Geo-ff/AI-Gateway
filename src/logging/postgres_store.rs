@@ -2,11 +2,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{DateTime, Utc};
-use tokio_postgres::{Client, NoTls};
+use tokio_postgres::{Client, NoTls, Row};
 
 use crate::config::settings::{KeyLogStrategy, Provider, ProviderType};
 use crate::error::GatewayError;
-use crate::logging::time::{parse_beijing_string, to_beijing_string};
+use crate::logging::time::{parse_datetime_string, to_beijing_string};
 use crate::logging::types::ProviderOpLog;
 use crate::logging::{CachedModel, RequestLog};
 use crate::providers::openai::Model;
@@ -20,6 +20,97 @@ fn pg_err<E: std::fmt::Display>(e: E) -> rusqlite::Error {
         rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
         Some(format!("{}", e)),
     )
+}
+
+fn pg_row_i64(row: &Row, idx: usize) -> Option<i64> {
+    row.try_get::<usize, i64>(idx)
+        .ok()
+        .or_else(|| row.try_get::<usize, i32>(idx).ok().map(|v| v as i64))
+}
+
+fn pg_row_i64_or(row: &Row, idx: usize, default: i64) -> i64 {
+    pg_row_i64(row, idx).unwrap_or(default)
+}
+
+fn pg_row_f64_or(row: &Row, idx: usize, default: f64) -> f64 {
+    row.try_get::<usize, f64>(idx)
+        .ok()
+        .or_else(|| {
+            row.try_get::<usize, i64>(idx)
+                .ok()
+                .map(|v| v as f64)
+                .or_else(|| row.try_get::<usize, i32>(idx).ok().map(|v| v as f64))
+        })
+        .unwrap_or(default)
+}
+
+fn pg_row_u16_or(row: &Row, idx: usize, default: u16) -> u16 {
+    pg_row_i64(row, idx)
+        .and_then(|v| u16::try_from(v).ok())
+        .unwrap_or(default)
+}
+
+fn pg_row_u32_or(row: &Row, idx: usize, default: u32) -> u32 {
+    pg_row_i64(row, idx)
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(default)
+}
+
+fn pg_row_u32_opt(row: &Row, idx: usize) -> Option<u32> {
+    if let Ok(v) = row.try_get::<usize, Option<i64>>(idx) {
+        return v.and_then(|v| u32::try_from(v).ok());
+    }
+    row.try_get::<usize, Option<i32>>(idx)
+        .ok()
+        .flatten()
+        .map(|v| v as u32)
+}
+
+fn pg_row_bool_or(row: &Row, idx: usize, default: bool) -> bool {
+    row.try_get::<usize, bool>(idx)
+        .ok()
+        .or_else(|| row.try_get::<usize, Option<bool>>(idx).ok().flatten())
+        .unwrap_or(default)
+}
+
+fn pg_row_string(row: &Row, idx: usize) -> String {
+    row.try_get::<usize, String>(idx).unwrap_or_default()
+}
+
+fn pg_row_opt_string(row: &Row, idx: usize) -> Option<String> {
+    row.try_get::<usize, Option<String>>(idx)
+        .ok()
+        .flatten()
+        .or_else(|| row.try_get::<usize, String>(idx).ok())
+}
+
+fn pg_row_datetime_or_now(row: &Row, idx: usize) -> DateTime<Utc> {
+    if let Ok(ts) = row.try_get::<usize, DateTime<Utc>>(idx) {
+        return ts;
+    }
+    if let Ok(Some(raw)) = row.try_get::<usize, Option<String>>(idx) {
+        return parse_datetime_string(&raw).unwrap_or_else(|_| Utc::now());
+    }
+    if let Ok(raw) = row.try_get::<usize, String>(idx) {
+        return parse_datetime_string(&raw).unwrap_or_else(|_| Utc::now());
+    }
+    Utc::now()
+}
+
+fn pg_row_opt_datetime(row: &Row, idx: usize) -> Option<DateTime<Utc>> {
+    if let Ok(v) = row.try_get::<usize, Option<DateTime<Utc>>>(idx) {
+        return v;
+    }
+    if let Ok(v) = row.try_get::<usize, Option<String>>(idx) {
+        return v.and_then(|raw| parse_datetime_string(&raw).ok());
+    }
+    row.try_get::<usize, String>(idx)
+        .ok()
+        .and_then(|raw| parse_datetime_string(&raw).ok())
+}
+
+fn pg_row_bytes(row: &Row, idx: usize) -> Vec<u8> {
+    row.try_get::<usize, Vec<u8>>(idx).unwrap_or_default()
 }
 
 pub struct PgPool {
@@ -339,26 +430,26 @@ impl PgLogStore {
 }
 
 impl PgLogStore {
-    fn row_to_request_log(r: tokio_postgres::Row) -> RequestLog {
+    fn row_to_request_log(r: Row) -> RequestLog {
         RequestLog {
-            id: Some(r.get::<usize, i32>(0) as i64),
-            timestamp: parse_beijing_string(&r.get::<usize, String>(1)).unwrap_or(Utc::now()),
-            method: r.get(2),
-            path: r.get(3),
-            request_type: r.get(4),
-            model: r.get(5),
-            provider: r.get(6),
-            api_key: r.get(7),
-            status_code: r.get::<usize, i32>(8) as u16,
-            response_time_ms: r.get(9),
-            prompt_tokens: r.get::<usize, Option<i32>>(10).map(|v| v as u32),
-            completion_tokens: r.get::<usize, Option<i32>>(11).map(|v| v as u32),
-            total_tokens: r.get::<usize, Option<i32>>(12).map(|v| v as u32),
-            cached_tokens: r.get::<usize, Option<i32>>(13).map(|v| v as u32),
-            reasoning_tokens: r.get::<usize, Option<i32>>(14).map(|v| v as u32),
-            error_message: r.get(15),
-            client_token: r.get(16),
-            amount_spent: r.get(17),
+            id: pg_row_i64(&r, 0),
+            timestamp: pg_row_datetime_or_now(&r, 1),
+            method: pg_row_string(&r, 2),
+            path: pg_row_string(&r, 3),
+            request_type: pg_row_string(&r, 4),
+            model: pg_row_opt_string(&r, 5),
+            provider: pg_row_opt_string(&r, 6),
+            api_key: pg_row_opt_string(&r, 7),
+            status_code: pg_row_u16_or(&r, 8, 0),
+            response_time_ms: pg_row_i64_or(&r, 9, 0),
+            prompt_tokens: pg_row_u32_opt(&r, 10),
+            completion_tokens: pg_row_u32_opt(&r, 11),
+            total_tokens: pg_row_u32_opt(&r, 12),
+            cached_tokens: pg_row_u32_opt(&r, 13),
+            reasoning_tokens: pg_row_u32_opt(&r, 14),
+            error_message: pg_row_opt_string(&r, 15),
+            client_token: pg_row_opt_string(&r, 16),
+            amount_spent: r.try_get::<usize, Option<f64>>(17).ok().flatten(),
         }
     }
 }
@@ -499,8 +590,8 @@ impl RequestLogStore for PgLogStore {
                 .query_one("SELECT COALESCE(SUM(total_tokens), 0) FROM request_logs WHERE client_token = $1", &[&token])
                 .await
                 .map_err(pg_err)?;
-            let sum: i64 = row.get(0);
-            Ok(sum as u64)
+            let sum = pg_row_i64_or(&row, 0, 0);
+            Ok(sum.max(0) as u64)
         })
     }
 
@@ -538,8 +629,8 @@ impl RequestLogStore for PgLogStore {
             Ok(rows
                 .into_iter()
                 .filter_map(|row| {
-                    let token: Option<String> = row.get(0);
-                    let count: i64 = row.get(1);
+                    let token = pg_row_opt_string(&row, 0);
+                    let count = pg_row_i64_or(&row, 1, 0);
                     token.map(|t| (t, count))
                 })
                 .collect())
@@ -557,20 +648,13 @@ impl RequestLogStore for PgLogStore {
                 .query_opt(
                     "SELECT MIN(timestamp), MAX(timestamp) FROM request_logs WHERE method = $1 AND path = $2",
                     &[&method, &path],
-                )
+            )
                 .await
                 .map_err(pg_err)?;
             if let Some(row) = row {
-                let min_ts: Option<String> = row.get(0);
-                let max_ts: Option<String> = row.get(1);
-                match (min_ts, max_ts) {
-                    (Some(min_ts), Some(max_ts)) => {
-                        let min = parse_beijing_string(&min_ts).map_err(pg_err)?;
-                        let max = parse_beijing_string(&max_ts).map_err(pg_err)?;
-                        Ok(Some((min, max)))
-                    }
-                    _ => Ok(None),
-                }
+                let min = pg_row_opt_datetime(&row, 0);
+                let max = pg_row_opt_datetime(&row, 1);
+                Ok(min.zip(max))
             } else {
                 Ok(None)
             }
@@ -619,13 +703,27 @@ impl RequestLogStore for PgLogStore {
             };
             Ok(rows
                 .into_iter()
-                .map(|row| ProviderOpLog {
-                    id: Some(row.get(0)),
-                    timestamp: parse_beijing_string(&row.get::<usize, String>(1))
-                        .unwrap_or_else(|_| chrono::Utc::now()),
-                    operation: row.get(2),
-                    provider: row.get(3),
-                    details: row.get(4),
+                .map(|row| {
+                    // `Row::get` panics on type mismatch; prefer `try_get` to avoid
+                    // disconnecting the client if the DB column type differs (e.g. TIMESTAMPTZ).
+                    let id = row
+                        .try_get::<usize, i64>(0)
+                        .ok()
+                        .or_else(|| row.try_get::<usize, i32>(0).ok().map(|v| v as i64));
+                    let timestamp = if let Ok(ts) = row.try_get::<usize, DateTime<Utc>>(1) {
+                        ts
+                    } else if let Ok(raw) = row.try_get::<usize, String>(1) {
+                        parse_datetime_string(&raw).unwrap_or_else(|_| chrono::Utc::now())
+                    } else {
+                        chrono::Utc::now()
+                    };
+                    ProviderOpLog {
+                        id,
+                        timestamp,
+                        operation: row.try_get(2).unwrap_or_default(),
+                        provider: row.try_get(3).ok(),
+                        details: row.try_get(4).ok(),
+                    }
                 })
                 .collect())
         })
@@ -677,7 +775,13 @@ impl RequestLogStore for PgLogStore {
                 )
                 .await
                 .map_err(pg_err)?;
-            Ok(row.map(|r| (r.get(0), r.get(1), r.get(2))))
+            Ok(row.map(|r| {
+                (
+                    pg_row_f64_or(&r, 0, 0.0),
+                    pg_row_f64_or(&r, 1, 0.0),
+                    pg_row_opt_string(&r, 2),
+                )
+            }))
         })
     }
 
@@ -693,11 +797,17 @@ impl RequestLogStore for PgLogStore {
                     .query(
                         "SELECT provider, model, prompt_price_per_million, completion_price_per_million, currency FROM model_prices WHERE provider = $1 ORDER BY model",
                         &[&p],
-                    )
+                )
                     .await
                     .map_err(pg_err)?;
                 for r in rows {
-                    out.push((r.get(0), r.get(1), r.get(2), r.get(3), r.get(4)));
+                    out.push((
+                        pg_row_string(&r, 0),
+                        pg_row_string(&r, 1),
+                        pg_row_f64_or(&r, 2, 0.0),
+                        pg_row_f64_or(&r, 3, 0.0),
+                        pg_row_opt_string(&r, 4),
+                    ));
                 }
             } else {
                 let client = self.pool.pick();
@@ -709,7 +819,13 @@ impl RequestLogStore for PgLogStore {
                     .await
                     .map_err(pg_err)?;
                 for r in rows {
-                    out.push((r.get(0), r.get(1), r.get(2), r.get(3), r.get(4)));
+                    out.push((
+                        pg_row_string(&r, 0),
+                        pg_row_string(&r, 1),
+                        pg_row_f64_or(&r, 2, 0.0),
+                        pg_row_f64_or(&r, 3, 0.0),
+                        pg_row_opt_string(&r, 4),
+                    ));
                 }
             }
             Ok(out)
@@ -730,8 +846,7 @@ impl RequestLogStore for PgLogStore {
                 )
                 .await
                 .map_err(pg_err)?;
-            let sum: f64 = row.get(0);
-            Ok(sum)
+            Ok(pg_row_f64_or(&row, 0, 0.0))
         })
     }
 }
@@ -783,16 +898,12 @@ impl ModelCache for PgLogStore {
                     .map_err(pg_err)?;
                 for r in rows {
                     out.push(CachedModel {
-                        id: r.get(0),
-                        provider: r.get(1),
-                        object: r.get(2),
-                        created: {
-                            let v: i64 = r.get(3);
-                            v as u64
-                        },
-                        owned_by: r.get(4),
-                        cached_at: parse_beijing_string(&r.get::<usize, String>(5))
-                            .unwrap_or(Utc::now()),
+                        id: pg_row_string(&r, 0),
+                        provider: pg_row_string(&r, 1),
+                        object: pg_row_string(&r, 2),
+                        created: pg_row_i64_or(&r, 3, 0).max(0) as u64,
+                        owned_by: pg_row_string(&r, 4),
+                        cached_at: pg_row_datetime_or_now(&r, 5),
                     });
                 }
             } else {
@@ -806,16 +917,12 @@ impl ModelCache for PgLogStore {
                     .map_err(pg_err)?;
                 for r in rows {
                     out.push(CachedModel {
-                        id: r.get(0),
-                        provider: r.get(1),
-                        object: r.get(2),
-                        created: {
-                            let v: i64 = r.get(3);
-                            v as u64
-                        },
-                        owned_by: r.get(4),
-                        cached_at: parse_beijing_string(&r.get::<usize, String>(5))
-                            .unwrap_or(Utc::now()),
+                        id: pg_row_string(&r, 0),
+                        provider: pg_row_string(&r, 1),
+                        object: pg_row_string(&r, 2),
+                        created: pg_row_i64_or(&r, 3, 0).max(0) as u64,
+                        owned_by: pg_row_string(&r, 4),
+                        cached_at: pg_row_datetime_or_now(&r, 5),
                     });
                 }
             }
@@ -953,11 +1060,11 @@ impl ProviderStore for PgLogStore {
                 .await
                 .map_err(pg_err)?;
             Ok(row.map(|r| Provider {
-                name: r.get(0),
-                api_type: provider_type_from_str(&r.get::<usize, String>(1)),
-                base_url: r.get(2),
+                name: pg_row_string(&r, 0),
+                api_type: provider_type_from_str(&pg_row_string(&r, 1)),
+                base_url: pg_row_string(&r, 2),
                 api_keys: Vec::new(),
-                models_endpoint: r.get(3),
+                models_endpoint: pg_row_opt_string(&r, 3),
             }))
         })
     }
@@ -975,11 +1082,11 @@ impl ProviderStore for PgLogStore {
             let mut out = Vec::new();
             for r in rows {
                 out.push(Provider {
-                    name: r.get(0),
-                    api_type: provider_type_from_str(&r.get::<usize, String>(1)),
-                    base_url: r.get(2),
+                    name: pg_row_string(&r, 0),
+                    api_type: provider_type_from_str(&pg_row_string(&r, 1)),
+                    base_url: pg_row_string(&r, 2),
                     api_keys: Vec::new(),
-                    models_endpoint: r.get(3),
+                    models_endpoint: pg_row_opt_string(&r, 3),
                 });
             }
             Ok(out)
@@ -1021,11 +1128,10 @@ impl ProviderStore for PgLogStore {
                 .map_err(pg_err)?;
             let mut out = Vec::new();
             for r in rows {
-                let value: String = r.get(0);
-                let enc: Option<bool> = r.get(1);
+                let value = pg_row_string(&r, 0);
+                let enc = pg_row_bool_or(&r, 1, false);
                 let decrypted =
-                    crate::crypto::unprotect(strategy, provider, &value, enc.unwrap_or(false))
-                        .unwrap_or_default();
+                    crate::crypto::unprotect(strategy, provider, &value, enc).unwrap_or_default();
                 if !decrypted.is_empty() {
                     out.push(decrypted);
                 }
@@ -1148,16 +1254,16 @@ impl LoginStore for PgLogStore {
                 .query_opt(
                     "SELECT fingerprint, public_key, comment, enabled, created_at, last_used_at FROM admin_public_keys WHERE fingerprint = $1",
                     &[&fingerprint],
-                )
+            )
                 .await
                 .map_err(pg_err)?;
             let rec = row.map(|r| AdminPublicKeyRecord {
-                fingerprint: r.get(0),
-                public_key: r.get(1),
-                comment: r.get(2),
-                enabled: r.get(3),
-                created_at: r.get(4),
-                last_used_at: r.get(5),
+                fingerprint: pg_row_string(&r, 0),
+                public_key: pg_row_bytes(&r, 1),
+                comment: pg_row_opt_string(&r, 2),
+                enabled: pg_row_bool_or(&r, 3, true),
+                created_at: pg_row_datetime_or_now(&r, 4),
+                last_used_at: pg_row_opt_datetime(&r, 5),
             });
             Ok(rec)
         })
@@ -1194,12 +1300,12 @@ impl LoginStore for PgLogStore {
             let mut out = Vec::with_capacity(rows.len());
             for r in rows {
                 out.push(AdminPublicKeyRecord {
-                    fingerprint: r.get(0),
-                    public_key: r.get(1),
-                    comment: r.get(2),
-                    enabled: r.get(3),
-                    created_at: r.get(4),
-                    last_used_at: r.get(5),
+                    fingerprint: pg_row_string(&r, 0),
+                    public_key: pg_row_bytes(&r, 1),
+                    comment: pg_row_opt_string(&r, 2),
+                    enabled: pg_row_bool_or(&r, 3, true),
+                    created_at: pg_row_datetime_or_now(&r, 4),
+                    last_used_at: pg_row_opt_datetime(&r, 5),
                 });
             }
             Ok(out)
@@ -1251,16 +1357,16 @@ impl LoginStore for PgLogStore {
                 .query_opt(
                     "SELECT session_id, fingerprint, issued_at, expires_at, revoked, last_code_at FROM tui_sessions WHERE session_id = $1",
                     &[&session_id],
-                )
+            )
                 .await
                 .map_err(pg_err)?;
             let rec = row.map(|r| TuiSessionRecord {
-                session_id: r.get(0),
-                fingerprint: r.get(1),
-                issued_at: r.get(2),
-                expires_at: r.get(3),
-                revoked: r.get(4),
-                last_code_at: r.get(5),
+                session_id: pg_row_string(&r, 0),
+                fingerprint: pg_row_string(&r, 1),
+                issued_at: pg_row_datetime_or_now(&r, 2),
+                expires_at: pg_row_datetime_or_now(&r, 3),
+                revoked: pg_row_bool_or(&r, 4, false),
+                last_code_at: pg_row_opt_datetime(&r, 5),
             });
             Ok(rec)
         })
@@ -1295,12 +1401,12 @@ impl LoginStore for PgLogStore {
             let mut out = Vec::with_capacity(rows.len());
             for r in rows {
                 out.push(TuiSessionRecord {
-                    session_id: r.get(0),
-                    fingerprint: r.get(1),
-                    issued_at: r.get(2),
-                    expires_at: r.get(3),
-                    revoked: r.get(4),
-                    last_code_at: r.get(5),
+                    session_id: pg_row_string(&r, 0),
+                    fingerprint: pg_row_string(&r, 1),
+                    issued_at: pg_row_datetime_or_now(&r, 2),
+                    expires_at: pg_row_datetime_or_now(&r, 3),
+                    revoked: pg_row_bool_or(&r, 4, false),
+                    last_code_at: pg_row_opt_datetime(&r, 5),
                 });
             }
             Ok(out)
@@ -1402,15 +1508,15 @@ impl LoginStore for PgLogStore {
 
             if let Some(r) = row {
                 let record = LoginCodeRecord {
-                    code_hash: r.get(0),
-                    session_id: r.get(1),
-                    fingerprint: r.get(2),
-                    created_at: r.get(3),
-                    expires_at: r.get(4),
-                    max_uses: r.get::<_, i32>(5) as u32,
-                    uses: r.get::<_, i32>(6) as u32,
-                    disabled: r.get(7),
-                    hint: r.get(8),
+                    code_hash: pg_row_string(&r, 0),
+                    session_id: pg_row_string(&r, 1),
+                    fingerprint: pg_row_string(&r, 2),
+                    created_at: pg_row_datetime_or_now(&r, 3),
+                    expires_at: pg_row_datetime_or_now(&r, 4),
+                    max_uses: pg_row_u32_or(&r, 5, 0),
+                    uses: pg_row_u32_or(&r, 6, 0),
+                    disabled: pg_row_bool_or(&r, 7, false),
+                    hint: pg_row_opt_string(&r, 8),
                 };
                 return Ok(Some(record));
             }
@@ -1442,15 +1548,15 @@ impl LoginStore for PgLogStore {
                 .map_err(pg_err)?;
 
             let rec = row.map(|r| LoginCodeRecord {
-                code_hash: r.get(0),
-                session_id: r.get(1),
-                fingerprint: r.get(2),
-                created_at: r.get(3),
-                expires_at: r.get(4),
-                max_uses: r.get::<_, i32>(5) as u32,
-                uses: r.get::<_, i32>(6) as u32,
-                disabled: r.get(7),
-                hint: r.get(8),
+                code_hash: pg_row_string(&r, 0),
+                session_id: pg_row_string(&r, 1),
+                fingerprint: pg_row_string(&r, 2),
+                created_at: pg_row_datetime_or_now(&r, 3),
+                expires_at: pg_row_datetime_or_now(&r, 4),
+                max_uses: pg_row_u32_or(&r, 5, 0),
+                uses: pg_row_u32_or(&r, 6, 0),
+                disabled: pg_row_bool_or(&r, 7, false),
+                hint: pg_row_opt_string(&r, 8),
             });
             Ok(rec)
         })
@@ -1486,16 +1592,16 @@ impl LoginStore for PgLogStore {
                 .query_opt(
                     "SELECT session_id, fingerprint, created_at, expires_at, revoked, issued_by_code FROM web_sessions WHERE session_id = $1",
                     &[&session_id],
-                )
+            )
                 .await
                 .map_err(pg_err)?;
             let rec = row.map(|r| WebSessionRecord {
-                session_id: r.get(0),
-                fingerprint: r.get(1),
-                created_at: r.get(2),
-                expires_at: r.get(3),
-                revoked: r.get(4),
-                issued_by_code: r.get(5),
+                session_id: pg_row_string(&r, 0),
+                fingerprint: pg_row_opt_string(&r, 1),
+                created_at: pg_row_datetime_or_now(&r, 2),
+                expires_at: pg_row_datetime_or_now(&r, 3),
+                revoked: pg_row_bool_or(&r, 4, false),
+                issued_by_code: pg_row_opt_string(&r, 5),
             });
             Ok(rec)
         })

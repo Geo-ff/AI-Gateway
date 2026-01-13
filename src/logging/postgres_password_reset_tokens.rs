@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 
 use crate::error::GatewayError;
 use crate::logging::postgres_store::PgLogStore;
+use crate::logging::time::parse_datetime_string;
 use crate::password_reset_tokens::{PasswordResetTokenRecord, PasswordResetTokenStore};
 
 #[async_trait]
@@ -74,13 +75,36 @@ impl PasswordResetTokenStore for PgLogStore {
         let Some(row) = row_opt else {
             return Ok(None);
         };
+        let created_at = if let Ok(dt) = row.try_get::<usize, DateTime<Utc>>(3) {
+            dt
+        } else if let Ok(raw) = row.try_get::<usize, String>(3) {
+            parse_datetime_string(&raw).unwrap_or(now)
+        } else {
+            now
+        };
+        let expires_at = if let Ok(dt) = row.try_get::<usize, DateTime<Utc>>(4) {
+            dt
+        } else if let Ok(raw) = row.try_get::<usize, String>(4) {
+            parse_datetime_string(&raw).unwrap_or(now)
+        } else {
+            now
+        };
+        let used_at = if let Ok(dt) = row.try_get::<usize, Option<DateTime<Utc>>>(5) {
+            dt
+        } else if let Ok(raw) = row.try_get::<usize, Option<String>>(5) {
+            raw.and_then(|s| parse_datetime_string(&s).ok())
+        } else if let Ok(raw) = row.try_get::<usize, String>(5) {
+            parse_datetime_string(&raw).ok()
+        } else {
+            None
+        };
         Ok(Some(PasswordResetTokenRecord {
-            id: row.get(0),
-            user_id: row.get(1),
-            token_hash: row.get(2),
-            created_at: row.get::<usize, DateTime<Utc>>(3),
-            expires_at: row.get::<usize, DateTime<Utc>>(4),
-            used_at: row.get(5),
+            id: row.try_get(0).unwrap_or_default(),
+            user_id: row.try_get(1).unwrap_or_default(),
+            token_hash: row.try_get(2).unwrap_or_default(),
+            created_at,
+            expires_at,
+            used_at,
         }))
     }
 }
