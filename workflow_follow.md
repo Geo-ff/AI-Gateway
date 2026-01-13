@@ -105,6 +105,11 @@ ACT : 200 => Pass
 - 2026-01-12T03:50:21Z：write profile（write+cleanup + fixture 注入真实 `{id}/{provider}`，最小写入 Users/Tokens/Providers/Keys 并清理）=> Pass（Fail=0）；报告：`scripts/_contract/contractw_20260112T035021Z_423232.md`
 - 2026-01-12T03:52:53Z：write profile（补充 DELETE 清理链路的 OpenAPI validate；write_chain=17）=> Pass（Fail=0）；报告：`scripts/_contract/contractw_20260112T035253Z_fc1479.md`
 
+
+#### 接口测试记录（业务语义 biz）
+
+- ClientToken & Providers/keys 业务语义测试（自动化） 2026-01-13T07:57:48Z：Fail（Pass=13 / Fail=1 / Total=14），报告：`scripts/_biz/biz_20260113T075747Z_a3a797.md`
+- ClientToken & Providers/keys 业务语义测试（自动化） 2026-01-13T07:58:50Z：Pass（Pass=14 / Fail=0 / Total=14），报告：`scripts/_biz/biz_20260113T075849Z_669aef.md`
 #### 任务完成情况（实时更新）
 1. ✅ 后端数据模型的定义和分布已指出
 2. ✅ api规范文件已完成，路径：/home/Geoff001/Code/Project/Graduation_Project/gateway_zero/openapi.yaml
