@@ -57,10 +57,10 @@ jobs:
 
       - name: Generate CI .env (do not commit)
         env:
-          CONTRACT_EMAIL: ${{ secrets.CONTRACT_EMAIL }}
-          CONTRACT_PASSWORD: ${{ secrets.CONTRACT_PASSWORD }}
-          GATEWAY_BOOTSTRAP_CODE: ${{ secrets.GATEWAY_BOOTSTRAP_CODE }}
-          GW_JWT_SECRET: ${{ secrets.GW_JWT_SECRET }}
+          CONTRACT_EMAIL: ${{ secrets['CONTRACT_EMAIL'] }}
+          CONTRACT_PASSWORD: ${{ secrets['CONTRACT_PASSWORD'] }}
+          GATEWAY_BOOTSTRAP_CODE: ${{ secrets['GATEWAY_BOOTSTRAP_CODE'] }}
+          GW_JWT_SECRET: ${{ secrets['GW_JWT_SECRET'] }}
         run: |
           python3 - <<'PY'
           from __future__ import annotations
@@ -96,7 +96,16 @@ jobs:
           password = pick("CONTRACT_PASSWORD", "PASSWORD")
           bootstrap = pick("GATEWAY_BOOTSTRAP_CODE", "GATEWAY_BOOTSTRAP_CODE")
           jwt_secret = pick("GW_JWT_SECRET", "GW_JWT_SECRET")
-          missing = [k for k, v in {"EMAIL": email, "PASSWORD": password, "GW_JWT_SECRET": jwt_secret}.items() if not v]
+          missing = [
+              k
+              for k, v in {
+                  "EMAIL": email,
+                  "PASSWORD": password,
+                  "GATEWAY_BOOTSTRAP_CODE": bootstrap,
+                  "GW_JWT_SECRET": jwt_secret,
+              }.items()
+              if not v
+          ]
           if missing:
               raise SystemExit(f"missing required config for CI .env: {', '.join(missing)}")
 
@@ -139,14 +148,48 @@ jobs:
         env:
           GATEWAY_BASE_URL: http://localhost:8080
         run: |
-          for i in {1..90}; do
-            code="$(curl -sS -o /dev/null -w "%{http_code}" "$GATEWAY_BASE_URL/auth/me" || true)"
-            if [[ "$code" == "401" || "$code" == "200" ]]; then
-              exit 0
+          LOGIN_BODY="$(
+            python3 - <<'PY'
+            from __future__ import annotations
+
+            import json
+            import re
+            from pathlib import Path
+
+            def parse_env_text(text: str) -> dict[str, str]:
+                env: dict[str, str] = {}
+                for raw in text.splitlines():
+                    line = raw.rstrip("\r")
+                    if not line.strip() or line.lstrip().startswith("#"):
+                        continue
+                    m = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*([=:])\s*(.*)\s*$", line)
+                    if not m:
+                        continue
+                    key, _sep, val = m.group(1), m.group(2), m.group(3)
+                    if val.startswith('"') and val.endswith('"') and len(val) >= 2:
+                        val = val[1:-1]
+                    env[key] = val
+                return env
+
+            env = parse_env_text(Path(".env").read_text(encoding="utf-8"))
+            print(json.dumps({"email": env.get("EMAIL", ""), "password": env.get("PASSWORD", "")}))
+            PY
+          )"
+
+          for i in {1..120}; do
+            code_me="$(curl -sS -o /dev/null -w "%{http_code}" "$GATEWAY_BASE_URL/auth/me" || true)"
+            if [[ "$code_me" == "401" || "$code_me" == "200" ]]; then
+              code_login="$(curl -sS -o /dev/null -w "%{http_code}" \
+                -X POST "$GATEWAY_BASE_URL/auth/login" \
+                -H "Content-Type: application/json" \
+                --data "$LOGIN_BODY" || true)"
+              if [[ "$code_login" == "200" || "$code_login" == "401" ]]; then
+                exit 0
+              fi
             fi
             sleep 1
           done
-          echo "Gateway not ready at $GATEWAY_BASE_URL (expected 401/200 from /auth/me)" >&2
+          echo "Gateway not ready at $GATEWAY_BASE_URL (expected /auth/me=401/200 and /auth/login=200/401)" >&2
           echo "--- server log (tail) ---" >&2
           tail -n 200 scripts/_contract/server_ci.log >&2 || true
           exit 1
