@@ -160,33 +160,8 @@ jobs:
           mkdir -p scripts/_contract
           readiness_log="scripts/_contract/readiness_ci.log"
           : > "$readiness_log"
-          LOGIN_BODY="$(
-            python3 - <<'PY'
-            from __future__ import annotations
-
-            import json
-            import re
-            from pathlib import Path
-
-            def parse_env_text(text: str) -> dict[str, str]:
-                env: dict[str, str] = {}
-                for raw in text.splitlines():
-                    line = raw.rstrip("\r")
-                    if not line.strip() or line.lstrip().startswith("#"):
-                        continue
-                    m = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*([=:])\s*(.*)\s*$", line)
-                    if not m:
-                        continue
-                    key, _sep, val = m.group(1), m.group(2), m.group(3)
-                    if val.startswith('"') and val.endswith('"') and len(val) >= 2:
-                        val = val[1:-1]
-                    env[key] = val
-                return env
-
-            env = parse_env_text(Path(".env").read_text(encoding="utf-8"))
-            print(json.dumps({"email": env.get("EMAIL", ""), "password": env.get("PASSWORD", "")}))
-            PY
-          )"
+          # Use a static, valid JSON body. We only need to know the endpoint responds (401 is OK).
+          LOGIN_BODY='{"email":"ci_probe@example.com","password":"ci_probe_pw"}'
 
           last_me=""
           last_login=""
