@@ -96,6 +96,8 @@ ACT : 200 => Pass
 
 ✅ 生成并执行 P0/P1 curl 冒烟测试并回填结果
 
+- RBAC 边界业务测试（自动化） 2026-01-13T04:12:50Z：Pass（Pass=28 / Fail=0 / Total=28），报告：`scripts/_rbac/rbac_20260113T041247Z_0e8da8.md`
+
 #### 接口测试记录（OpenAPI 契约 / schema-based）
 
 - 2026-01-12T02:48:32Z：基于 `openapi.yaml` 的 schema-based 契约测试（Schemathesis，GET-only 覆盖 `/auth/me` `/admin/users*` `/admin/tokens*` `/providers*` `/providers/*/keys*`）=> Fail（Fail=1：`GET /providers/{provider}/keys/raw` 返回 `404` 但 OpenAPI 未声明）；报告：`scripts/_contract/contract_20260112T024832Z_491e57.md`
@@ -115,7 +117,6 @@ ACT : 200 => Pass
 7. ✅ ClientToken 已补齐 `id/name` 字段，并同步更新 OpenAPI、前端令牌管理页面与 TUI（路由按 `{id}` 操作）
 
 ---
-
 ## 前后端 API 对比分析报告
 
 > 📅 更新时间：2025-12-30

@@ -19,3 +19,8 @@ scripts/_contract/contractw_*.log
 scripts/_contract/server_*.log
 .hypothesis/
 scripts/_contract/__pycache__/run_contract.cpython-312.pyc
+scripts/_rbac/.venv/
+scripts/_rbac/rbac_*.md
+scripts/_rbac/rbac_*.log
+__pycache__/
+*.pyc
