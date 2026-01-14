@@ -11,7 +11,7 @@ use super::auth::require_superadmin;
 use crate::error::GatewayError;
 use crate::logging::types::{
     ProviderOpLog, REQ_TYPE_PROVIDER_KEY_ADD, REQ_TYPE_PROVIDER_KEY_DELETE,
-    REQ_TYPE_PROVIDER_KEY_LIST,
+    REQ_TYPE_PROVIDER_KEY_LIST, REQ_TYPE_PROVIDER_KEY_TOGGLE,
 };
 use crate::server::AppState;
 use crate::server::request_logging::log_simple_request;
@@ -20,6 +20,12 @@ use crate::server::util::{key_display_hint, mask_key};
 #[derive(Debug, Deserialize)]
 pub(super) struct KeyPayload {
     key: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct KeyTogglePayload {
+    key: String,
+    active: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +51,7 @@ struct BatchResult {
 struct ProviderKeyFullEntry {
     value: String,
     masked: String,
+    active: bool,
 }
 
 pub async fn add_provider_key(
@@ -141,6 +148,121 @@ pub async fn add_provider_key(
         Json(serde_json::json!({ "success": true })),
     )
         .into_response())
+}
+
+pub async fn toggle_provider_key(
+    Path(provider_name): Path<String>,
+    State(app_state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<KeyTogglePayload>,
+) -> Result<Response, GatewayError> {
+    let provided_token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
+
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
+        let start_time = chrono::Utc::now();
+        let _ = app_state
+            .log_store
+            .log_provider_op(ProviderOpLog {
+                id: None,
+                timestamp: start_time,
+                operation: REQ_TYPE_PROVIDER_KEY_TOGGLE.to_string(),
+                provider: Some(provider_name.clone()),
+                details: Some(e.to_string()),
+            })
+            .await;
+        let code = e.status_code().as_u16();
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &format!("/providers/{}/keys/toggle", provider_name),
+            REQ_TYPE_PROVIDER_KEY_TOGGLE,
+            None,
+            Some(provider_name),
+            provided_token.as_deref(),
+            code,
+            Some("auth failed".into()),
+        )
+        .await;
+        return Err(e);
+    }
+
+    if !app_state
+        .providers
+        .provider_exists(&provider_name)
+        .await
+        .map_err(GatewayError::Db)?
+    {
+        return Err(GatewayError::NotFound(format!(
+            "Provider '{}' not found",
+            provider_name
+        )));
+    }
+
+    let updated = app_state
+        .providers
+        .set_provider_key_active(
+            &provider_name,
+            &payload.key,
+            payload.active,
+            &app_state.config.logging.key_log_strategy,
+        )
+        .await
+        .map_err(GatewayError::Db)?;
+
+    let start_time = Utc::now();
+    let key_hint = key_display_hint(&app_state.config.logging.key_log_strategy, &payload.key);
+    let details = key_hint.map(|v| serde_json::json!({"key": v, "active": payload.active}).to_string());
+    let _ = app_state
+        .log_store
+        .log_provider_op(ProviderOpLog {
+            id: None,
+            timestamp: start_time,
+            operation: REQ_TYPE_PROVIDER_KEY_TOGGLE.to_string(),
+            provider: Some(provider_name.clone()),
+            details,
+        })
+        .await;
+
+    if updated {
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &format!("/providers/{}/keys/toggle", provider_name),
+            REQ_TYPE_PROVIDER_KEY_TOGGLE,
+            None,
+            Some(provider_name),
+            provided_token.as_deref(),
+            200,
+            None,
+        )
+        .await;
+        Ok((
+            axum::http::StatusCode::OK,
+            Json(serde_json::json!({ "success": true })),
+        )
+            .into_response())
+    } else {
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &format!("/providers/{}/keys/toggle", provider_name),
+            REQ_TYPE_PROVIDER_KEY_TOGGLE,
+            None,
+            Some(provider_name.clone()),
+            provided_token.as_deref(),
+            404,
+            Some("key not found".into()),
+        )
+        .await;
+        Err(GatewayError::NotFound("key not found".into()))
+    }
 }
 
 pub async fn add_provider_keys_batch(
@@ -680,7 +802,7 @@ pub async fn list_provider_keys_raw(
     let start_time = Utc::now();
     let keys = app_state
         .providers
-        .get_provider_keys(&provider_name, &app_state.config.logging.key_log_strategy)
+        .list_provider_keys_raw(&provider_name, &app_state.config.logging.key_log_strategy)
         .await
         .map_err(GatewayError::Db)?;
 
@@ -688,16 +810,17 @@ pub async fn list_provider_keys_raw(
     let term = query.q.unwrap_or_default().to_lowercase();
     let entries: Vec<ProviderKeyFullEntry> = keys
         .into_iter()
-        .filter(|key| {
+        .filter(|(key, _active)| {
             if term.is_empty() {
                 return true;
             }
             let masked = mask_key(key);
             key.to_lowercase().contains(&term) || masked.to_lowercase().contains(&term)
         })
-        .map(|value| ProviderKeyFullEntry {
+        .map(|(value, active)| ProviderKeyFullEntry {
             masked: mask_key(&value),
             value,
+            active,
         })
         .collect();
 

@@ -85,6 +85,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(provider_keys::list_provider_keys_raw),
         )
         .route(
+            "/providers/{provider}/keys/toggle",
+            post(provider_keys::toggle_provider_key),
+        )
+        .route(
             "/providers/{provider}/keys/batch",
             post(provider_keys::add_provider_keys_batch)
                 .delete(provider_keys::delete_provider_keys_batch),

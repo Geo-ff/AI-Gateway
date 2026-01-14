@@ -3399,6 +3399,9 @@ paths:
                         masked:
                           type: string
                           description: 脱敏密钥
+                        active:
+                          type: boolean
+                          description: 是否启用
                   total:
                     type: integer
         '401':
@@ -3415,6 +3418,69 @@ paths:
                 $ref: '#/components/schemas/Error'
         '404':
           description: 提供商不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /providers/{provider}/keys/toggle:
+    post:
+      summary: 启用/禁用提供商密钥
+      description: 按原文密钥切换 active 状态（禁用不删除）
+      operationId: toggleProviderKey
+      tags:
+        - Providers
+      security:
+        - AccessToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                key:
+                  type: string
+                  description: 原文API密钥
+                active:
+                  type: boolean
+                  description: 是否启用
+              required:
+                - key
+                - active
+      responses:
+        '200':
+          description: 成功切换
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 提供商或密钥不存在
           content:
             application/json:
               schema:

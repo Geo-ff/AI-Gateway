@@ -32,6 +32,34 @@ impl DatabaseLogger {
         Ok(out)
     }
 
+    pub async fn list_provider_keys_raw(
+        &self,
+        provider: &str,
+        strategy: &Option<KeyLogStrategy>,
+    ) -> Result<Vec<(String, bool)>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT key_value, enc, active FROM provider_keys WHERE provider = ?1 ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map([provider], |row| {
+            let value: String = row.get(0)?;
+            let enc: i64 = row.get(1)?;
+            let active: i64 = row.get(2)?;
+            let decrypted =
+                crate::crypto::unprotect(strategy, provider, &value, enc != 0).unwrap_or_default();
+            Ok((decrypted, active != 0))
+        })?;
+
+        let mut out = Vec::new();
+        for r in rows {
+            let (k, active) = r?;
+            if !k.is_empty() {
+                out.push((k, active));
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn add_provider_key(
         &self,
         provider: &str,
@@ -47,6 +75,29 @@ impl DatabaseLogger {
             (provider, stored, if enc { 1 } else { 0 }, &now),
         )?;
         Ok(())
+    }
+
+    pub async fn set_provider_key_active(
+        &self,
+        provider: &str,
+        key: &str,
+        active: bool,
+        strategy: &Option<KeyLogStrategy>,
+    ) -> Result<bool> {
+        let conn = self.connection.lock().await;
+        let (stored, enc) = crate::crypto::protect(strategy, provider, key);
+        let mut affected = conn.execute(
+            "UPDATE provider_keys SET active = ?3 WHERE provider = ?1 AND key_value = ?2",
+            (provider, stored, if active { 1 } else { 0 }),
+        )?;
+        // 兼容已存明文的情况
+        if enc {
+            affected += conn.execute(
+                "UPDATE provider_keys SET active = ?3 WHERE provider = ?1 AND key_value = ?2",
+                (provider, key, if active { 1 } else { 0 }),
+            )?;
+        }
+        Ok(affected > 0)
     }
 
     pub async fn remove_provider_key(

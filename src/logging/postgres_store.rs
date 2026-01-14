@@ -1200,6 +1200,66 @@ impl ProviderStore for PgLogStore {
             Ok(affected > 0)
         })
     }
+
+    fn list_provider_keys_raw<'a>(
+        &'a self,
+        provider: &'a str,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, bool)>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let rows = client
+                .query(
+                    "SELECT key_value, enc, active FROM provider_keys WHERE provider = $1 ORDER BY created_at",
+                    &[&provider],
+                )
+                .await
+                .map_err(pg_err)?;
+            let mut out = Vec::new();
+            for r in rows {
+                let value = pg_row_string(&r, 0);
+                let enc = pg_row_bool_or(&r, 1, false);
+                let active = pg_row_bool_or(&r, 2, true);
+                let decrypted =
+                    crate::crypto::unprotect(strategy, provider, &value, enc).unwrap_or_default();
+                if !decrypted.is_empty() {
+                    out.push((decrypted, active));
+                }
+            }
+            Ok(out)
+        })
+    }
+
+    fn set_provider_key_active<'a>(
+        &'a self,
+        provider: &'a str,
+        key: &'a str,
+        active: bool,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let (stored, enc) = crate::crypto::protect(strategy, provider, key);
+            let client = self.pool.pick();
+            let mut affected = client
+                .execute(
+                    "UPDATE provider_keys SET active = $3 WHERE provider = $1 AND key_value = $2",
+                    &[&provider, &stored, &active],
+                )
+                .await
+                .map_err(pg_err)?;
+            if enc {
+                let client = self.pool.pick();
+                affected += client
+                    .execute(
+                        "UPDATE provider_keys SET active = $3 WHERE provider = $1 AND key_value = $2",
+                        &[&provider, &key, &active],
+                    )
+                    .await
+                    .map_err(pg_err)?;
+            }
+            Ok(affected > 0)
+        })
+    }
 }
 
 impl LoginStore for PgLogStore {

@@ -138,6 +138,20 @@ pub trait ProviderStore: Send + Sync {
         strategy: &'a Option<KeyLogStrategy>,
     ) -> BoxFuture<'a, rusqlite::Result<bool>>;
 
+    fn list_provider_keys_raw<'a>(
+        &'a self,
+        provider: &'a str,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, bool)>>>;
+
+    fn set_provider_key_active<'a>(
+        &'a self,
+        provider: &'a str,
+        key: &'a str,
+        active: bool,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>>;
+
     fn list_providers_with_keys<'a>(
         &'a self,
         strategy: &'a Option<KeyLogStrategy>,
@@ -478,5 +492,23 @@ impl ProviderStore for DatabaseLogger {
         strategy: &'a Option<KeyLogStrategy>,
     ) -> BoxFuture<'a, rusqlite::Result<bool>> {
         Box::pin(async move { self.remove_provider_key(provider, key, strategy).await })
+    }
+
+    fn list_provider_keys_raw<'a>(
+        &'a self,
+        provider: &'a str,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, bool)>>> {
+        Box::pin(async move { self.list_provider_keys_raw(provider, strategy).await })
+    }
+
+    fn set_provider_key_active<'a>(
+        &'a self,
+        provider: &'a str,
+        key: &'a str,
+        active: bool,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move { self.set_provider_key_active(provider, key, active, strategy).await })
     }
 }

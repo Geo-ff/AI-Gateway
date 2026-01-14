@@ -8,6 +8,7 @@ pub const REQ_TYPE_PROVIDER_MODELS_LIST: &str = "provider_models_list";
 pub const REQ_TYPE_PROVIDER_KEY_ADD: &str = "provider_key_add";
 pub const REQ_TYPE_PROVIDER_KEY_DELETE: &str = "provider_key_delete";
 pub const REQ_TYPE_PROVIDER_KEY_LIST: &str = "provider_key_list";
+pub const REQ_TYPE_PROVIDER_KEY_TOGGLE: &str = "provider_key_toggle";
 pub const REQ_TYPE_PROVIDER_CACHE_UPDATE: &str = "provider_models_cache_update";
 pub const REQ_TYPE_PROVIDER_CACHE_DELETE: &str = "provider_models_cache_delete";
 pub const REQ_TYPE_PROVIDER_CREATE: &str = "provider_create";
