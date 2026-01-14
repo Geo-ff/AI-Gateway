@@ -23,6 +23,7 @@ mod client_tokens;
 mod me_token_info;
 mod me_tokens;
 mod model_prices;
+mod model_redirects;
 mod models;
 mod provider_keys;
 mod providers;
@@ -92,6 +93,12 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/providers/{provider}/keys/batch",
             post(provider_keys::add_provider_keys_batch)
                 .delete(provider_keys::delete_provider_keys_batch),
+        )
+        .route(
+            "/providers/{provider}/model-redirects",
+            get(model_redirects::list_model_redirects)
+                .put(model_redirects::replace_model_redirects)
+                .delete(model_redirects::delete_model_redirect),
         )
         .route(
             "/providers",

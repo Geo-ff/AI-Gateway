@@ -14,7 +14,12 @@ use crate::server::provider_dispatch::{
 };
 use crate::server::streaming::stream_chat_completions;
 use crate::server::{
-    AppState, model_redirect::apply_model_redirects, request_logging::log_chat_request,
+    AppState,
+    model_redirect::{
+        apply_model_redirects, apply_provider_model_redirects_to_parsed_model,
+        apply_provider_model_redirects_to_request,
+    },
+    request_logging::log_chat_request,
 };
 
 /// Chat Completions 主处理入口：
@@ -34,6 +39,20 @@ pub async fn chat_completions(
         let mut request = request;
         let start_time = Utc::now();
         apply_model_redirects(&mut request);
+        // provider-scoped redirects can be applied early if the request explicitly pins a provider
+        let parsed_for_prefix = crate::server::model_parser::ParsedModel::parse(&request.model);
+        if let Some(p) = parsed_for_prefix.provider_name.as_deref() {
+            if let Some((from, to)) =
+                apply_provider_model_redirects_to_request(&app_state, p, &mut request).await?
+            {
+                tracing::info!(
+                    provider = p,
+                    source_model = %from,
+                    target_model = %to,
+                    "已应用 provider 维度模型重定向（前缀指定）"
+                );
+            }
+        }
 
         let client_token = headers
             .get(axum::http::header::AUTHORIZATION)
@@ -171,8 +190,27 @@ pub async fn chat_completions(
             return Err(GatewayError::Config("token budget exceeded".into()));
         }
 
-        let (selected, parsed_model) =
+        let (selected, mut parsed_model) =
             select_provider_for_model(&app_state, &request.model).await?;
+        if let Some((from, to)) = apply_provider_model_redirects_to_parsed_model(
+            &app_state,
+            &selected.provider.name,
+            &mut parsed_model,
+        )
+        .await?
+        {
+            tracing::info!(
+                provider = %selected.provider.name,
+                source_model = %from,
+                target_model = %to,
+                "已应用 provider 维度模型重定向"
+            );
+            request.model = if parsed_model.provider_name.is_some() {
+                format!("{}/{}", selected.provider.name, parsed_model.model_name)
+            } else {
+                parsed_model.model_name.clone()
+            };
+        }
         let upstream_model = parsed_model.get_upstream_model_name().to_string();
         let price = app_state
             .log_store

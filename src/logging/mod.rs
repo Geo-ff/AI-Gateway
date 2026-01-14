@@ -2,6 +2,7 @@ pub mod database;
 pub mod database_cache;
 pub mod database_client_tokens;
 pub mod database_keys;
+pub mod database_model_redirects;
 pub mod database_password_reset_tokens;
 pub mod database_pricing;
 pub mod database_provider_ops;

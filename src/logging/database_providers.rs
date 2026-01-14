@@ -110,6 +110,7 @@ impl DatabaseLogger {
         let tx = conn.unchecked_transaction()?;
         tx.execute("DELETE FROM provider_keys WHERE provider = ?1", [name])?;
         tx.execute("DELETE FROM cached_models WHERE provider = ?1", [name])?;
+        tx.execute("DELETE FROM model_redirects WHERE provider = ?1", [name])?;
         let affected = tx.execute("DELETE FROM providers WHERE name = ?1", [name])?;
         tx.commit()?;
         Ok(affected > 0)

@@ -164,6 +164,23 @@ pub trait ProviderStore: Send + Sync {
             Ok(out)
         })
     }
+
+    // provider-scoped model redirects
+    fn list_model_redirects<'a>(
+        &'a self,
+        provider: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, String)>>>;
+    fn replace_model_redirects<'a>(
+        &'a self,
+        provider: &'a str,
+        redirects: &'a [(String, String)],
+        now: DateTime<Utc>,
+    ) -> BoxFuture<'a, rusqlite::Result<()>>;
+    fn delete_model_redirect<'a>(
+        &'a self,
+        provider: &'a str,
+        source_model: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>>;
 }
 
 #[derive(Debug, Clone)]
@@ -510,5 +527,29 @@ impl ProviderStore for DatabaseLogger {
         strategy: &'a Option<KeyLogStrategy>,
     ) -> BoxFuture<'a, rusqlite::Result<bool>> {
         Box::pin(async move { self.set_provider_key_active(provider, key, active, strategy).await })
+    }
+
+    fn list_model_redirects<'a>(
+        &'a self,
+        provider: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, String)>>> {
+        Box::pin(async move { self.list_model_redirects(provider).await })
+    }
+
+    fn replace_model_redirects<'a>(
+        &'a self,
+        provider: &'a str,
+        redirects: &'a [(String, String)],
+        now: DateTime<Utc>,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move { self.replace_model_redirects(provider, redirects, now).await })
+    }
+
+    fn delete_model_redirect<'a>(
+        &'a self,
+        provider: &'a str,
+        source_model: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move { self.delete_model_redirect(provider, source_model).await })
     }
 }

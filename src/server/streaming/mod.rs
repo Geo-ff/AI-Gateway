@@ -10,7 +10,10 @@ use std::sync::Arc;
 use crate::error::GatewayError;
 use crate::providers::openai::ChatCompletionRequest;
 use crate::server::AppState;
-use crate::server::model_redirect::apply_model_redirects;
+use crate::server::model_redirect::{
+    apply_model_redirects, apply_provider_model_redirects_to_parsed_model,
+    apply_provider_model_redirects_to_request,
+};
 use crate::server::provider_dispatch::select_provider_for_model;
 pub(super) use crate::server::util::api_key_hint;
 
@@ -35,7 +38,39 @@ pub async fn stream_chat_completions(
 
     let start_time = Utc::now();
     apply_model_redirects(&mut request);
-    let (selected, parsed_model) = select_provider_for_model(&app_state, &request.model).await?;
+    let parsed_for_prefix = crate::server::model_parser::ParsedModel::parse(&request.model);
+    if let Some(p) = parsed_for_prefix.provider_name.as_deref() {
+        if let Some((from, to)) =
+            apply_provider_model_redirects_to_request(&app_state, p, &mut request).await?
+        {
+            tracing::info!(
+                provider = p,
+                source_model = %from,
+                target_model = %to,
+                "已应用 provider 维度模型重定向（前缀指定）"
+            );
+        }
+    }
+    let (selected, mut parsed_model) = select_provider_for_model(&app_state, &request.model).await?;
+    if let Some((from, to)) = apply_provider_model_redirects_to_parsed_model(
+        &app_state,
+        &selected.provider.name,
+        &mut parsed_model,
+    )
+    .await?
+    {
+        tracing::info!(
+            provider = %selected.provider.name,
+            source_model = %from,
+            target_model = %to,
+            "已应用 provider 维度模型重定向"
+        );
+        request.model = if parsed_model.provider_name.is_some() {
+            format!("{}/{}", selected.provider.name, parsed_model.model_name)
+        } else {
+            parsed_model.model_name.clone()
+        };
+    }
 
     // Build upstream request with real model id
     let mut upstream_req = request.clone();

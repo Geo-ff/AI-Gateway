@@ -731,6 +731,19 @@ impl DatabaseLogger {
             [],
         )?;
 
+        // Provider-scoped model redirects: (source_model -> target_model)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS model_redirects (
+                provider TEXT NOT NULL,
+                source_model TEXT NOT NULL,
+                target_model TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (provider, source_model)
+            )",
+            [],
+        )?;
+
         // Provider operations audit logs
         conn.execute(
             "CREATE TABLE IF NOT EXISTS provider_ops_logs (

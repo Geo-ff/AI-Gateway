@@ -287,6 +287,21 @@ impl PgLogStore {
 
         client
             .execute(
+                r#"CREATE TABLE IF NOT EXISTS model_redirects (
+                provider TEXT NOT NULL,
+                source_model TEXT NOT NULL,
+                target_model TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (provider, source_model)
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init model_redirects: {}", e)))?;
+
+        client
+            .execute(
                 r#"CREATE TABLE IF NOT EXISTS admin_public_keys (
                 fingerprint TEXT PRIMARY KEY,
                 public_key BYTEA NOT NULL,
@@ -1107,6 +1122,11 @@ impl ProviderStore for PgLogStore {
                 .await
                 .map_err(pg_err)?;
             let client = self.pool.pick();
+            client
+                .execute("DELETE FROM model_redirects WHERE provider = $1", &[&name])
+                .await
+                .map_err(pg_err)?;
+            let client = self.pool.pick();
             let res = client
                 .execute("DELETE FROM providers WHERE name = $1", &[&name])
                 .await
@@ -1257,6 +1277,72 @@ impl ProviderStore for PgLogStore {
                     .await
                     .map_err(pg_err)?;
             }
+            Ok(affected > 0)
+        })
+    }
+
+    fn list_model_redirects<'a>(
+        &'a self,
+        provider: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, String)>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let rows = client
+                .query(
+                    "SELECT source_model, target_model FROM model_redirects WHERE provider = $1 ORDER BY source_model",
+                    &[&provider],
+                )
+                .await
+                .map_err(pg_err)?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push((pg_row_string(&r, 0), pg_row_string(&r, 1)));
+            }
+            Ok(out)
+        })
+    }
+
+    fn replace_model_redirects<'a>(
+        &'a self,
+        provider: &'a str,
+        redirects: &'a [(String, String)],
+        now: DateTime<Utc>,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let now_s = to_beijing_string(&now);
+            let client = self.pool.pick();
+            client
+                .execute("DELETE FROM model_redirects WHERE provider = $1", &[&provider])
+                .await
+                .map_err(pg_err)?;
+            for (source, target) in redirects {
+                let client = self.pool.pick();
+                client
+                    .execute(
+                        "INSERT INTO model_redirects (provider, source_model, target_model, created_at, updated_at) VALUES ($1,$2,$3,$4,$5)",
+                        &[&provider, source, target, &now_s, &now_s],
+                    )
+                    .await
+                    .map_err(pg_err)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn delete_model_redirect<'a>(
+        &'a self,
+        provider: &'a str,
+        source_model: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let affected = client
+                .execute(
+                    "DELETE FROM model_redirects WHERE provider = $1 AND source_model = $2",
+                    &[&provider, &source_model],
+                )
+                .await
+                .map_err(pg_err)?;
             Ok(affected > 0)
         })
     }
