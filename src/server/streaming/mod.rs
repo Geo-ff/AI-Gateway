@@ -15,7 +15,6 @@ use crate::server::model_redirect::{
     apply_provider_model_redirects_to_request,
 };
 use crate::server::provider_dispatch::select_provider_for_model;
-pub(super) use crate::server::util::api_key_hint;
 
 mod common;
 mod openai;

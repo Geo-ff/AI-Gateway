@@ -19,4 +19,4 @@ pub mod types;
 #[allow(unused_imports)]
 pub use database::DatabaseLogger;
 #[allow(unused_imports)]
-pub use types::{CachedModel, RequestLog};
+pub use types::{CachedModel, ProviderKeyStatsAgg, RequestLog};

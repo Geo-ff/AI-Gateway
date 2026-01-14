@@ -3,7 +3,7 @@ use crate::logging::RequestLog;
 use crate::logging::types::REQ_TYPE_CHAT_ONCE;
 use crate::providers::openai::types::RawAndTypedChatCompletion;
 use crate::server::AppState;
-use crate::server::util::api_key_hint;
+use crate::server::util::mask_key;
 use chrono::{DateTime, Utc};
 
 // 记录聊天请求日志（包含响应耗时和 token 使用情况）
@@ -19,7 +19,8 @@ pub async fn log_chat_request(
     let end_time = Utc::now();
     let response_time_ms = (end_time - start_time).num_milliseconds();
 
-    let api_key = api_key_hint(&app_state.config.logging, api_key_raw);
+    // 统计与日志关联使用稳定脱敏值，避免明文泄露
+    let api_key = Some(mask_key(api_key_raw));
 
     // 计算本次消耗金额（仅当有价格与 usage 可用，且有 Client Token）
     let amount_spent: Option<f64> = match response {

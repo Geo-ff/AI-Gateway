@@ -3,7 +3,7 @@ use std::pin::Pin;
 
 use crate::config::settings::{KeyLogStrategy, Provider};
 use crate::logging::types::ProviderOpLog;
-use crate::logging::{CachedModel, DatabaseLogger, RequestLog};
+use crate::logging::{CachedModel, DatabaseLogger, ProviderKeyStatsAgg, RequestLog};
 use crate::providers::openai::Model;
 use crate::routing::{KeyRotationStrategy, ProviderKeyEntry};
 use chrono::{DateTime, Utc};
@@ -58,6 +58,14 @@ pub trait RequestLogStore: Send + Sync {
         method: &'a str,
         path: &'a str,
     ) -> DateRangeFuture<'a>;
+    fn aggregate_provider_key_stats<'a>(
+        &'a self,
+        method: &'a str,
+        path: &'a str,
+        provider: &'a str,
+        since: Option<DateTime<Utc>>,
+        until: Option<DateTime<Utc>>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<ProviderKeyStatsAgg>>>;
     // provider ops audit log
     fn log_provider_op<'a>(&'a self, op: ProviderOpLog) -> BoxFuture<'a, rusqlite::Result<i64>>;
     fn get_provider_ops_logs<'a>(
@@ -389,6 +397,20 @@ impl RequestLogStore for DatabaseLogger {
         path: &'a str,
     ) -> BoxFuture<'a, rusqlite::Result<Option<(DateTime<Utc>, DateTime<Utc>)>>> {
         Box::pin(async move { self.request_log_date_range(method, path).await })
+    }
+
+    fn aggregate_provider_key_stats<'a>(
+        &'a self,
+        method: &'a str,
+        path: &'a str,
+        provider: &'a str,
+        since: Option<DateTime<Utc>>,
+        until: Option<DateTime<Utc>>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<ProviderKeyStatsAgg>>> {
+        Box::pin(async move {
+            self.aggregate_provider_key_stats(method, path, provider, since, until)
+                .await
+        })
     }
 
     fn log_provider_op<'a>(&'a self, op: ProviderOpLog) -> BoxFuture<'a, rusqlite::Result<i64>> {

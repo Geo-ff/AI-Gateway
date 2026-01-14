@@ -14,7 +14,7 @@ use crate::error::GatewayError;
 use crate::providers::openai::{ChatCompletionRequest, Usage};
 use crate::server::AppState;
 
-use super::api_key_hint;
+use crate::server::util::mask_key;
 
 /// 面向 OpenAI 兼容上游的流式聊天实现：
 /// - 将请求改写为 SSE 流式接口并启用 usage 回传
@@ -48,7 +48,8 @@ pub async fn stream_openai_chat(
 
     let usage_cell: Arc<Mutex<Option<Usage>>> = Arc::new(Mutex::new(None));
     let logged_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let api_key_ref = api_key_hint(&app_state.config.logging, &api_key);
+    // 统计与日志关联使用稳定脱敏值，避免明文泄露
+    let api_key_ref = Some(mask_key(&api_key));
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<axum::response::sse::Event>();
     let usage_cell_for_task = usage_cell.clone();

@@ -1,11 +1,11 @@
 use crate::logging::time::{
     BEIJING_OFFSET, DATETIME_FORMAT, parse_beijing_string, to_beijing_string,
 };
-use crate::logging::types::RequestLog;
+use crate::logging::types::{ProviderKeyStatsAgg, RequestLog};
 use crate::server::storage_traits::{
     AdminPublicKeyRecord, LoginCodeRecord, TuiSessionRecord, WebSessionRecord,
 };
-use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension, Result};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -1208,6 +1208,59 @@ impl DatabaseLogger {
         } else {
             Ok(None)
         }
+    }
+
+    pub async fn aggregate_provider_key_stats(
+        &self,
+        method: &str,
+        path: &str,
+        provider: &str,
+        since: Option<DateTime<Utc>>,
+        until: Option<DateTime<Utc>>,
+    ) -> Result<Vec<ProviderKeyStatsAgg>> {
+        let since_str = since.as_ref().map(to_beijing_string);
+        // 由于时间戳按秒存储（无小数），这里将上界向后推 1 秒以避免“同秒”被排除
+        let until_str = until
+            .as_ref()
+            .map(|dt| to_beijing_string(&(*dt + Duration::seconds(1))));
+
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT api_key,
+                    COUNT(*) as total_requests,
+                    SUM(CASE WHEN status_code < 400 THEN 1 ELSE 0 END) as success_count,
+                    SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) as failure_count
+             FROM request_logs
+             WHERE method = ?1
+               AND path = ?2
+               AND provider = ?3
+               AND api_key IS NOT NULL
+               AND (?4 IS NULL OR timestamp >= ?4)
+               AND (?5 IS NULL OR timestamp < ?5)
+             GROUP BY api_key",
+        )?;
+
+        let rows = stmt.query_map(
+            rusqlite::params![method, path, provider, since_str, until_str],
+            |row| {
+                let api_key: String = row.get(0)?;
+                let total: i64 = row.get(1)?;
+                let success: i64 = row.get(2)?;
+                let failure: i64 = row.get(3)?;
+                Ok(ProviderKeyStatsAgg {
+                    api_key,
+                    total_requests: total.max(0) as u64,
+                    success_count: success.max(0) as u64,
+                    failure_count: failure.max(0) as u64,
+                })
+            },
+        )?;
+
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
     }
 }
 

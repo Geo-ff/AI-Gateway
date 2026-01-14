@@ -47,6 +47,14 @@ pub struct RequestLog {
 }
 
 #[derive(Debug, Clone)]
+pub struct ProviderKeyStatsAgg {
+    pub api_key: String,
+    pub total_requests: u64,
+    pub success_count: u64,
+    pub failure_count: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct CachedModel {
     pub id: String,
     pub provider: String,

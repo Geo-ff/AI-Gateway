@@ -8,6 +8,7 @@ use crate::server::AppState;
 
 mod admin_logs;
 mod admin_metrics;
+mod admin_provider_key_stats;
 mod admin_prices;
 mod admin_users;
 mod auth;
@@ -159,6 +160,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/admin/metrics/series-models",
             get(admin_metrics::series_models),
+        )
+        .route(
+            "/admin/providers/{provider}/keys/stats",
+            get(admin_provider_key_stats::provider_key_stats),
         )
         .route("/admin/logs/requests", get(admin_logs::list_request_logs))
         .route(

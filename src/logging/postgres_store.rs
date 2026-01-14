@@ -1,14 +1,14 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use tokio_postgres::{Client, NoTls, Row};
 
 use crate::config::settings::{KeyLogStrategy, Provider, ProviderType};
 use crate::error::GatewayError;
 use crate::logging::time::{parse_datetime_string, to_beijing_string};
 use crate::logging::types::ProviderOpLog;
-use crate::logging::{CachedModel, RequestLog};
+use crate::logging::{CachedModel, ProviderKeyStatsAgg, RequestLog};
 use crate::providers::openai::Model;
 use crate::routing::{KeyRotationStrategy, ProviderKeyEntry};
 use crate::server::storage_traits::{
@@ -689,6 +689,60 @@ impl RequestLogStore for PgLogStore {
             } else {
                 Ok(None)
             }
+        })
+    }
+
+    fn aggregate_provider_key_stats<'a>(
+        &'a self,
+        method: &'a str,
+        path: &'a str,
+        provider: &'a str,
+        since: Option<DateTime<Utc>>,
+        until: Option<DateTime<Utc>>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<ProviderKeyStatsAgg>>> {
+        Box::pin(async move {
+            let since_str = since.as_ref().map(to_beijing_string);
+            // 由于时间戳按秒存储（无小数），这里将上界向后推 1 秒以避免“同秒”被排除
+            let until_str = until
+                .as_ref()
+                .map(|dt| to_beijing_string(&(*dt + Duration::seconds(1))));
+
+            let client = self.pool.pick();
+            let rows = client
+                .query(
+                    "SELECT api_key,
+                            COUNT(*)::bigint as total_requests,
+                            SUM(CASE WHEN status_code < 400 THEN 1 ELSE 0 END)::bigint as success_count,
+                            SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END)::bigint as failure_count
+                     FROM request_logs
+                     WHERE method = $1
+                       AND path = $2
+                       AND provider = $3
+                       AND api_key IS NOT NULL
+                       AND ($4 IS NULL OR timestamp >= $4)
+                       AND ($5 IS NULL OR timestamp < $5)
+                     GROUP BY api_key",
+                    &[&method, &path, &provider, &since_str, &until_str],
+                )
+                .await
+                .map_err(pg_err)?;
+
+            let mut out = Vec::new();
+            for row in rows {
+                let api_key = pg_row_opt_string(&row, 0).unwrap_or_default();
+                let total = pg_row_i64_or(&row, 1, 0).max(0) as u64;
+                let success = pg_row_i64_or(&row, 2, 0).max(0) as u64;
+                let failure = pg_row_i64_or(&row, 3, 0).max(0) as u64;
+                if !api_key.is_empty() {
+                    out.push(ProviderKeyStatsAgg {
+                        api_key,
+                        total_requests: total,
+                        success_count: success,
+                        failure_count: failure,
+                    });
+                }
+            }
+            Ok(out)
         })
     }
 
