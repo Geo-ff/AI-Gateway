@@ -714,6 +714,7 @@ impl DatabaseLogger {
                 key_value TEXT NOT NULL,
                 enc INTEGER NOT NULL DEFAULT 0,
                 active INTEGER NOT NULL DEFAULT 1,
+                weight INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 PRIMARY KEY (provider, key_value)
             )",
@@ -726,10 +727,21 @@ impl DatabaseLogger {
                 name TEXT PRIMARY KEY,
                 api_type TEXT NOT NULL,
                 base_url TEXT NOT NULL,
-                models_endpoint TEXT
+                models_endpoint TEXT,
+                key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential'
             )",
             [],
         )?;
+
+        // Best-effort migrations for provider keys/config
+        let _ = conn.execute(
+            "ALTER TABLE provider_keys ADD COLUMN weight INTEGER NOT NULL DEFAULT 1",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE providers ADD COLUMN key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential'",
+            [],
+        );
 
         // Provider-scoped model redirects: (source_model -> target_model)
         conn.execute(

@@ -86,8 +86,16 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(provider_keys::list_provider_keys_raw),
         )
         .route(
+            "/providers/{provider}/keys/config",
+            get(provider_keys::get_provider_keys_config).put(provider_keys::put_provider_keys_config),
+        )
+        .route(
             "/providers/{provider}/keys/toggle",
             post(provider_keys::toggle_provider_key),
+        )
+        .route(
+            "/providers/{provider}/keys/weight",
+            axum::routing::patch(provider_keys::patch_provider_key_weight),
         )
         .route(
             "/providers/{provider}/keys/batch",

@@ -10,6 +10,7 @@ use crate::logging::time::{parse_datetime_string, to_beijing_string};
 use crate::logging::types::ProviderOpLog;
 use crate::logging::{CachedModel, RequestLog};
 use crate::providers::openai::Model;
+use crate::routing::{KeyRotationStrategy, ProviderKeyEntry};
 use crate::server::storage_traits::{
     AdminPublicKeyRecord, BoxFuture, LoginCodeRecord, LoginStore, ModelCache, ProviderStore,
     RequestLogStore, TuiSessionRecord, WebSessionRecord,
@@ -264,12 +265,20 @@ impl PgLogStore {
                 name TEXT PRIMARY KEY,
                 api_type TEXT NOT NULL,
                 base_url TEXT NOT NULL,
-                models_endpoint TEXT
+                models_endpoint TEXT,
+                key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential'
             )"#,
                 &[],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("Failed to init providers: {}", e)))?;
+        // best-effort migrations for existing deployments
+        let _ = client
+            .execute(
+                "ALTER TABLE providers ADD COLUMN key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential'",
+                &[],
+            )
+            .await;
         client
             .execute(
                 r#"CREATE TABLE IF NOT EXISTS provider_keys (
@@ -277,6 +286,7 @@ impl PgLogStore {
                 key_value TEXT NOT NULL,
                 enc BOOLEAN NOT NULL DEFAULT FALSE,
                 active BOOLEAN NOT NULL DEFAULT TRUE,
+                weight INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 PRIMARY KEY (provider, key_value)
             )"#,
@@ -284,6 +294,12 @@ impl PgLogStore {
             )
             .await
             .map_err(|e| GatewayError::Config(format!("Failed to init provider_keys: {}", e)))?;
+        let _ = client
+            .execute(
+                "ALTER TABLE provider_keys ADD COLUMN weight INTEGER NOT NULL DEFAULT 1",
+                &[],
+            )
+            .await;
 
         client
             .execute(
@@ -1135,6 +1151,42 @@ impl ProviderStore for PgLogStore {
         })
     }
 
+    fn get_provider_key_rotation_strategy<'a>(
+        &'a self,
+        provider: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<KeyRotationStrategy>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "SELECT key_rotation_strategy FROM providers WHERE name = $1 LIMIT 1",
+                    &[&provider],
+                )
+                .await
+                .map_err(pg_err)?;
+            let value = row.as_ref().map(|r| pg_row_string(r, 0));
+            Ok(KeyRotationStrategy::from_db_value(value.as_deref()))
+        })
+    }
+
+    fn set_provider_key_rotation_strategy<'a>(
+        &'a self,
+        provider: &'a str,
+        strategy: KeyRotationStrategy,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let affected = client
+                .execute(
+                    "UPDATE providers SET key_rotation_strategy = $2 WHERE name = $1",
+                    &[&provider, &strategy.as_db_value()],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(affected > 0)
+        })
+    }
+
     fn get_provider_keys<'a>(
         &'a self,
         provider: &'a str,
@@ -1181,7 +1233,7 @@ impl ProviderStore for PgLogStore {
                 let client = self.pool.pick();
                 client
                     .execute(
-                        "INSERT INTO provider_keys (provider, key_value, enc, active, created_at) VALUES ($1,$2,$3,TRUE,$4)",
+                        "INSERT INTO provider_keys (provider, key_value, enc, active, weight, created_at) VALUES ($1,$2,$3,TRUE,1,$4)",
                         &[&provider, &stored, &enc, &now],
                     )
                     .await
@@ -1225,12 +1277,12 @@ impl ProviderStore for PgLogStore {
         &'a self,
         provider: &'a str,
         strategy: &'a Option<KeyLogStrategy>,
-    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, bool)>>> {
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<ProviderKeyEntry>>> {
         Box::pin(async move {
             let client = self.pool.pick();
             let rows = client
                 .query(
-                    "SELECT key_value, enc, active FROM provider_keys WHERE provider = $1 ORDER BY created_at",
+                    "SELECT key_value, enc, active, weight FROM provider_keys WHERE provider = $1 ORDER BY created_at",
                     &[&provider],
                 )
                 .await
@@ -1240,13 +1292,49 @@ impl ProviderStore for PgLogStore {
                 let value = pg_row_string(&r, 0);
                 let enc = pg_row_bool_or(&r, 1, false);
                 let active = pg_row_bool_or(&r, 2, true);
+                let weight = pg_row_u32_or(&r, 3, 1);
                 let decrypted =
                     crate::crypto::unprotect(strategy, provider, &value, enc).unwrap_or_default();
                 if !decrypted.is_empty() {
-                    out.push((decrypted, active));
+                    out.push(ProviderKeyEntry {
+                        value: decrypted,
+                        active,
+                        weight: if weight >= 1 { weight } else { 1 },
+                    });
                 }
             }
             Ok(out)
+        })
+    }
+
+    fn set_provider_key_weight<'a>(
+        &'a self,
+        provider: &'a str,
+        key: &'a str,
+        weight: u32,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let (stored, enc) = crate::crypto::protect(strategy, provider, key);
+            let client = self.pool.pick();
+            let mut affected = client
+                .execute(
+                    "UPDATE provider_keys SET weight = $3 WHERE provider = $1 AND key_value = $2",
+                    &[&provider, &stored, &weight],
+                )
+                .await
+                .map_err(pg_err)?;
+            if enc {
+                let client = self.pool.pick();
+                affected += client
+                    .execute(
+                        "UPDATE provider_keys SET weight = $3 WHERE provider = $1 AND key_value = $2",
+                        &[&provider, &key, &weight],
+                    )
+                    .await
+                    .map_err(pg_err)?;
+            }
+            Ok(affected > 0)
         })
     }
 

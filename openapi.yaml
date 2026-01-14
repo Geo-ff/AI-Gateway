@@ -3402,6 +3402,10 @@ paths:
                         active:
                           type: boolean
                           description: 是否启用
+                        weight:
+                          type: integer
+                          minimum: 1
+                          description: 权重（>=1）
                   total:
                     type: integer
         '401':
@@ -3418,6 +3422,213 @@ paths:
                 $ref: '#/components/schemas/Error'
         '404':
           description: 提供商不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /providers/{provider}/keys/config:
+    get:
+      summary: 获取提供商密钥策略配置（含密钥列表）
+      description: 返回该提供商的密钥轮询策略配置与密钥列表（含权重与启用状态）
+      operationId: getProviderKeysConfig
+      tags:
+        - Providers
+      security:
+        - AccessToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: 搜索关键字（可选，匹配原文或脱敏值）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  strategy:
+                    type: string
+                    enum: [sequential, random, weighted_sequential, weighted_random]
+                    description: 当前密钥轮询策略
+                  default_strategy:
+                    type: string
+                    enum: [sequential, random, weighted_sequential, weighted_random]
+                    description: 默认策略
+                  strategies:
+                    type: array
+                    items:
+                      type: string
+                      enum: [sequential, random, weighted_sequential, weighted_random]
+                    description: 可选策略列表
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        value:
+                          type: string
+                          description: 原文密钥
+                        masked:
+                          type: string
+                          description: 脱敏密钥
+                        active:
+                          type: boolean
+                          description: 是否启用
+                        weight:
+                          type: integer
+                          minimum: 1
+                          description: 权重（>=1）
+                  total:
+                    type: integer
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 提供商不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    put:
+      summary: 更新提供商密钥轮询策略
+      description: 更新该提供商的密钥轮询策略配置
+      operationId: updateProviderKeyRotationStrategy
+      tags:
+        - Providers
+      security:
+        - AccessToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                strategy:
+                  type: string
+                  enum: [sequential, random, weighted_sequential, weighted_random]
+                  description: 密钥轮询策略
+              required:
+                - strategy
+      responses:
+        '200':
+          description: 成功更新
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 提供商不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /providers/{provider}/keys/weight:
+    patch:
+      summary: 更新提供商单个密钥权重
+      description: 根据原文密钥更新权重（权重必须为 >=1 的整数）
+      operationId: updateProviderKeyWeight
+      tags:
+        - Providers
+      security:
+        - AccessToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                key:
+                  type: string
+                  description: 原文API密钥
+                weight:
+                  type: integer
+                  minimum: 1
+                  description: 权重（>=1）
+              required:
+                - key
+                - weight
+      responses:
+        '200':
+          description: 成功更新
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 提供商或密钥不存在
           content:
             application/json:
               schema:

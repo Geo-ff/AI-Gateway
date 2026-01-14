@@ -1,6 +1,7 @@
 use rusqlite::{OptionalExtension, Result};
 
 use crate::config::settings::{KeyLogStrategy, Provider, ProviderType};
+use crate::routing::KeyRotationStrategy;
 
 use super::database::DatabaseLogger;
 
@@ -113,6 +114,30 @@ impl DatabaseLogger {
         tx.execute("DELETE FROM model_redirects WHERE provider = ?1", [name])?;
         let affected = tx.execute("DELETE FROM providers WHERE name = ?1", [name])?;
         tx.commit()?;
+        Ok(affected > 0)
+    }
+
+    pub async fn get_provider_key_rotation_strategy(
+        &self,
+        provider: &str,
+    ) -> Result<KeyRotationStrategy> {
+        let conn = self.connection.lock().await;
+        let mut stmt =
+            conn.prepare("SELECT key_rotation_strategy FROM providers WHERE name = ?1 LIMIT 1")?;
+        let value: Option<String> = stmt.query_row([provider], |row| row.get(0)).optional()?;
+        Ok(KeyRotationStrategy::from_db_value(value.as_deref()))
+    }
+
+    pub async fn set_provider_key_rotation_strategy(
+        &self,
+        provider: &str,
+        strategy: KeyRotationStrategy,
+    ) -> Result<bool> {
+        let conn = self.connection.lock().await;
+        let affected = conn.execute(
+            "UPDATE providers SET key_rotation_strategy = ?2 WHERE name = ?1",
+            (provider, strategy.as_db_value()),
+        )?;
         Ok(affected > 0)
     }
 }

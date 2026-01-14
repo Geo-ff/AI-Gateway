@@ -23,24 +23,29 @@ pub async fn select_provider_for_model(
             .ok()
             .flatten()
         {
-            let db_keys = app_state
+            let keys = app_state
                 .providers
-                .get_provider_keys(provider_name, &app_state.config.logging.key_log_strategy)
+                .list_provider_keys_raw(provider_name, &app_state.config.logging.key_log_strategy)
                 .await
                 .unwrap_or_default();
-            if db_keys.is_empty() {
+            let strategy = app_state
+                .providers
+                .get_provider_key_rotation_strategy(provider_name)
+                .await
+                .unwrap_or_default();
+            let api_key = app_state
+                .load_balancer_state
+                .select_provider_key(provider_name, strategy, &keys)?;
+            if api_key.is_empty() {
                 return Err(GatewayError::from(BalanceError::NoApiKeysAvailable));
             }
-            // Provider pinned by model prefix: still apply key strategy for this provider.
-            let mut provider = provider;
-            provider.api_keys = db_keys;
-            let lb = LoadBalancer::with_state(
-                vec![provider],
-                app_state.config.load_balancing.strategy.clone(),
-                app_state.load_balancer_state.clone(),
-            );
-            let selected = lb.select_provider().map_err(GatewayError::from)?;
-            return Ok((selected, parsed_model));
+            return Ok((
+                SelectedProvider {
+                    provider,
+                    api_key,
+                },
+                parsed_model,
+            ));
         } else {
             // 指定供应商不存在
             return Err(GatewayError::NotFound(format!(
@@ -59,22 +64,57 @@ pub async fn select_provider_for_model(
 
 // 基于数据库中可用的供应商进行选择（替代文件配置）
 pub async fn select_provider(app_state: &AppState) -> Result<SelectedProvider, BalanceError> {
-    // 从数据库读取所有供应商，并为其填充动态密钥
-    let mut providers = app_state
+    let providers = app_state
         .providers
-        .list_providers_with_keys(&app_state.config.logging.key_log_strategy)
+        .list_providers()
         .await
         .map_err(|_| BalanceError::NoProvidersAvailable)?;
 
-    // 仅保留至少一个可用密钥的供应商
-    providers.retain(|p| !p.api_keys.is_empty());
+    if providers.is_empty() {
+        return Err(BalanceError::NoProvidersAvailable);
+    }
+
+    let mut candidates: Vec<crate::config::Provider> = Vec::new();
+    let mut keys_by_provider: std::collections::HashMap<String, Vec<crate::routing::ProviderKeyEntry>> =
+        std::collections::HashMap::new();
+
+    for p in providers {
+        let keys = app_state
+            .providers
+            .list_provider_keys_raw(&p.name, &app_state.config.logging.key_log_strategy)
+            .await
+            .unwrap_or_default();
+        let has_active = keys.iter().any(|k| k.active && !k.value.is_empty() && k.weight >= 1);
+        if has_active {
+            keys_by_provider.insert(p.name.clone(), keys);
+            candidates.push(p);
+        }
+    }
+
+    if candidates.is_empty() {
+        return Err(BalanceError::NoApiKeysAvailable);
+    }
+
     let load_balancer = LoadBalancer::with_state(
-        providers,
+        candidates,
         app_state.config.load_balancing.strategy.clone(),
         app_state.load_balancer_state.clone(),
     );
-    let selected = load_balancer.select_provider()?;
-    Ok(selected)
+    let provider = load_balancer.select_provider_only()?;
+
+    let keys = keys_by_provider
+        .remove(&provider.name)
+        .unwrap_or_default();
+    let strategy = app_state
+        .providers
+        .get_provider_key_rotation_strategy(&provider.name)
+        .await
+        .unwrap_or_default();
+    let api_key = app_state
+        .load_balancer_state
+        .select_provider_key(&provider.name, strategy, &keys)?;
+
+    Ok(SelectedProvider { provider, api_key })
 }
 
 // 根据选中的供应商和解析的模型调用对应的聊天补全接口

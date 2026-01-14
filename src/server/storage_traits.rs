@@ -5,6 +5,7 @@ use crate::config::settings::{KeyLogStrategy, Provider};
 use crate::logging::types::ProviderOpLog;
 use crate::logging::{CachedModel, DatabaseLogger, RequestLog};
 use crate::providers::openai::Model;
+use crate::routing::{KeyRotationStrategy, ProviderKeyEntry};
 use chrono::{DateTime, Utc};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -120,6 +121,17 @@ pub trait ProviderStore: Send + Sync {
     fn list_providers<'a>(&'a self) -> BoxFuture<'a, rusqlite::Result<Vec<Provider>>>;
     fn delete_provider<'a>(&'a self, name: &'a str) -> BoxFuture<'a, rusqlite::Result<bool>>;
 
+    fn get_provider_key_rotation_strategy<'a>(
+        &'a self,
+        provider: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<KeyRotationStrategy>>;
+
+    fn set_provider_key_rotation_strategy<'a>(
+        &'a self,
+        provider: &'a str,
+        strategy: KeyRotationStrategy,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>>;
+
     fn get_provider_keys<'a>(
         &'a self,
         provider: &'a str,
@@ -142,7 +154,15 @@ pub trait ProviderStore: Send + Sync {
         &'a self,
         provider: &'a str,
         strategy: &'a Option<KeyLogStrategy>,
-    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, bool)>>>;
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<ProviderKeyEntry>>>;
+
+    fn set_provider_key_weight<'a>(
+        &'a self,
+        provider: &'a str,
+        key: &'a str,
+        weight: u32,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>>;
 
     fn set_provider_key_active<'a>(
         &'a self,
@@ -487,6 +507,21 @@ impl ProviderStore for DatabaseLogger {
     fn delete_provider<'a>(&'a self, name: &'a str) -> BoxFuture<'a, rusqlite::Result<bool>> {
         Box::pin(async move { self.delete_provider(name).await })
     }
+
+    fn get_provider_key_rotation_strategy<'a>(
+        &'a self,
+        provider: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<KeyRotationStrategy>> {
+        Box::pin(async move { self.get_provider_key_rotation_strategy(provider).await })
+    }
+
+    fn set_provider_key_rotation_strategy<'a>(
+        &'a self,
+        provider: &'a str,
+        strategy: KeyRotationStrategy,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move { self.set_provider_key_rotation_strategy(provider, strategy).await })
+    }
     fn get_provider_keys<'a>(
         &'a self,
         provider: &'a str,
@@ -515,8 +550,18 @@ impl ProviderStore for DatabaseLogger {
         &'a self,
         provider: &'a str,
         strategy: &'a Option<KeyLogStrategy>,
-    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, bool)>>> {
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<ProviderKeyEntry>>> {
         Box::pin(async move { self.list_provider_keys_raw(provider, strategy).await })
+    }
+
+    fn set_provider_key_weight<'a>(
+        &'a self,
+        provider: &'a str,
+        key: &'a str,
+        weight: u32,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move { self.set_provider_key_weight(provider, key, weight, strategy).await })
     }
 
     fn set_provider_key_active<'a>(
