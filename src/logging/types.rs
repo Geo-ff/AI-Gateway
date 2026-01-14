@@ -5,6 +5,7 @@ pub const REQ_TYPE_CHAT_ONCE: &str = "chat_once";
 pub const REQ_TYPE_CHAT_STREAM: &str = "chat_stream";
 pub const REQ_TYPE_MODELS_LIST: &str = "models_list";
 pub const REQ_TYPE_PROVIDER_MODELS_LIST: &str = "provider_models_list";
+pub const REQ_TYPE_PROVIDER_MODELS_BASEURL_LIST: &str = "provider_models_baseurl_list";
 pub const REQ_TYPE_PROVIDER_KEY_ADD: &str = "provider_key_add";
 pub const REQ_TYPE_PROVIDER_KEY_DELETE: &str = "provider_key_delete";
 pub const REQ_TYPE_PROVIDER_KEY_LIST: &str = "provider_key_list";

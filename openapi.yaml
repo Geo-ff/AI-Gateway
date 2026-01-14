@@ -1160,6 +1160,57 @@ components:
         - base_url
         - api_keys
 
+    ProviderModelsListRequest:
+      type: object
+      properties:
+        api_type:
+          type: string
+          enum: [openai, anthropic, zhipu]
+          description: 提供商类型
+        base_url:
+          type: string
+          description: 上游 API 基础 URL（仅允许 http/https，禁止本机/内网）
+        models_endpoint:
+          type: string
+          nullable: true
+          description: |
+            可选：自定义模型列表端点。
+            - 以 `/` 开头：将拼接到 base_url
+            - 以 `http(s)://` 开头：使用该完整 URL（会单独进行 SSRF 校验）
+        provider:
+          type: string
+          nullable: true
+          description: |
+            可选：已存在的提供商名称（用于从后端选择一个可用 Key 进行请求）。
+        api_key:
+          type: string
+          nullable: true
+          description: |
+            可选：临时 Key（仅用于本接口查询模型列表；后端不会保存，也不会写入日志）。
+          writeOnly: true
+      required:
+        - api_type
+        - base_url
+
+    ProviderModelsListResponse:
+      type: object
+      properties:
+        models:
+          type: array
+          items:
+            type: string
+          description: 模型 ID 列表
+        raw_count:
+          type: integer
+          description: 上游返回（去重后）的模型数量
+        cached:
+          type: boolean
+          description: 是否命中后端短 TTL 缓存
+      required:
+        - models
+        - raw_count
+        - cached
+
     # 模型
     Model:
       type: object
@@ -3022,6 +3073,53 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Provider'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /providers/models/list:
+    post:
+      summary: 通过 base_url 获取可用模型列表
+      description: |
+        根据 api_type + base_url（以及可选 models_endpoint / provider / 临时 api_key）向上游查询模型列表。
+        - 安全：仅允许 http/https，禁止本机/内网地址；禁用重定向
+        - 兼容：OpenAI 默认查询 `/v1/models`（若 base_url 以 `/v1` 结尾则查询 `/models`）
+        - 其他类型：未提供 models_endpoint 时返回友好提示
+      operationId: listProviderModelsByBaseUrl
+      tags:
+        - Providers
+      security:
+        - AccessToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderModelsListRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderModelsListResponse'
         '400':
           description: 请求参数错误
           content:

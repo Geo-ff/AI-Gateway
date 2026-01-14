@@ -6,6 +6,7 @@ pub(crate) mod model_parser;
 pub(crate) mod model_redirect;
 pub(crate) mod provider_dispatch;
 pub(crate) mod request_logging;
+pub(crate) mod ssrf;
 pub(crate) mod storage_traits;
 pub(crate) mod streaming;
 pub(crate) mod util;

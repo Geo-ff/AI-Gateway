@@ -26,6 +26,7 @@ mod me_tokens;
 mod model_prices;
 mod model_redirects;
 mod models;
+mod provider_models_list;
 mod provider_keys;
 mod providers;
 mod token_info;
@@ -112,6 +113,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/providers",
             get(providers::list_providers).post(providers::create_provider),
+        )
+        .route(
+            "/providers/models/list",
+            post(provider_models_list::list_models_by_base_url),
         )
         .route(
             "/providers/{provider}",
