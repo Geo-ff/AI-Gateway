@@ -128,6 +128,11 @@ pub trait ProviderStore: Send + Sync {
     ) -> BoxFuture<'a, rusqlite::Result<Option<Provider>>>;
     fn list_providers<'a>(&'a self) -> BoxFuture<'a, rusqlite::Result<Vec<Provider>>>;
     fn delete_provider<'a>(&'a self, name: &'a str) -> BoxFuture<'a, rusqlite::Result<bool>>;
+    fn set_provider_enabled<'a>(
+        &'a self,
+        provider: &'a str,
+        enabled: bool,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>>;
 
     fn get_provider_key_rotation_strategy<'a>(
         &'a self,
@@ -528,6 +533,13 @@ impl ProviderStore for DatabaseLogger {
     }
     fn delete_provider<'a>(&'a self, name: &'a str) -> BoxFuture<'a, rusqlite::Result<bool>> {
         Box::pin(async move { self.delete_provider(name).await })
+    }
+    fn set_provider_enabled<'a>(
+        &'a self,
+        provider: &'a str,
+        enabled: bool,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move { self.set_provider_enabled(provider, enabled).await })
     }
 
     fn get_provider_key_rotation_strategy<'a>(

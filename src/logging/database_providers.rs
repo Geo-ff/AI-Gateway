@@ -49,7 +49,7 @@ impl DatabaseLogger {
     pub async fn get_provider(&self, name: &str) -> Result<Option<Provider>> {
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT name, api_type, base_url, models_endpoint FROM providers WHERE name = ?1 LIMIT 1",
+            "SELECT name, api_type, base_url, models_endpoint, enabled FROM providers WHERE name = ?1 LIMIT 1",
         )?;
         let provider = stmt
             .query_row([name], |row| {
@@ -57,12 +57,14 @@ impl DatabaseLogger {
                 let api_type: String = row.get(1)?;
                 let base_url: String = row.get(2)?;
                 let models_endpoint: Option<String> = row.get(3)?;
+                let enabled: i64 = row.get(4)?;
                 Ok(Provider {
                     name,
                     api_type: provider_type_from_str(&api_type),
                     base_url,
                     api_keys: Vec::new(),
                     models_endpoint,
+                    enabled: enabled != 0,
                 })
             })
             .optional()?;
@@ -72,19 +74,21 @@ impl DatabaseLogger {
     pub async fn list_providers(&self) -> Result<Vec<Provider>> {
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT name, api_type, base_url, models_endpoint FROM providers ORDER BY name",
+            "SELECT name, api_type, base_url, models_endpoint, enabled FROM providers ORDER BY name",
         )?;
         let rows = stmt.query_map([], |row| {
             let name: String = row.get(0)?;
             let api_type: String = row.get(1)?;
             let base_url: String = row.get(2)?;
             let models_endpoint: Option<String> = row.get(3)?;
+            let enabled: i64 = row.get(4)?;
             Ok(Provider {
                 name,
                 api_type: provider_type_from_str(&api_type),
                 base_url,
                 api_keys: Vec::new(),
                 models_endpoint,
+                enabled: enabled != 0,
             })
         })?;
         let mut out = Vec::new();
@@ -92,6 +96,15 @@ impl DatabaseLogger {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    pub async fn set_provider_enabled(&self, name: &str, enabled: bool) -> Result<bool> {
+        let conn = self.connection.lock().await;
+        let affected = conn.execute(
+            "UPDATE providers SET enabled = ?2 WHERE name = ?1",
+            (name, if enabled { 1 } else { 0 }),
+        )?;
+        Ok(affected > 0)
     }
 
     #[allow(dead_code)]

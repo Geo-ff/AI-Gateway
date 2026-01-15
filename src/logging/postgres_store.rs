@@ -266,6 +266,7 @@ impl PgLogStore {
                 api_type TEXT NOT NULL,
                 base_url TEXT NOT NULL,
                 models_endpoint TEXT,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
                 key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential'
             )"#,
                 &[],
@@ -273,6 +274,12 @@ impl PgLogStore {
             .await
             .map_err(|e| GatewayError::Config(format!("Failed to init providers: {}", e)))?;
         // best-effort migrations for existing deployments
+        let _ = client
+            .execute(
+                "ALTER TABLE providers ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT TRUE",
+                &[],
+            )
+            .await;
         let _ = client
             .execute(
                 "ALTER TABLE providers ADD COLUMN key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential'",
@@ -1141,7 +1148,7 @@ impl ProviderStore for PgLogStore {
         Box::pin(async move {
             let client = self.pool.pick();
             let row = client
-                .query_opt("SELECT name, api_type, base_url, models_endpoint FROM providers WHERE name = $1", &[&name])
+                .query_opt("SELECT name, api_type, base_url, models_endpoint, enabled FROM providers WHERE name = $1", &[&name])
                 .await
                 .map_err(pg_err)?;
             Ok(row.map(|r| Provider {
@@ -1150,6 +1157,7 @@ impl ProviderStore for PgLogStore {
                 base_url: pg_row_string(&r, 2),
                 api_keys: Vec::new(),
                 models_endpoint: pg_row_opt_string(&r, 3),
+                enabled: pg_row_bool_or(&r, 4, true),
             }))
         })
     }
@@ -1159,7 +1167,7 @@ impl ProviderStore for PgLogStore {
             let client = self.pool.pick();
             let rows = client
                 .query(
-                    "SELECT name, api_type, base_url, models_endpoint FROM providers ORDER BY name",
+                    "SELECT name, api_type, base_url, models_endpoint, enabled FROM providers ORDER BY name",
                     &[],
                 )
                 .await
@@ -1172,6 +1180,7 @@ impl ProviderStore for PgLogStore {
                     base_url: pg_row_string(&r, 2),
                     api_keys: Vec::new(),
                     models_endpoint: pg_row_opt_string(&r, 3),
+                    enabled: pg_row_bool_or(&r, 4, true),
                 });
             }
             Ok(out)
@@ -1202,6 +1211,24 @@ impl ProviderStore for PgLogStore {
                 .await
                 .map_err(pg_err)?;
             Ok(res > 0)
+        })
+    }
+
+    fn set_provider_enabled<'a>(
+        &'a self,
+        provider: &'a str,
+        enabled: bool,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let affected = client
+                .execute(
+                    "UPDATE providers SET enabled = $2 WHERE name = $1",
+                    &[&provider, &enabled],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(affected > 0)
         })
     }
 

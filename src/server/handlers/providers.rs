@@ -1,6 +1,7 @@
 use axum::{
     Json,
     extract::{Path, State},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -10,7 +11,7 @@ use crate::config::settings::{Provider, ProviderType};
 use crate::error::GatewayError;
 use crate::logging::types::{
     ProviderOpLog, REQ_TYPE_PROVIDER_CREATE, REQ_TYPE_PROVIDER_DELETE, REQ_TYPE_PROVIDER_GET,
-    REQ_TYPE_PROVIDER_LIST, REQ_TYPE_PROVIDER_UPDATE,
+    REQ_TYPE_PROVIDER_ENABLED_SET, REQ_TYPE_PROVIDER_LIST, REQ_TYPE_PROVIDER_UPDATE,
 };
 use crate::server::AppState;
 use crate::server::request_logging::log_simple_request;
@@ -32,6 +33,11 @@ pub struct ProviderUpdatePayload {
     pub models_endpoint: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ProviderTogglePayload {
+    pub enabled: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ProviderOut {
     pub name: String,
@@ -39,6 +45,7 @@ pub struct ProviderOut {
     pub base_url: String,
     pub api_keys: Vec<String>,
     pub models_endpoint: Option<String>,
+    pub enabled: bool,
 }
 
 impl ProviderOut {
@@ -49,6 +56,7 @@ impl ProviderOut {
             base_url: p.base_url,
             api_keys: p.api_keys.into_iter().map(|k| mask_key(&k)).collect(),
             models_endpoint: p.models_endpoint,
+            enabled: p.enabled,
         }
     }
 }
@@ -205,6 +213,7 @@ pub async fn create_provider(
         base_url: payload.base_url,
         api_keys: Vec::new(),
         models_endpoint: payload.models_endpoint,
+        enabled: true,
     };
     let inserted = match app_state.providers.insert_provider(&p).await {
         Ok(v) => v,
@@ -310,6 +319,13 @@ pub async fn update_provider(
         base_url: payload.base_url,
         api_keys: Vec::new(),
         models_endpoint: payload.models_endpoint,
+        enabled: app_state
+            .providers
+            .get_provider(&name)
+            .await
+            .map_err(GatewayError::Db)?
+            .map(|p| p.enabled)
+            .unwrap_or(true),
     };
     app_state
         .providers
@@ -347,6 +363,133 @@ pub async fn update_provider(
     )
     .await;
     Ok(Json(ProviderOut::from_provider(p)))
+}
+
+pub async fn toggle_provider(
+    Path(name): Path<String>,
+    State(app_state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<ProviderTogglePayload>,
+) -> Result<Response, GatewayError> {
+    let start_time = Utc::now();
+    let provided_token = bearer_token(&headers);
+    let path = format!("/providers/{}/toggle", name);
+
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
+        let _ = app_state
+            .log_store
+            .log_provider_op(ProviderOpLog {
+                id: None,
+                timestamp: start_time,
+                operation: REQ_TYPE_PROVIDER_ENABLED_SET.to_string(),
+                provider: Some(name.clone()),
+                details: Some(e.to_string()),
+            })
+            .await;
+        let code = e.status_code().as_u16();
+        let token_log = token_for_log(provided_token.as_deref());
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &path,
+            REQ_TYPE_PROVIDER_ENABLED_SET,
+            None,
+            Some(name.clone()),
+            token_log,
+            code,
+            Some("auth failed".into()),
+        )
+        .await;
+        return Err(e);
+    }
+
+    if !app_state
+        .providers
+        .provider_exists(&name)
+        .await
+        .map_err(GatewayError::Db)?
+    {
+        let token_log = token_for_log(provided_token.as_deref());
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &path,
+            REQ_TYPE_PROVIDER_ENABLED_SET,
+            None,
+            Some(name.clone()),
+            token_log,
+            404,
+            Some("not found".into()),
+        )
+        .await;
+        return Err(GatewayError::NotFound(format!(
+            "Provider '{}' not found",
+            name
+        )));
+    }
+
+    let updated = app_state
+        .providers
+        .set_provider_enabled(&name, payload.enabled)
+        .await
+        .map_err(GatewayError::Db)?;
+
+    let _ = app_state
+        .log_store
+        .log_provider_op(ProviderOpLog {
+            id: None,
+            timestamp: start_time,
+            operation: REQ_TYPE_PROVIDER_ENABLED_SET.to_string(),
+            provider: Some(name.clone()),
+            details: Some(
+                serde_json::to_string(&serde_json::json!({ "enabled": payload.enabled }))
+                    .unwrap_or_default(),
+            ),
+        })
+        .await;
+
+    if updated {
+        let token_log = token_for_log(provided_token.as_deref());
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &path,
+            REQ_TYPE_PROVIDER_ENABLED_SET,
+            None,
+            Some(name.clone()),
+            token_log,
+            200,
+            None,
+        )
+        .await;
+        Ok((
+            axum::http::StatusCode::OK,
+            Json(serde_json::json!({ "success": true })),
+        )
+            .into_response())
+    } else {
+        let token_log = token_for_log(provided_token.as_deref());
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &path,
+            REQ_TYPE_PROVIDER_ENABLED_SET,
+            None,
+            Some(name.clone()),
+            token_log,
+            404,
+            Some("not found".into()),
+        )
+        .await;
+        Err(GatewayError::NotFound(format!(
+            "Provider '{}' not found",
+            name
+        )))
+    }
 }
 
 pub async fn delete_provider(

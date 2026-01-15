@@ -17,6 +17,8 @@ pub struct Provider {
     pub base_url: String,
     pub api_keys: Vec<String>,
     pub models_endpoint: Option<String>,
+    #[serde(default = "default_provider_enabled")]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +90,10 @@ impl Default for LoggingConfig {
 
 fn default_database_path() -> String {
     "data/gateway.db".to_string()
+}
+
+fn default_provider_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

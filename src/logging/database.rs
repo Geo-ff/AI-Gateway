@@ -728,6 +728,7 @@ impl DatabaseLogger {
                 api_type TEXT NOT NULL,
                 base_url TEXT NOT NULL,
                 models_endpoint TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
                 key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential'
             )",
             [],
@@ -736,6 +737,10 @@ impl DatabaseLogger {
         // Best-effort migrations for provider keys/config
         let _ = conn.execute(
             "ALTER TABLE provider_keys ADD COLUMN weight INTEGER NOT NULL DEFAULT 1",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE providers ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
             [],
         );
         let _ = conn.execute(

@@ -1154,11 +1154,15 @@ components:
           type: string
           nullable: true
           description: 模型列表端点
+        enabled:
+          type: boolean
+          description: 是否启用（禁用后调度不会选择该提供商）
       required:
         - name
         - api_type
         - base_url
         - api_keys
+        - enabled
 
     ProviderModelsListRequest:
       type: object
@@ -3264,6 +3268,65 @@ paths:
       responses:
         '200':
           description: 成功删除
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 提供商不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /providers/{provider}/toggle:
+    post:
+      summary: 启用/禁用提供商
+      description: 设置指定提供商是否启用（禁用后调度层不会再选择该提供商）
+      operationId: toggleProvider
+      tags:
+        - Providers
+      security:
+        - AccessToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                  description: true=启用，false=禁用
+              required:
+                - enabled
+      responses:
+        '200':
+          description: 成功响应
           content:
             application/json:
               schema:

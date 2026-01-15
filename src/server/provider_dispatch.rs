@@ -23,6 +23,12 @@ pub async fn select_provider_for_model(
             .ok()
             .flatten()
         {
+            if !provider.enabled {
+                return Err(GatewayError::Forbidden(format!(
+                    "Provider '{}' is disabled",
+                    provider_name
+                )));
+            }
             let keys = app_state
                 .providers
                 .list_provider_keys_raw(provider_name, &app_state.config.logging.key_log_strategy)
@@ -79,6 +85,9 @@ pub async fn select_provider(app_state: &AppState) -> Result<SelectedProvider, B
         std::collections::HashMap::new();
 
     for p in providers {
+        if !p.enabled {
+            continue;
+        }
         let keys = app_state
             .providers
             .list_provider_keys_raw(&p.name, &app_state.config.logging.key_log_strategy)

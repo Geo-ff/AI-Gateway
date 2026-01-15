@@ -255,6 +255,7 @@ mod tests {
             base_url: "http://example.invalid".to_string(),
             api_keys: keys.iter().map(|s| s.to_string()).collect(),
             models_endpoint: None,
+            enabled: true,
         }
     }
 

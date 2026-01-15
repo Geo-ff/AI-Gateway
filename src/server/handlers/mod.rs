@@ -110,6 +110,7 @@ pub fn routes() -> Router<Arc<AppState>> {
                 .put(model_redirects::replace_model_redirects)
                 .delete(model_redirects::delete_model_redirect),
         )
+        .route("/providers/{provider}/toggle", post(providers::toggle_provider))
         .route(
             "/providers",
             get(providers::list_providers).post(providers::create_provider),

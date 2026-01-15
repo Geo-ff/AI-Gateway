@@ -312,6 +312,7 @@ mod tests {
                 base_url: "http://localhost".into(),
                 models_endpoint: None,
                 api_keys: Vec::new(),
+                enabled: true,
             })
             .await
             .unwrap();
