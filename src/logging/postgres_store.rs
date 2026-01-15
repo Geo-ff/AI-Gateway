@@ -719,8 +719,8 @@ impl RequestLogStore for PgLogStore {
                        AND path = $2
                        AND provider = $3
                        AND api_key IS NOT NULL
-                       AND ($4 IS NULL OR timestamp >= $4)
-                       AND ($5 IS NULL OR timestamp < $5)
+                       AND ($4::text IS NULL OR timestamp >= $4::text)
+                       AND ($5::text IS NULL OR timestamp < $5::text)
                      GROUP BY api_key",
                     &[&method, &path, &provider, &since_str, &until_str],
                 )
