@@ -3353,6 +3353,141 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /admin/providers/{provider}/keys/stats:
+    get:
+      summary: 获取提供商密钥统计（按统计口径）
+      description: |
+        返回该提供商下各密钥在指定统计口径内的请求统计（总请求/成功/失败/可用率）。
+
+        优先级（从高到低）：
+        1) `range`
+        2) `start_date`/`end_date`
+        3) `window_minutes`
+      operationId: getAdminProviderKeysStats
+      tags:
+        - Providers
+      security:
+        - AccessToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 提供商名称
+        - name: range
+          in: query
+          schema:
+            type: string
+            enum: [hour, day, week, since_created]
+          description: 统计口径（可选；优先级最高）
+        - name: window_minutes
+          in: query
+          schema:
+            type: integer
+            default: 60
+            minimum: 1
+            maximum: 10080
+          description: 统计窗口（分钟；未指定 range/start_date/end_date 时生效）
+        - name: start_date
+          in: query
+          schema:
+            type: string
+          description: 开始日期（YYYY-MM-DD，可选）
+        - name: end_date
+          in: query
+          schema:
+            type: string
+          description: 结束日期（YYYY-MM-DD，可选）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  window_minutes:
+                    type: integer
+                    format: int64
+                    description: 统计窗口（分钟；range=since_created 时为 0）
+                  start_date:
+                    type: string
+                    nullable: true
+                  end_date:
+                    type: string
+                    nullable: true
+                  generated_at:
+                    type: string
+                    format: date-time
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        masked_key:
+                          type: string
+                          description: 脱敏密钥（4+****+4）
+                        total_requests:
+                          type: integer
+                          format: int64
+                        success_count:
+                          type: integer
+                          format: int64
+                        failure_count:
+                          type: integer
+                          format: int64
+                        availability_rate:
+                          type: integer
+                          format: int32
+                          minimum: 0
+                          maximum: 100
+                      required: [masked_key, total_requests, success_count, failure_count, availability_rate]
+                required: [window_minutes, keys, generated_at]
+              examples:
+                hour:
+                  summary: 近 1 小时
+                  value:
+                    window_minutes: 60
+                    keys:
+                      - masked_key: "sk-a***1234"
+                        total_requests: 12
+                        success_count: 10
+                        failure_count: 2
+                        availability_rate: 83
+                    generated_at: "2025-01-01T00:00:00Z"
+                since_created:
+                  summary: 自创建以来
+                  value:
+                    window_minutes: 0
+                    keys:
+                      - masked_key: "sk-a***1234"
+                        total_requests: 120
+                        success_count: 110
+                        failure_count: 10
+                        availability_rate: 92
+                    generated_at: "2025-01-01T00:00:00Z"
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 提供商不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /providers/{provider}/keys:
     get:
       summary: 获取提供商密钥列表

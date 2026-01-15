@@ -13,7 +13,7 @@ use crate::providers::openai::Model;
 use crate::routing::{KeyRotationStrategy, ProviderKeyEntry};
 use crate::server::storage_traits::{
     AdminPublicKeyRecord, BoxFuture, LoginCodeRecord, LoginStore, ModelCache, ProviderStore,
-    RequestLogStore, TuiSessionRecord, WebSessionRecord,
+    ProviderKeyEntryWithCreatedAt, RequestLogStore, TuiSessionRecord, WebSessionRecord,
 };
 
 fn pg_err<E: std::fmt::Display>(e: E) -> rusqlite::Error {
@@ -1381,6 +1381,44 @@ impl ProviderStore for PgLogStore {
                         value: decrypted,
                         active,
                         weight: if weight >= 1 { weight } else { 1 },
+                    });
+                }
+            }
+            Ok(out)
+        })
+    }
+
+    fn list_provider_keys_raw_with_created_at<'a>(
+        &'a self,
+        provider: &'a str,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<ProviderKeyEntryWithCreatedAt>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let rows = client
+                .query(
+                    "SELECT key_value, enc, active, weight, created_at FROM provider_keys WHERE provider = $1 ORDER BY created_at",
+                    &[&provider],
+                )
+                .await
+                .map_err(pg_err)?;
+            let mut out = Vec::new();
+            for r in rows {
+                let value = pg_row_string(&r, 0);
+                let enc = pg_row_bool_or(&r, 1, false);
+                let active = pg_row_bool_or(&r, 2, true);
+                let weight = pg_row_u32_or(&r, 3, 1);
+                let created_at_raw = pg_row_string(&r, 4);
+                let created_at = parse_datetime_string(&created_at_raw).map_err(pg_err)?;
+
+                let decrypted =
+                    crate::crypto::unprotect(strategy, provider, &value, enc).unwrap_or_default();
+                if !decrypted.is_empty() {
+                    out.push(ProviderKeyEntryWithCreatedAt {
+                        value: decrypted,
+                        active,
+                        weight: if weight >= 1 { weight } else { 1 },
+                        created_at,
                     });
                 }
             }

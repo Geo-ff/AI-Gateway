@@ -1,8 +1,10 @@
-use chrono::Utc;
+use chrono::{NaiveDateTime, TimeZone, Utc};
 use rusqlite::Result;
 
 use super::database::DatabaseLogger;
 use crate::config::settings::KeyLogStrategy;
+use crate::logging::time::{BEIJING_OFFSET, DATETIME_FORMAT};
+use crate::server::storage_traits::ProviderKeyEntryWithCreatedAt;
 use crate::routing::ProviderKeyEntry;
 
 impl DatabaseLogger {
@@ -58,6 +60,63 @@ impl DatabaseLogger {
                 value: decrypted,
                 active: active != 0,
                 weight: weight_u32,
+            })
+        })?;
+
+        let mut out = Vec::new();
+        for r in rows {
+            let entry = r?;
+            if !entry.value.is_empty() {
+                out.push(entry);
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn list_provider_keys_raw_with_created_at(
+        &self,
+        provider: &str,
+        strategy: &Option<KeyLogStrategy>,
+    ) -> Result<Vec<ProviderKeyEntryWithCreatedAt>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT key_value, enc, active, weight, created_at FROM provider_keys WHERE provider = ?1 ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map([provider], |row| {
+            let value: String = row.get(0)?;
+            let enc: i64 = row.get(1)?;
+            let active: i64 = row.get(2)?;
+            let weight: i64 = row.get(3)?;
+            let created_at_raw: String = row.get(4)?;
+
+            let decrypted =
+                crate::crypto::unprotect(strategy, provider, &value, enc != 0).unwrap_or_default();
+
+            let naive = NaiveDateTime::parse_from_str(&created_at_raw, DATETIME_FORMAT).map_err(
+                |e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                },
+            )?;
+            let local = BEIJING_OFFSET
+                .from_local_datetime(&naive)
+                .single()
+                .ok_or_else(|| rusqlite::Error::ExecuteReturnedResults)?;
+            let created_at = local.with_timezone(&Utc);
+
+            let weight_u32 = if weight >= 1 {
+                weight as u32
+            } else {
+                1
+            };
+            Ok(ProviderKeyEntryWithCreatedAt {
+                value: decrypted,
+                active: active != 0,
+                weight: weight_u32,
+                created_at,
             })
         })?;
 

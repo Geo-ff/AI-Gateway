@@ -169,6 +169,12 @@ pub trait ProviderStore: Send + Sync {
         strategy: &'a Option<KeyLogStrategy>,
     ) -> BoxFuture<'a, rusqlite::Result<Vec<ProviderKeyEntry>>>;
 
+    fn list_provider_keys_raw_with_created_at<'a>(
+        &'a self,
+        provider: &'a str,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<ProviderKeyEntryWithCreatedAt>>>;
+
     fn set_provider_key_weight<'a>(
         &'a self,
         provider: &'a str,
@@ -224,6 +230,14 @@ pub struct AdminPublicKeyRecord {
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderKeyEntryWithCreatedAt {
+    pub value: String,
+    pub active: bool,
+    pub weight: u32,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -586,6 +600,17 @@ impl ProviderStore for DatabaseLogger {
         strategy: &'a Option<KeyLogStrategy>,
     ) -> BoxFuture<'a, rusqlite::Result<Vec<ProviderKeyEntry>>> {
         Box::pin(async move { self.list_provider_keys_raw(provider, strategy).await })
+    }
+
+    fn list_provider_keys_raw_with_created_at<'a>(
+        &'a self,
+        provider: &'a str,
+        strategy: &'a Option<KeyLogStrategy>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<ProviderKeyEntryWithCreatedAt>>> {
+        Box::pin(async move {
+            self.list_provider_keys_raw_with_created_at(provider, strategy)
+                .await
+        })
     }
 
     fn set_provider_key_weight<'a>(
