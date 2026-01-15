@@ -19,16 +19,16 @@
 ### 1. 客户端层
 
 > 前端形态声明（与项目路线对齐）：
-> - `gateway_zero/frontend` 与 `gateway_zero/frontend_tui` 为历史遗留/过渡形态：仅用于开发调试与兼容。
+> - 内置旧 Web 前端与旧 TUI 客户端为历史遗留/过渡形态：此前仅用于开发调试与兼容（现已从仓库移除）。
+> - 管理端 UI 请使用独立仓库 `captok`。
 > - 长期主前端为独立仓库 `captok`（`/home/Geoff001/Code/Project/captok`）。
 > - 当 `captok` 完全对接并覆盖核心功能后，将停止维护并计划弃用/移除上述两个内置前端（时间以里程碑为准）。
 > - 迁移原则：新功能只在 `captok` 实现；旧前端仅修关键 bug/安全问题；不再作为默认入口。
 
 系统支持的客户端形态：
 
-- **管理端前端（主）**: `captok`（独立仓库）
-- **Web 前端（Legacy）**: `gateway_zero/frontend`（内置旧 Web 前端）
-- **TUI 客户端（Legacy）**: `gateway_zero/frontend_tui`（内置旧 TUI，终端界面）
+ - **管理端前端（主）**: `captok`（独立仓库）
+- **内置旧前端**: 已移除（此前仅用于开发调试/兼容）
 - **第三方应用**: 任何支持 OpenAI API 的应用（使用 Client Token 认证）
 
 ### 2. 网关入口层

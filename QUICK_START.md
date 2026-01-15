@@ -2,9 +2,9 @@
 
 ## 前端路线声明（重要）
 
-- `gateway_zero/frontend`（旧 Web 前端）与 `gateway_zero/frontend_tui`（旧 TUI）为历史遗留/过渡形态：仅用于开发调试与兼容。
+- 本仓库内置旧 Web 前端与旧 TUI 客户端已移除（此前仅用于开发调试与兼容）。
 - 长期主前端为独立仓库 `captok`（`/home/Geoff001/Code/Project/captok`）。
-- 当 `captok` 与后端对接完成并覆盖所有核心功能后，将停止维护并计划弃用/移除上述两个内置前端（时间以里程碑为准）。
+- 当 `captok` 与后端对接完成并覆盖所有核心功能后，将以其作为唯一主入口（时间以里程碑为准）。
 
 ## 🔑 重要概念：两种认证方式
 
@@ -46,10 +46,6 @@ RUST_LOG=info ./target/release/gateway &
 # 推荐：使用 captok（长期主前端，独立仓库；以 captok README 为准）
 cd /home/Geoff001/Code/Project/captok
 # pnpm dev &
-
-# 可选（Legacy，仅用于开发调试/兼容；后续计划弃用）
-# cd /home/Geoff001/Code/Project/Graduation_Project/gateway_zero/frontend
-# pnpm dev &
 ```
 
 ### 验证服务是否正常
@@ -81,7 +77,7 @@ docker exec -it gateway-postgres psql -U postgres -d gateway -c "\dt"
 **注意**：这个 Token 和 TUI 登录用的管理员密钥是**不同的东西**！
 
 **方式 A：通过管理端 UI 创建**（推荐；优先 `captok`）
-1. 启动管理端 UI：优先 `captok`；`gateway_zero/frontend` 仅用于开发调试/兼容（Legacy，后续计划弃用）
+1. 启动管理端 UI：优先 `captok`；本仓库已移除内置旧前端（此前仅用于开发调试/兼容）
 2. 打开 UI 页面（端口/地址以 UI 项目配置为准）
 3. 按 UI 指引完成登录
 4. 在「令牌管理」页面创建新 Token
@@ -136,10 +132,6 @@ RUST_LOG=info ./target/release/gateway
 ```bash
 # 推荐：使用 captok（长期主前端，独立仓库；以 captok README 为准）
 cd /home/Geoff001/Code/Project/captok
-# pnpm dev
-
-# 可选（Legacy，仅用于开发调试/兼容；后续计划弃用）
-# cd /home/Geoff001/Code/Project/Graduation_Project/gateway_zero/frontend
 # pnpm dev
 ```
 

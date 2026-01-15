@@ -35,7 +35,7 @@
   <text x="350" y="162" text-anchor="middle" class="small-text">React/Vue</text>
   
   <rect x="550" y="120" width="200" height="50" class="component"/>
-  <text x="650" y="145" text-anchor="middle" class="title">TUI 客户端</text>
+  <text x="650" y="145" text-anchor="middle" class="title">TUI 客户端（已移除）</text>
   <text x="650" y="162" text-anchor="middle" class="small-text">终端界面</text>
   
   <rect x="850" y="120" width="200" height="50" class="component"/>
