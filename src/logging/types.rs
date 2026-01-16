@@ -21,6 +21,7 @@ pub const REQ_TYPE_PROVIDER_DELETE: &str = "provider_delete";
 pub const REQ_TYPE_PROVIDER_GET: &str = "provider_get";
 pub const REQ_TYPE_PROVIDER_LIST: &str = "provider_list";
 pub const REQ_TYPE_PROVIDER_ENABLED_SET: &str = "provider_enabled_set";
+pub const REQ_TYPE_PROVIDER_FAVORITE_SET: &str = "provider_favorite_set";
 pub const REQ_TYPE_PROVIDER_MODEL_REDIRECTS_LIST: &str = "provider_model_redirects_list";
 pub const REQ_TYPE_PROVIDER_MODEL_REDIRECTS_SET: &str = "provider_model_redirects_set";
 pub const REQ_TYPE_PROVIDER_MODEL_REDIRECTS_DELETE: &str = "provider_model_redirects_delete";

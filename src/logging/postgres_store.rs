@@ -12,8 +12,9 @@ use crate::logging::{CachedModel, ProviderKeyStatsAgg, RequestLog};
 use crate::providers::openai::Model;
 use crate::routing::{KeyRotationStrategy, ProviderKeyEntry};
 use crate::server::storage_traits::{
-    AdminPublicKeyRecord, BoxFuture, LoginCodeRecord, LoginStore, ModelCache, ProviderStore,
-    ProviderKeyEntryWithCreatedAt, RequestLogStore, TuiSessionRecord, WebSessionRecord,
+    AdminPublicKeyRecord, BoxFuture, FavoriteKind, FavoritesStore, LoginCodeRecord, LoginStore,
+    ModelCache, ProviderStore, ProviderKeyEntryWithCreatedAt, RequestLogStore, TuiSessionRecord,
+    WebSessionRecord,
 };
 
 fn pg_err<E: std::fmt::Display>(e: E) -> rusqlite::Error {
@@ -304,6 +305,33 @@ impl PgLogStore {
         let _ = client
             .execute(
                 "ALTER TABLE provider_keys ADD COLUMN weight INTEGER NOT NULL DEFAULT 1",
+                &[],
+            )
+            .await;
+
+        // Favorites table (used by admin UI)
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS favorites (
+                kind TEXT NOT NULL,
+                target TEXT NOT NULL,
+                favorite BOOLEAN NOT NULL DEFAULT TRUE,
+                PRIMARY KEY (kind, target)
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init favorites: {}", e)))?;
+        // Best-effort migrations for existing deployments
+        let _ = client
+            .execute(
+                "ALTER TABLE favorites ADD COLUMN favorite BOOLEAN NOT NULL DEFAULT TRUE",
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS favorites_kind_favorite_idx ON favorites(kind, favorite)",
                 &[],
             )
             .await;
@@ -939,6 +967,70 @@ impl RequestLogStore for PgLogStore {
                 .await
                 .map_err(pg_err)?;
             Ok(pg_row_f64_or(&row, 0, 0.0))
+        })
+    }
+}
+
+impl FavoritesStore for PgLogStore {
+    fn set_favorite<'a>(
+        &'a self,
+        kind: FavoriteKind,
+        target: &'a str,
+        favorite: bool,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            client
+                .execute(
+                    "INSERT INTO favorites (kind, target, favorite)
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT (kind, target) DO UPDATE SET favorite = EXCLUDED.favorite",
+                    &[&kind.as_str(), &target, &favorite],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(())
+        })
+    }
+
+    fn is_favorite<'a>(
+        &'a self,
+        kind: FavoriteKind,
+        target: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "SELECT favorite FROM favorites WHERE kind = $1 AND target = $2",
+                    &[&kind.as_str(), &target],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(row
+                .and_then(|r| r.try_get::<usize, bool>(0).ok())
+                .unwrap_or(false))
+        })
+    }
+
+    fn list_favorites<'a>(
+        &'a self,
+        kind: FavoriteKind,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<String>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let rows = client
+                .query(
+                    "SELECT target FROM favorites WHERE kind = $1 AND favorite = TRUE",
+                    &[&kind.as_str()],
+                )
+                .await
+                .map_err(pg_err)?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(pg_row_string(&r, 0));
+            }
+            Ok(out)
         })
     }
 }

@@ -15,6 +15,41 @@ type ModelPriceFuture<'a> = BoxFuture<'a, rusqlite::Result<Option<(f64, f64, Opt
 type ModelPriceListFuture<'a> =
     BoxFuture<'a, rusqlite::Result<Vec<(String, String, f64, f64, Option<String>)>>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FavoriteKind {
+    ClientToken,
+    Provider,
+}
+
+impl FavoriteKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FavoriteKind::ClientToken => "client_token",
+            FavoriteKind::Provider => "provider",
+        }
+    }
+}
+
+pub trait FavoritesStore: Send + Sync {
+    fn set_favorite<'a>(
+        &'a self,
+        kind: FavoriteKind,
+        target: &'a str,
+        favorite: bool,
+    ) -> BoxFuture<'a, rusqlite::Result<()>>;
+
+    fn is_favorite<'a>(
+        &'a self,
+        kind: FavoriteKind,
+        target: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>>;
+
+    fn list_favorites<'a>(
+        &'a self,
+        kind: FavoriteKind,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<String>>>;
+}
+
 // 日志存储抽象（可由 SQLite、Postgres 等实现）
 pub trait RequestLogStore: Send + Sync {
     fn log_request<'a>(&'a self, log: RequestLog) -> BoxFuture<'a, rusqlite::Result<i64>>;

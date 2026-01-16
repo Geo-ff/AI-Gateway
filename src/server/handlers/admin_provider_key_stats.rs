@@ -368,6 +368,7 @@ mod tests {
             model_cache: logger.clone(),
             providers: logger.clone(),
             token_store: logger.clone(),
+            favorites_store: logger.clone(),
             login_manager: Arc::new(LoginManager::new(logger.clone())),
             user_store: logger.clone(),
             refresh_token_store: logger.clone(),

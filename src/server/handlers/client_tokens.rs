@@ -12,6 +12,7 @@ use crate::{
     error::GatewayError,
     server::AppState,
 };
+use crate::server::storage_traits::FavoriteKind;
 
 #[derive(Debug, Serialize)]
 pub struct ClientTokenOut {
@@ -34,6 +35,7 @@ pub struct ClientTokenOut {
     pub organization_id: Option<String>,
     pub ip_whitelist: Option<Vec<String>>,
     pub ip_blacklist: Option<Vec<String>>,
+    pub is_favorite: bool,
 }
 
 impl From<ClientToken> for ClientTokenOut {
@@ -61,6 +63,7 @@ impl From<ClientToken> for ClientTokenOut {
             organization_id: t.organization_id,
             ip_whitelist: t.ip_whitelist,
             ip_blacklist: t.ip_blacklist,
+            is_favorite: false,
         }
     }
 }
@@ -201,6 +204,13 @@ pub async fn list_tokens(
         .map_err(GatewayError::Db)?
         .into_iter()
         .collect();
+    let favorites: std::collections::HashSet<String> = app_state
+        .favorites_store
+        .list_favorites(FavoriteKind::ClientToken)
+        .await
+        .map_err(GatewayError::Db)?
+        .into_iter()
+        .collect();
     let tokens = app_state
         .token_store
         .list_tokens()
@@ -211,6 +221,7 @@ pub async fn list_tokens(
             if let Some(count) = usage_counts.get(&token.token) {
                 out.usage_count = *count;
             }
+            out.is_favorite = favorites.contains(&token.id);
             out
         })
         .collect();
@@ -257,6 +268,11 @@ pub async fn get_token(
     match app_state.token_store.get_token_by_id(&id).await? {
         Some(t) => {
             let mut out = ClientTokenOut::from(t.clone());
+            out.is_favorite = app_state
+                .favorites_store
+                .is_favorite(FavoriteKind::ClientToken, &id)
+                .await
+                .map_err(GatewayError::Db)?;
             let usage_counts: std::collections::HashMap<String, i64> = app_state
                 .log_store
                 .count_requests_by_client_token()
@@ -439,6 +455,104 @@ pub async fn toggle_token(
         .await;
         Err(ge)
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FavoritePayload {
+    pub favorite: bool,
+}
+
+pub async fn set_token_favorite(
+    Path(id): Path<String>,
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<FavoritePayload>,
+) -> Result<Json<serde_json::Value>, GatewayError> {
+    let start_time = Utc::now();
+    let provided_token = bearer_token(&headers);
+
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
+        let code = e.status_code().as_u16();
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            "/admin/tokens/{id}/favorite",
+            "client_tokens_favorite_set",
+            None,
+            None,
+            provided_token.as_deref(),
+            code,
+            Some(e.to_string()),
+        )
+        .await;
+        return Err(e);
+    }
+
+    let token_id = id.trim().to_string();
+    if token_id.is_empty() {
+        let ge = GatewayError::Config("id 不能为空".into());
+        let code = ge.status_code().as_u16();
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            "/admin/tokens/{id}/favorite",
+            "client_tokens_favorite_set",
+            None,
+            None,
+            token_for_log(provided_token.as_deref()),
+            code,
+            Some(ge.to_string()),
+        )
+        .await;
+        return Err(ge);
+    }
+
+    let exists = app_state
+        .token_store
+        .get_token_by_id(&token_id)
+        .await?
+        .is_some();
+    if !exists {
+        let ge = GatewayError::NotFound("token not found".into());
+        let code = ge.status_code().as_u16();
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            "/admin/tokens/{id}/favorite",
+            "client_tokens_favorite_set",
+            None,
+            None,
+            token_for_log(provided_token.as_deref()),
+            code,
+            Some(ge.to_string()),
+        )
+        .await;
+        return Err(ge);
+    }
+
+    app_state
+        .favorites_store
+        .set_favorite(FavoriteKind::ClientToken, &token_id, payload.favorite)
+        .await
+        .map_err(GatewayError::Db)?;
+
+    log_simple_request(
+        &app_state,
+        start_time,
+        "POST",
+        "/admin/tokens/{id}/favorite",
+        "client_tokens_favorite_set",
+        None,
+        None,
+        token_for_log(provided_token.as_deref()),
+        200,
+        None,
+    )
+    .await;
+    Ok(Json(serde_json::json!({ "favorite": payload.favorite })))
 }
 
 pub async fn delete_token(
@@ -677,6 +791,7 @@ mod tests {
             model_cache: logger.clone(),
             providers: logger.clone(),
             token_store: logger.clone(),
+            favorites_store: logger.clone(),
             login_manager: Arc::new(LoginManager::new(logger.clone())),
             user_store: logger.clone(),
             refresh_token_store,

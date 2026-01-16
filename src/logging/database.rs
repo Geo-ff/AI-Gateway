@@ -773,6 +773,26 @@ impl DatabaseLogger {
             [],
         )?;
 
+        // Favorites table (best-effort, used by admin UI)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS favorites (
+                kind TEXT NOT NULL,
+                target TEXT NOT NULL,
+                favorite INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (kind, target)
+            )",
+            [],
+        )?;
+        // Best-effort migrations
+        let _ = conn.execute(
+            "ALTER TABLE favorites ADD COLUMN favorite INTEGER NOT NULL DEFAULT 1",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS favorites_kind_favorite_idx ON favorites(kind, favorite)",
+            [],
+        );
+
         ensure_client_tokens_table_sqlite(&conn)?;
 
         conn.execute(

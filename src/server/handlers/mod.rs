@@ -111,6 +111,10 @@ pub fn routes() -> Router<Arc<AppState>> {
                 .put(model_redirects::replace_model_redirects)
                 .delete(model_redirects::delete_model_redirect),
         )
+        .route(
+            "/providers/{provider}/favorite",
+            post(providers::set_provider_favorite),
+        )
         .route("/providers/{provider}/toggle", post(providers::toggle_provider))
         .route(
             "/providers",
@@ -143,6 +147,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/admin/tokens/{id}/toggle",
             post(client_tokens::toggle_token),
+        )
+        .route(
+            "/admin/tokens/{id}/favorite",
+            post(client_tokens::set_token_favorite),
         )
         .route(
             "/admin/users",

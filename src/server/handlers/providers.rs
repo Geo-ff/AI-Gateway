@@ -11,10 +11,12 @@ use crate::config::settings::{Provider, ProviderType};
 use crate::error::GatewayError;
 use crate::logging::types::{
     ProviderOpLog, REQ_TYPE_PROVIDER_CREATE, REQ_TYPE_PROVIDER_DELETE, REQ_TYPE_PROVIDER_GET,
-    REQ_TYPE_PROVIDER_ENABLED_SET, REQ_TYPE_PROVIDER_LIST, REQ_TYPE_PROVIDER_UPDATE,
+    REQ_TYPE_PROVIDER_ENABLED_SET, REQ_TYPE_PROVIDER_FAVORITE_SET, REQ_TYPE_PROVIDER_LIST,
+    REQ_TYPE_PROVIDER_UPDATE,
 };
 use crate::server::AppState;
 use crate::server::request_logging::log_simple_request;
+use crate::server::storage_traits::FavoriteKind;
 use crate::server::util::{bearer_token, mask_key, token_for_log};
 use chrono::Utc;
 
@@ -46,11 +48,12 @@ pub struct ProviderOut {
     pub api_keys: Vec<String>,
     pub models_endpoint: Option<String>,
     pub enabled: bool,
+    pub is_favorite: bool,
     pub cached_models_count: usize,
 }
 
 impl ProviderOut {
-    fn from_provider(p: Provider, cached_models_count: usize) -> Self {
+    fn from_provider(p: Provider, cached_models_count: usize, is_favorite: bool) -> Self {
         Self {
             name: p.name,
             api_type: p.api_type,
@@ -58,6 +61,7 @@ impl ProviderOut {
             api_keys: p.api_keys.into_iter().map(|k| mask_key(&k)).collect(),
             models_endpoint: p.models_endpoint,
             enabled: p.enabled,
+            is_favorite,
             cached_models_count,
         }
     }
@@ -82,6 +86,14 @@ pub async fn list_providers(
         *cached_counts.entry(m.provider.clone()).or_insert(0) += 1;
     }
 
+    let favorites: std::collections::HashSet<String> = app_state
+        .favorites_store
+        .list_favorites(FavoriteKind::Provider)
+        .await
+        .map_err(GatewayError::Db)?
+        .into_iter()
+        .collect();
+
     let providers = app_state
         .providers
         .list_providers_with_keys(&app_state.config.logging.key_log_strategy)
@@ -90,7 +102,8 @@ pub async fn list_providers(
         .into_iter()
         .map(|p| {
             let count = cached_counts.get(&p.name).copied().unwrap_or(0);
-            ProviderOut::from_provider(p, count)
+            let is_favorite = favorites.contains(&p.name);
+            ProviderOut::from_provider(p, count, is_favorite)
         })
         .collect();
     // audit log
@@ -148,6 +161,11 @@ pub async fn get_provider(
                 .await
                 .map(|v| v.len())
                 .unwrap_or(0);
+            let is_favorite = app_state
+                .favorites_store
+                .is_favorite(FavoriteKind::Provider, &name)
+                .await
+                .map_err(GatewayError::Db)?;
             let _ = app_state
                 .log_store
                 .log_provider_op(ProviderOpLog {
@@ -172,7 +190,7 @@ pub async fn get_provider(
                 None,
             )
             .await;
-            Ok(Json(ProviderOut::from_provider(p, cached_count)))
+            Ok(Json(ProviderOut::from_provider(p, cached_count, is_favorite)))
         }
         None => {
             let token_log = token_for_log(provided_token.as_deref());
@@ -299,7 +317,12 @@ pub async fn create_provider(
         None,
     )
     .await;
-    Ok(Json(ProviderOut::from_provider(p, 0)))
+    let is_favorite = app_state
+        .favorites_store
+        .is_favorite(FavoriteKind::Provider, &p.name)
+        .await
+        .map_err(GatewayError::Db)?;
+    Ok(Json(ProviderOut::from_provider(p, 0, is_favorite)))
 }
 
 pub async fn update_provider(
@@ -391,7 +414,120 @@ pub async fn update_provider(
         .await
         .map(|v| v.len())
         .unwrap_or(0);
-    Ok(Json(ProviderOut::from_provider(p, cached_count)))
+    let is_favorite = app_state
+        .favorites_store
+        .is_favorite(FavoriteKind::Provider, &p.name)
+        .await
+        .map_err(GatewayError::Db)?;
+    Ok(Json(ProviderOut::from_provider(p, cached_count, is_favorite)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProviderFavoritePayload {
+    pub favorite: bool,
+}
+
+pub async fn set_provider_favorite(
+    Path(name): Path<String>,
+    State(app_state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<ProviderFavoritePayload>,
+) -> Result<Response, GatewayError> {
+    let start_time = Utc::now();
+    let provided_token = bearer_token(&headers);
+    let provider = name.trim().to_string();
+    let path = format!("/providers/{}/favorite", provider);
+
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
+        let code = e.status_code().as_u16();
+        let token_log = token_for_log(provided_token.as_deref());
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &path,
+            REQ_TYPE_PROVIDER_FAVORITE_SET,
+            None,
+            Some(provider.clone()),
+            token_log,
+            code,
+            Some("auth failed".into()),
+        )
+        .await;
+        return Err(e);
+    }
+
+    if provider.is_empty() {
+        let ge = GatewayError::Config("provider 不能为空".into());
+        let code = ge.status_code().as_u16();
+        let token_log = token_for_log(provided_token.as_deref());
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            "/providers/{provider}/favorite",
+            REQ_TYPE_PROVIDER_FAVORITE_SET,
+            None,
+            None,
+            token_log,
+            code,
+            Some(ge.to_string()),
+        )
+        .await;
+        return Err(ge);
+    }
+
+    if !app_state
+        .providers
+        .provider_exists(&provider)
+        .await
+        .map_err(GatewayError::Db)?
+    {
+        let token_log = token_for_log(provided_token.as_deref());
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &path,
+            REQ_TYPE_PROVIDER_FAVORITE_SET,
+            None,
+            Some(provider.clone()),
+            token_log,
+            404,
+            Some("not found".into()),
+        )
+        .await;
+        return Err(GatewayError::NotFound(format!(
+            "Provider '{}' not found",
+            provider
+        )));
+    }
+
+    app_state
+        .favorites_store
+        .set_favorite(FavoriteKind::Provider, &provider, payload.favorite)
+        .await
+        .map_err(GatewayError::Db)?;
+
+    let token_log = token_for_log(provided_token.as_deref());
+    log_simple_request(
+        &app_state,
+        start_time,
+        "POST",
+        &path,
+        REQ_TYPE_PROVIDER_FAVORITE_SET,
+        None,
+        Some(provider.clone()),
+        token_log,
+        200,
+        None,
+    )
+    .await;
+    Ok((
+        axum::http::StatusCode::OK,
+        Json(serde_json::json!({ "favorite": payload.favorite })),
+    )
+        .into_response())
 }
 
 pub async fn toggle_provider(
