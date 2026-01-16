@@ -1434,12 +1434,19 @@ impl ProviderStore for PgLogStore {
         strategy: &'a Option<KeyLogStrategy>,
     ) -> BoxFuture<'a, rusqlite::Result<bool>> {
         Box::pin(async move {
+            // 将 u32 转换为 i32，若超出范围则返回业务错误
+            let weight_i32: i32 = weight.try_into().map_err(|_| {
+                rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT),
+                    Some(format!("weight {} exceeds i32::MAX", weight)),
+                )
+            })?;
             let (stored, enc) = crate::crypto::protect(strategy, provider, key);
             let client = self.pool.pick();
             let mut affected = client
                 .execute(
                     "UPDATE provider_keys SET weight = $3 WHERE provider = $1 AND key_value = $2",
-                    &[&provider, &stored, &weight],
+                    &[&provider, &stored, &weight_i32],
                 )
                 .await
                 .map_err(pg_err)?;
@@ -1448,7 +1455,7 @@ impl ProviderStore for PgLogStore {
                 affected += client
                     .execute(
                         "UPDATE provider_keys SET weight = $3 WHERE provider = $1 AND key_value = $2",
-                        &[&provider, &key, &weight],
+                        &[&provider, &key, &weight_i32],
                     )
                     .await
                     .map_err(pg_err)?;
