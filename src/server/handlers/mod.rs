@@ -28,6 +28,7 @@ mod model_redirects;
 mod models;
 mod provider_models_list;
 mod provider_keys;
+mod provider_model_test;
 mod providers;
 mod token_info;
 
@@ -118,6 +119,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/providers/models/list",
             post(provider_models_list::list_models_by_base_url),
+        )
+        .route(
+            "/providers/{provider}/models/test",
+            post(provider_model_test::test_provider_model),
         )
         .route(
             "/providers/{provider}",

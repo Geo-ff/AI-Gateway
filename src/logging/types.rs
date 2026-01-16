@@ -24,6 +24,7 @@ pub const REQ_TYPE_PROVIDER_ENABLED_SET: &str = "provider_enabled_set";
 pub const REQ_TYPE_PROVIDER_MODEL_REDIRECTS_LIST: &str = "provider_model_redirects_list";
 pub const REQ_TYPE_PROVIDER_MODEL_REDIRECTS_SET: &str = "provider_model_redirects_set";
 pub const REQ_TYPE_PROVIDER_MODEL_REDIRECTS_DELETE: &str = "provider_model_redirects_delete";
+pub const REQ_TYPE_PROVIDER_MODEL_TEST: &str = "provider_model_test";
 
 #[derive(Debug, Clone)]
 pub struct RequestLog {
