@@ -56,6 +56,30 @@ pub async fn list_models(
         }
     }
     let mut cached_models = get_cached_models_all(&app_state).await?;
+
+    // 过滤掉已禁用供应商的模型
+    {
+        use std::collections::HashSet;
+        let enabled_providers: HashSet<String> = app_state
+            .providers
+            .list_providers()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| p.enabled)
+            .map(|p| p.name)
+            .collect();
+        cached_models.retain(|m| {
+            // 模型 id 格式为 "{provider}/{model_id}"
+            if let Some(slash_pos) = m.id.find('/') {
+                let provider = &m.id[..slash_pos];
+                enabled_providers.contains(provider)
+            } else {
+                true // 无前缀的模型保留
+            }
+        });
+    }
+
     // 若令牌有限制，仅返回该令牌允许的模型
     if !is_admin
         && let Some(tok) = token_for_limits.as_deref()
