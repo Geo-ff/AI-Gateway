@@ -46,10 +46,11 @@ pub struct ProviderOut {
     pub api_keys: Vec<String>,
     pub models_endpoint: Option<String>,
     pub enabled: bool,
+    pub cached_models_count: usize,
 }
 
 impl ProviderOut {
-    fn from_provider(p: Provider) -> Self {
+    fn from_provider(p: Provider, cached_models_count: usize) -> Self {
         Self {
             name: p.name,
             api_type: p.api_type,
@@ -57,6 +58,7 @@ impl ProviderOut {
             api_keys: p.api_keys.into_iter().map(|k| mask_key(&k)).collect(),
             models_endpoint: p.models_endpoint,
             enabled: p.enabled,
+            cached_models_count,
         }
     }
 }
@@ -68,13 +70,28 @@ pub async fn list_providers(
     require_superadmin(&headers, &app_state).await?;
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
+
+    // 获取所有缓存模型，按供应商分组统计数量
+    let all_cached = app_state
+        .model_cache
+        .get_cached_models(None)
+        .await
+        .unwrap_or_default();
+    let mut cached_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for m in &all_cached {
+        *cached_counts.entry(m.provider.clone()).or_insert(0) += 1;
+    }
+
     let providers = app_state
         .providers
         .list_providers_with_keys(&app_state.config.logging.key_log_strategy)
         .await
         .map_err(GatewayError::Db)?
         .into_iter()
-        .map(ProviderOut::from_provider)
+        .map(|p| {
+            let count = cached_counts.get(&p.name).copied().unwrap_or(0);
+            ProviderOut::from_provider(p, count)
+        })
         .collect();
     // audit log
     let _ = app_state
@@ -125,6 +142,12 @@ pub async fn get_provider(
                 .get_provider_keys(&name, &app_state.config.logging.key_log_strategy)
                 .await
                 .map_err(GatewayError::Db)?;
+            let cached_count = app_state
+                .model_cache
+                .get_cached_models(Some(&name))
+                .await
+                .map(|v| v.len())
+                .unwrap_or(0);
             let _ = app_state
                 .log_store
                 .log_provider_op(ProviderOpLog {
@@ -149,7 +172,7 @@ pub async fn get_provider(
                 None,
             )
             .await;
-            Ok(Json(ProviderOut::from_provider(p)))
+            Ok(Json(ProviderOut::from_provider(p, cached_count)))
         }
         None => {
             let token_log = token_for_log(provided_token.as_deref());
@@ -276,7 +299,7 @@ pub async fn create_provider(
         None,
     )
     .await;
-    Ok(Json(ProviderOut::from_provider(p)))
+    Ok(Json(ProviderOut::from_provider(p, 0)))
 }
 
 pub async fn update_provider(
@@ -362,7 +385,13 @@ pub async fn update_provider(
         None,
     )
     .await;
-    Ok(Json(ProviderOut::from_provider(p)))
+    let cached_count = app_state
+        .model_cache
+        .get_cached_models(Some(&p.name))
+        .await
+        .map(|v| v.len())
+        .unwrap_or(0);
+    Ok(Json(ProviderOut::from_provider(p, cached_count)))
 }
 
 pub async fn toggle_provider(
