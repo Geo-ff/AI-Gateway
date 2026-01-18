@@ -52,6 +52,37 @@ pub async fn stream_chat_completions(
     }
     let (selected, mut parsed_model) =
         select_provider_for_model(&app_state, &request.model).await?;
+
+    // 若该模型在 provider redirects 中作为 source，则不允许第三方直接调用（避免 source/target 重复可用）
+    let mut parsed_for_redirect_check = parsed_model.clone();
+    if let Some((from, to)) = apply_provider_model_redirects_to_parsed_model(
+        &app_state,
+        &selected.provider.name,
+        &mut parsed_for_redirect_check,
+    )
+    .await?
+    {
+        let ge = GatewayError::Config(format!(
+            "model '{}' is redirected; use '{}' instead",
+            from, to
+        ));
+        let code = ge.status_code().as_u16();
+        crate::server::request_logging::log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            "/v1/chat/completions",
+            crate::logging::types::REQ_TYPE_CHAT_STREAM,
+            Some(from),
+            Some(selected.provider.name.clone()),
+            None,
+            code,
+            Some(ge.to_string()),
+        )
+        .await;
+        return Err(ge);
+    }
+
     if let Some((from, to)) = apply_provider_model_redirects_to_parsed_model(
         &app_state,
         &selected.provider.name,

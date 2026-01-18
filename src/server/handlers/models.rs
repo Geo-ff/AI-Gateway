@@ -111,6 +111,33 @@ pub async fn list_models(
             .collect();
         cached_models.retain(|m| !disabled.contains(&m.id));
     }
+
+    // 若该 provider 配置了 redirects，则不向第三方暴露 source 模型（避免 source/target 重复可用）
+    {
+        use std::collections::{HashMap, HashSet};
+        let mut providers = HashSet::<String>::new();
+        for m in &cached_models {
+            if let Some(pos) = m.id.find('/') {
+                providers.insert(m.id[..pos].to_string());
+            }
+        }
+        let mut sources = HashSet::<String>::new();
+        for p in providers {
+            let pairs = app_state
+                .providers
+                .list_model_redirects(&p)
+                .await
+                .map_err(GatewayError::Db)?;
+            if pairs.is_empty() {
+                continue;
+            }
+            let map: HashMap<String, String> = pairs.into_iter().collect();
+            for source in map.keys() {
+                sources.insert(format!("{}/{}", p, source));
+            }
+        }
+        cached_models.retain(|m| !sources.contains(&m.id));
+    }
     let path = uri
         .path_and_query()
         .map(|pq| pq.as_str().to_string())
@@ -221,10 +248,25 @@ pub async fn list_provider_models(
             .filter(|(_, _, enabled)| !*enabled)
             .map(|(_, model, _)| model)
             .collect::<std::collections::HashSet<_>>();
-        let cached_models: Vec<_> = cached_models
+        let mut cached_models: Vec<_> = cached_models
             .into_iter()
             .filter(|m| !disabled.contains(&m.id))
             .collect();
+
+        // 若配置了 redirects，则不暴露 source 模型
+        {
+            use std::collections::{HashMap, HashSet};
+            let pairs = app_state
+                .providers
+                .list_model_redirects(&provider_name)
+                .await
+                .map_err(GatewayError::Db)?;
+            if !pairs.is_empty() {
+                let map: HashMap<String, String> = pairs.into_iter().collect();
+                let sources: HashSet<String> = map.keys().cloned().collect();
+                cached_models.retain(|m| !sources.contains(&m.id));
+            }
+        }
         log_simple_request(
             &app_state,
             start_time,
