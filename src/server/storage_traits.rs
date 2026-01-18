@@ -603,7 +603,10 @@ impl ProviderStore for DatabaseLogger {
         provider: &'a str,
         strategy: KeyRotationStrategy,
     ) -> BoxFuture<'a, rusqlite::Result<bool>> {
-        Box::pin(async move { self.set_provider_key_rotation_strategy(provider, strategy).await })
+        Box::pin(async move {
+            self.set_provider_key_rotation_strategy(provider, strategy)
+                .await
+        })
     }
     fn get_provider_keys<'a>(
         &'a self,
@@ -655,7 +658,10 @@ impl ProviderStore for DatabaseLogger {
         weight: u32,
         strategy: &'a Option<KeyLogStrategy>,
     ) -> BoxFuture<'a, rusqlite::Result<bool>> {
-        Box::pin(async move { self.set_provider_key_weight(provider, key, weight, strategy).await })
+        Box::pin(async move {
+            self.set_provider_key_weight(provider, key, weight, strategy)
+                .await
+        })
     }
 
     fn set_provider_key_active<'a>(
@@ -665,7 +671,10 @@ impl ProviderStore for DatabaseLogger {
         active: bool,
         strategy: &'a Option<KeyLogStrategy>,
     ) -> BoxFuture<'a, rusqlite::Result<bool>> {
-        Box::pin(async move { self.set_provider_key_active(provider, key, active, strategy).await })
+        Box::pin(async move {
+            self.set_provider_key_active(provider, key, active, strategy)
+                .await
+        })
     }
 
     fn list_model_redirects<'a>(

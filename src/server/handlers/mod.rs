@@ -8,8 +8,8 @@ use crate::server::AppState;
 
 mod admin_logs;
 mod admin_metrics;
-mod admin_provider_key_stats;
 mod admin_prices;
+mod admin_provider_key_stats;
 mod admin_users;
 mod auth;
 mod auth_jwt;
@@ -26,9 +26,9 @@ mod me_tokens;
 mod model_prices;
 mod model_redirects;
 mod models;
-mod provider_models_list;
 mod provider_keys;
 mod provider_model_test;
+mod provider_models_list;
 mod providers;
 mod token_info;
 
@@ -90,7 +90,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/providers/{provider}/keys/config",
-            get(provider_keys::get_provider_keys_config).put(provider_keys::put_provider_keys_config),
+            get(provider_keys::get_provider_keys_config)
+                .put(provider_keys::put_provider_keys_config),
         )
         .route(
             "/providers/{provider}/keys/toggle",
@@ -115,7 +116,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/providers/{provider}/favorite",
             post(providers::set_provider_favorite),
         )
-        .route("/providers/{provider}/toggle", post(providers::toggle_provider))
+        .route(
+            "/providers/{provider}/toggle",
+            post(providers::toggle_provider),
+        )
         .route(
             "/providers",
             get(providers::list_providers).post(providers::create_provider),

@@ -32,6 +32,7 @@ pub struct ClientToken {
     pub name: String,
     pub token: String,
     pub allowed_models: Option<Vec<String>>, // None 表示不限制
+    pub model_blacklist: Option<Vec<String>>, // None 表示不限制（与 allowed_models 互斥）
     pub max_tokens: Option<i64>,             // 兼容旧字段（不再使用）
     pub max_amount: Option<f64>,             // 金额额度（单位自定义，如 USD/CNY）
     pub enabled: bool,
@@ -60,6 +61,8 @@ pub struct CreateTokenPayload {
     pub token: Option<String>,
     #[serde(default)]
     pub allowed_models: Option<Vec<String>>, // None 表示不限制
+    #[serde(default)]
+    pub model_blacklist: Option<Vec<String>>, // None 表示不限制（与 allowed_models 互斥）
     #[serde(default)]
     pub max_tokens: Option<i64>, // 兼容旧字段（忽略）
     #[serde(default)]
@@ -98,6 +101,8 @@ pub struct UpdateTokenPayload {
     pub name: Option<String>,
     #[serde(default, deserialize_with = "deserialize_patch_option")]
     pub allowed_models: Option<Option<Vec<String>>>, // None -> 不修改；Some(Some(vec)) -> 设置；Some(None) -> 清空
+    #[serde(default, deserialize_with = "deserialize_patch_option")]
+    pub model_blacklist: Option<Option<Vec<String>>>, // 同上（与 allowed_models 互斥）
     #[serde(default, deserialize_with = "deserialize_patch_option")]
     pub max_tokens: Option<Option<i64>>, // 兼容旧字段（忽略）
     #[serde(default, deserialize_with = "deserialize_patch_option")]
@@ -337,6 +342,11 @@ fn row_to_client_token(r: &tokio_postgres::Row) -> Result<ClientToken, GatewayEr
         .ok()
         .flatten()
         .or_else(|| r.try_get::<usize, String>(17).ok());
+    let model_blacklist_s = r
+        .try_get::<usize, Option<String>>(18)
+        .ok()
+        .flatten()
+        .or_else(|| r.try_get::<usize, String>(18).ok());
     let id = id_opt.unwrap_or_else(|| client_token_id_for_token(&token));
     let name = normalize_client_token_name(name_opt, &id);
     Ok(ClientToken {
@@ -345,6 +355,7 @@ fn row_to_client_token(r: &tokio_postgres::Row) -> Result<ClientToken, GatewayEr
         name,
         token,
         allowed_models: parse_allowed_models(allowed_s),
+        model_blacklist: parse_allowed_models(model_blacklist_s),
         max_tokens,
         max_amount,
         enabled,
@@ -473,7 +484,8 @@ async fn ensure_client_tokens_table_pg(
                 remark TEXT,
                 organization_id TEXT,
                 ip_whitelist TEXT,
-                ip_blacklist TEXT
+                ip_blacklist TEXT,
+                model_blacklist TEXT
             )"#,
             &[],
         )
@@ -543,6 +555,12 @@ async fn ensure_client_tokens_table_pg(
         .await;
     let _ = client
         .execute(
+            "ALTER TABLE client_tokens ADD COLUMN model_blacklist TEXT",
+            &[],
+        )
+        .await;
+    let _ = client
+        .execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS client_tokens_id_uidx ON client_tokens(id)",
             &[],
         )
@@ -604,6 +622,7 @@ impl TokenStore for PgTokenStore {
         let name = normalize_client_token_name(payload.name.clone(), &id);
         let now = Utc::now();
         let allowed_models_s = join_allowed_models(&payload.allowed_models);
+        let model_blacklist_s = join_allowed_models(&payload.model_blacklist);
         let expires_at = payload
             .expires_at
             .as_deref()
@@ -614,8 +633,8 @@ impl TokenStore for PgTokenStore {
         let ip_blacklist_s = encode_json_string_list("ip_blacklist", &payload.ip_blacklist)?;
         self.client
             .execute(
-                "INSERT INTO client_tokens (id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, 0, 0, 0, $11, $12, $13, $14)",
-                &[&id, &payload.user_id, &name, &token, &allowed_models_s, &payload.max_tokens, &payload.enabled, &expires_s, &to_beijing_string(&now), &payload.max_amount, &payload.remark, &payload.organization_id, &ip_whitelist_s, &ip_blacklist_s],
+                "INSERT INTO client_tokens (id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist, model_blacklist) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, 0, 0, 0, $11, $12, $13, $14, $15)",
+                &[&id, &payload.user_id, &name, &token, &allowed_models_s, &payload.max_tokens, &payload.enabled, &expires_s, &to_beijing_string(&now), &payload.max_amount, &payload.remark, &payload.organization_id, &ip_whitelist_s, &ip_blacklist_s, &model_blacklist_s],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
@@ -626,6 +645,7 @@ impl TokenStore for PgTokenStore {
             name,
             token,
             allowed_models: payload.allowed_models,
+            model_blacklist: payload.model_blacklist,
             max_tokens: payload.max_tokens,
             max_amount: payload.max_amount,
             enabled: payload.enabled,
@@ -650,7 +670,7 @@ impl TokenStore for PgTokenStore {
         // read existing
         let row = self.client
             .query_opt(
-                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE token = $1",
+                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist, model_blacklist FROM client_tokens WHERE token = $1",
                 &[&token],
             )
             .await
@@ -663,6 +683,9 @@ impl TokenStore for PgTokenStore {
         }
         if let Some(v) = payload.allowed_models {
             current.allowed_models = v;
+        }
+        if let Some(v) = payload.model_blacklist {
+            current.model_blacklist = v;
         }
         if let Some(v) = payload.max_tokens {
             current.max_tokens = v;
@@ -696,8 +719,8 @@ impl TokenStore for PgTokenStore {
         let ip_blacklist_s = encode_json_string_list("ip_blacklist", &current.ip_blacklist)?;
         self.client
             .execute(
-                "UPDATE client_tokens SET name = $2, allowed_models = $3, max_tokens = $4, enabled = $5, expires_at = $6, max_amount = $7, remark = $8, organization_id = $9, ip_whitelist = $10, ip_blacklist = $11 WHERE token = $1",
-                &[&token, &current.name, &join_allowed_models(&current.allowed_models), &current.max_tokens, &current.enabled, &current.expires_at.as_ref().map(to_beijing_string), &current.max_amount, &current.remark, &current.organization_id, &ip_whitelist_s, &ip_blacklist_s],
+                "UPDATE client_tokens SET name = $2, allowed_models = $3, max_tokens = $4, enabled = $5, expires_at = $6, max_amount = $7, remark = $8, organization_id = $9, ip_whitelist = $10, ip_blacklist = $11, model_blacklist = $12 WHERE token = $1",
+                &[&token, &current.name, &join_allowed_models(&current.allowed_models), &current.max_tokens, &current.enabled, &current.expires_at.as_ref().map(to_beijing_string), &current.max_amount, &current.remark, &current.organization_id, &ip_whitelist_s, &ip_blacklist_s, &join_allowed_models(&current.model_blacklist)],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
@@ -720,7 +743,7 @@ impl TokenStore for PgTokenStore {
     async fn get_token(&self, token: &str) -> Result<Option<ClientToken>, GatewayError> {
         let row = self.client
             .query_opt(
-                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE token = $1",
+                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist, model_blacklist FROM client_tokens WHERE token = $1",
                 &[&token],
             )
             .await
@@ -735,7 +758,7 @@ impl TokenStore for PgTokenStore {
     async fn get_token_by_id(&self, id: &str) -> Result<Option<ClientToken>, GatewayError> {
         let row = self.client
             .query_opt(
-                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE id = $1",
+                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist, model_blacklist FROM client_tokens WHERE id = $1",
                 &[&id],
             )
             .await
@@ -754,7 +777,7 @@ impl TokenStore for PgTokenStore {
         let row = self
             .client
             .query_opt(
-                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE id = $1 AND user_id = $2",
+                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist, model_blacklist FROM client_tokens WHERE id = $1 AND user_id = $2",
                 &[&id, &user_id],
             )
             .await
@@ -768,7 +791,7 @@ impl TokenStore for PgTokenStore {
     async fn list_tokens(&self) -> Result<Vec<ClientToken>, GatewayError> {
         let rows = self.client
             .query(
-                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens ORDER BY created_at DESC",
+                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist, model_blacklist FROM client_tokens ORDER BY created_at DESC",
                 &[],
             )
             .await
@@ -782,7 +805,7 @@ impl TokenStore for PgTokenStore {
         let rows = self
             .client
             .query(
-                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE user_id = $1 ORDER BY created_at DESC",
+                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist, model_blacklist FROM client_tokens WHERE user_id = $1 ORDER BY created_at DESC",
                 &[&user_id],
             )
             .await
@@ -818,7 +841,7 @@ impl TokenStore for PgTokenStore {
         let row = self
             .client
             .query_opt(
-                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist FROM client_tokens WHERE id = $1",
+                "SELECT id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist, model_blacklist FROM client_tokens WHERE id = $1",
                 &[&id],
             )
             .await

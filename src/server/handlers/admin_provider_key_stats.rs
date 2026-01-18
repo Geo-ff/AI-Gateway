@@ -296,7 +296,9 @@ pub async fn provider_key_stats(
 mod tests {
     use super::*;
     use crate::config::BalanceStrategy;
-    use crate::config::settings::{LoadBalancing, LoggingConfig, Provider, ProviderType, ServerConfig};
+    use crate::config::settings::{
+        LoadBalancing, LoggingConfig, Provider, ProviderType, ServerConfig,
+    };
     use crate::logging::DatabaseLogger;
     use crate::logging::types::RequestLog;
     use crate::server::login::LoginManager;
@@ -398,6 +400,7 @@ mod tests {
             .providers
             .upsert_provider(&Provider {
                 name: "p1".into(),
+                display_name: None,
                 api_type: ProviderType::OpenAI,
                 base_url: "http://localhost".into(),
                 models_endpoint: None,
@@ -512,6 +515,7 @@ mod tests {
             .providers
             .upsert_provider(&Provider {
                 name: "p1".into(),
+                display_name: None,
                 api_type: ProviderType::OpenAI,
                 base_url: "http://localhost".into(),
                 models_endpoint: None,

@@ -94,7 +94,8 @@ fn ensure_client_tokens_table_sqlite(conn: &Connection) -> Result<()> {
             remark TEXT,
             organization_id TEXT,
             ip_whitelist TEXT,
-            ip_blacklist TEXT
+            ip_blacklist TEXT,
+            model_blacklist TEXT
         )",
         [],
     )?;
@@ -127,6 +128,10 @@ fn ensure_client_tokens_table_sqlite(conn: &Connection) -> Result<()> {
     );
     let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN ip_whitelist TEXT", []);
     let _ = conn.execute("ALTER TABLE client_tokens ADD COLUMN ip_blacklist TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE client_tokens ADD COLUMN model_blacklist TEXT",
+        [],
+    );
     let _ = conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS client_tokens_id_uidx ON client_tokens(id)",
         [],

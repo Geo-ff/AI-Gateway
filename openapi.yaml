@@ -404,6 +404,12 @@ components:
             type: string
           nullable: true
           description: 允许使用的模型列表 (null 表示不限制)
+        model_blacklist:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: 禁止使用的模型列表 (null 表示不限制，与 allowed_models 互斥)
         max_tokens:
           type: integer
           format: int64
@@ -449,7 +455,7 @@ components:
         organization_id:
           type: string
           nullable: true
-          description: 所属组织 ID（字符串）
+          description: 所属组织 ID（字符串；为空表示默认组织 default）
         ip_whitelist:
           type: array
           items:
@@ -927,6 +933,12 @@ components:
             type: string
           nullable: true
           description: 允许使用的模型列表
+        model_blacklist:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: 禁止使用的模型列表（与 allowed_models 互斥）
         max_amount:
           type: number
           format: double
@@ -947,7 +959,7 @@ components:
         organization_id:
           type: string
           nullable: true
-          description: 所属组织 ID（字符串）
+          description: 所属组织 ID（字符串；为空表示默认组织 default）
         ip_whitelist:
           type: array
           items:
@@ -970,6 +982,11 @@ components:
         name:
           type: string
         allowed_models:
+          type: array
+          items:
+            type: string
+          nullable: true
+        model_blacklist:
           type: array
           items:
             type: string
@@ -1012,6 +1029,11 @@ components:
           type: string
           nullable: true
         allowed_models:
+          type: array
+          items:
+            type: string
+          nullable: true
+        model_blacklist:
           type: array
           items:
             type: string
@@ -1097,6 +1119,12 @@ components:
             type: string
           nullable: true
           description: 允许使用的模型列表
+        model_blacklist:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: 禁止使用的模型列表（null 表示清空，与 allowed_models 互斥）
         max_amount:
           type: number
           format: double
@@ -1117,7 +1145,7 @@ components:
         organization_id:
           type: string
           nullable: true
-          description: 所属组织 ID（字符串，null 表示清空）
+          description: 所属组织 ID（字符串；null 表示使用默认组织 default）
         ip_whitelist:
           type: array
           items:

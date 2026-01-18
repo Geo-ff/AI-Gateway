@@ -42,4 +42,3 @@ pub struct ProviderKeyEntry {
     pub active: bool,
     pub weight: u32,
 }
-

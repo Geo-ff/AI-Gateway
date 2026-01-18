@@ -94,7 +94,10 @@ pub async fn list_models_by_base_url(
     let cache_key = CacheKey {
         api_type: api_type_key(&payload.api_type),
         base_url: normalize_base_url(&payload.base_url),
-        models_endpoint: payload.models_endpoint.as_ref().map(|s| s.trim().to_string()),
+        models_endpoint: payload
+            .models_endpoint
+            .as_ref()
+            .map(|s| s.trim().to_string()),
         provider: payload.provider.clone().map(|s| s.trim().to_string()),
     };
 
@@ -132,9 +135,19 @@ pub async fn list_models_by_base_url(
         }
     }
 
-    let mut api_key = payload.api_key.clone().unwrap_or_default().trim().to_string();
+    let mut api_key = payload
+        .api_key
+        .clone()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     if api_key.is_empty() {
-        if let Some(provider_name) = payload.provider.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if let Some(provider_name) = payload
+            .provider
+            .as_deref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             api_key = app_state
                 .providers
                 .get_provider_keys(provider_name, &app_state.config.logging.key_log_strategy)
@@ -166,7 +179,9 @@ pub async fn list_models_by_base_url(
         .timeout(Duration::from_secs(12))
         .build()?;
 
-    let mut req = client.get(models_url.as_str()).header("Accept", "application/json");
+    let mut req = client
+        .get(models_url.as_str())
+        .header("Accept", "application/json");
     if !api_key.is_empty() {
         req = req.bearer_auth(api_key);
     }
@@ -178,7 +193,11 @@ pub async fn list_models_by_base_url(
     if !status.is_success() {
         let snippet = String::from_utf8_lossy(&bytes);
         let snippet = snippet.trim();
-        let snippet = if snippet.len() > 240 { &snippet[..240] } else { snippet };
+        let snippet = if snippet.len() > 240 {
+            &snippet[..240]
+        } else {
+            snippet
+        };
         let msg = match status.as_u16() {
             401 | 403 => "上游鉴权失败，请检查 Key（或先添加/启用 Key）".to_string(),
             404 => "上游未找到模型列表接口（404），该上游可能不支持自动获取模型列表；可配置 models_endpoint 或手动输入模型".to_string(),
@@ -249,4 +268,3 @@ pub async fn list_models_by_base_url(
     .await;
     Ok(result)
 }
-

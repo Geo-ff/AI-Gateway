@@ -56,10 +56,8 @@ impl LoadBalancerState {
             .entry(provider_name.to_string())
             .or_insert_with(HashMap::new);
 
-        let active_set: std::collections::HashSet<&str> = active_keys
-            .iter()
-            .map(|e| e.value.as_str())
-            .collect();
+        let active_set: std::collections::HashSet<&str> =
+            active_keys.iter().map(|e| e.value.as_str()).collect();
         state.retain(|k, _| active_set.contains(k.as_str()));
 
         let mut total_weight: i64 = 0;
@@ -115,8 +113,8 @@ impl LoadBalancerState {
             KeyRotationStrategy::Random => rng.random_range(0..active.len()),
             KeyRotationStrategy::WeightedRandom => {
                 let weights: Vec<u32> = active.iter().map(|e| e.weight.max(1)).collect();
-                let dist = WeightedIndex::new(&weights)
-                    .map_err(|_| BalanceError::NoApiKeysAvailable)?;
+                let dist =
+                    WeightedIndex::new(&weights).map_err(|_| BalanceError::NoApiKeysAvailable)?;
                 dist.sample(rng)
             }
             KeyRotationStrategy::WeightedSequential => {
@@ -251,6 +249,7 @@ mod tests {
     fn provider(name: &str, keys: &[&str]) -> Provider {
         Provider {
             name: name.to_string(),
+            display_name: None,
             api_type: ProviderType::OpenAI,
             base_url: "http://example.invalid".to_string(),
             api_keys: keys.iter().map(|s| s.to_string()).collect(),
@@ -261,12 +260,19 @@ mod tests {
 
     #[test]
     fn round_robin_persists_across_instances_and_rotates_keys_per_provider() {
-        let providers = vec![provider("p0", &["k0a", "k0b"]), provider("p1", &["k1a", "k1b"])];
+        let providers = vec![
+            provider("p0", &["k0a", "k0b"]),
+            provider("p1", &["k1a", "k1b"]),
+        ];
         let state = Arc::new(LoadBalancerState::default());
 
         let mut out: Vec<(String, String)> = Vec::new();
         for _ in 0..4 {
-            let lb = LoadBalancer::with_state(providers.clone(), BalanceStrategy::RoundRobin, state.clone());
+            let lb = LoadBalancer::with_state(
+                providers.clone(),
+                BalanceStrategy::RoundRobin,
+                state.clone(),
+            );
             let s = lb.select_provider().unwrap();
             out.push((s.provider.name, s.api_key));
         }
@@ -320,7 +326,12 @@ mod tests {
         let mut b = 0usize;
         for _ in 0..10_000 {
             let picked = state
-                .select_provider_key_with_rng("p0", KeyRotationStrategy::WeightedRandom, &keys, &mut rng)
+                .select_provider_key_with_rng(
+                    "p0",
+                    KeyRotationStrategy::WeightedRandom,
+                    &keys,
+                    &mut rng,
+                )
                 .unwrap();
             match picked.as_str() {
                 "a" => a += 1,

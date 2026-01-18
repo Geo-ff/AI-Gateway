@@ -4,8 +4,8 @@ use rusqlite::Result;
 use super::database::DatabaseLogger;
 use crate::config::settings::KeyLogStrategy;
 use crate::logging::time::{BEIJING_OFFSET, DATETIME_FORMAT};
-use crate::server::storage_traits::ProviderKeyEntryWithCreatedAt;
 use crate::routing::ProviderKeyEntry;
+use crate::server::storage_traits::ProviderKeyEntryWithCreatedAt;
 
 impl DatabaseLogger {
     pub async fn get_provider_keys(
@@ -51,11 +51,7 @@ impl DatabaseLogger {
             let weight: i64 = row.get(3)?;
             let decrypted =
                 crate::crypto::unprotect(strategy, provider, &value, enc != 0).unwrap_or_default();
-            let weight_u32 = if weight >= 1 {
-                weight as u32
-            } else {
-                1
-            };
+            let weight_u32 = if weight >= 1 { weight as u32 } else { 1 };
             Ok(ProviderKeyEntry {
                 value: decrypted,
                 active: active != 0,
@@ -92,26 +88,21 @@ impl DatabaseLogger {
             let decrypted =
                 crate::crypto::unprotect(strategy, provider, &value, enc != 0).unwrap_or_default();
 
-            let naive = NaiveDateTime::parse_from_str(&created_at_raw, DATETIME_FORMAT).map_err(
-                |e| {
+            let naive =
+                NaiveDateTime::parse_from_str(&created_at_raw, DATETIME_FORMAT).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
                         0,
                         rusqlite::types::Type::Text,
                         Box::new(e),
                     )
-                },
-            )?;
+                })?;
             let local = BEIJING_OFFSET
                 .from_local_datetime(&naive)
                 .single()
                 .ok_or_else(|| rusqlite::Error::ExecuteReturnedResults)?;
             let created_at = local.with_timezone(&Utc);
 
-            let weight_u32 = if weight >= 1 {
-                weight as u32
-            } else {
-                1
-            };
+            let weight_u32 = if weight >= 1 { weight as u32 } else { 1 };
             Ok(ProviderKeyEntryWithCreatedAt {
                 value: decrypted,
                 active: active != 0,

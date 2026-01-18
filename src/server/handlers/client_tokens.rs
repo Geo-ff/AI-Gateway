@@ -6,13 +6,13 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::server::storage_traits::FavoriteKind;
 use crate::server::util::{bearer_token, token_for_log};
 use crate::{
     admin::{ClientToken, CreateTokenPayload, UpdateTokenPayload},
     error::GatewayError,
     server::AppState,
 };
-use crate::server::storage_traits::FavoriteKind;
 
 #[derive(Debug, Serialize)]
 pub struct ClientTokenOut {
@@ -21,6 +21,7 @@ pub struct ClientTokenOut {
     pub name: String,
     pub token: String,
     pub allowed_models: Option<Vec<String>>,
+    pub model_blacklist: Option<Vec<String>>,
     pub max_tokens: Option<i64>,
     pub max_amount: Option<f64>,
     pub amount_spent: f64,
@@ -46,6 +47,7 @@ impl From<ClientToken> for ClientTokenOut {
             name: t.name,
             token: t.token,
             allowed_models: t.allowed_models,
+            model_blacklist: t.model_blacklist,
             max_tokens: t.max_tokens,
             max_amount: t.max_amount,
             amount_spent: t.amount_spent,
@@ -90,6 +92,7 @@ const REMARK_MAX_LEN: usize = 1024;
 const ORGANIZATION_ID_MAX_LEN: usize = 128;
 const IP_LIST_MAX_LEN: usize = 200;
 const IP_ITEM_MAX_LEN: usize = 64;
+const DEFAULT_ORGANIZATION_ID: &str = "default";
 
 fn normalize_optional_string(
     field: &str,
@@ -341,26 +344,35 @@ pub async fn create_token(
         payload.organization_id,
         ORGANIZATION_ID_MAX_LEN,
     )?;
+    if payload.organization_id.is_none() {
+        payload.organization_id = Some(DEFAULT_ORGANIZATION_ID.to_string());
+    }
     payload.ip_whitelist = normalize_ip_list("ip_whitelist", payload.ip_whitelist)?;
     payload.ip_blacklist = normalize_ip_list("ip_blacklist", payload.ip_blacklist)?;
-    // 校验 allowed_models 存在性（若提供）
-    if let Some(list) = payload.allowed_models.as_ref()
-        && !list.is_empty()
-    {
-        use std::collections::HashSet;
-        let cached = crate::server::model_cache::get_cached_models_all(&app_state)
-            .await
-            .map_err(GatewayError::Db)?;
-        let set: HashSet<String> = cached.into_iter().map(|m| m.id).collect();
-        for m in list {
-            if !set.contains(m) {
-                return Err(GatewayError::NotFound(format!(
-                    "model '{}' not found in cache",
-                    m
-                )));
-            }
-        }
-    }
+    payload.allowed_models = crate::server::token_model_limits::normalize_model_list(
+        "allowed_models",
+        payload.allowed_models,
+    )?;
+    payload.model_blacklist = crate::server::token_model_limits::normalize_model_list(
+        "model_blacklist",
+        payload.model_blacklist,
+    )?;
+    crate::server::token_model_limits::ensure_model_lists_mutually_exclusive(
+        &payload.allowed_models,
+        &payload.model_blacklist,
+    )?;
+    crate::server::token_model_limits::validate_models_exist_in_cache(
+        &app_state,
+        "allowed_models",
+        &payload.allowed_models,
+    )
+    .await?;
+    crate::server::token_model_limits::validate_models_exist_in_cache(
+        &app_state,
+        "model_blacklist",
+        &payload.model_blacklist,
+    )
+    .await?;
     let t = app_state
         .token_store
         .create_token(CreateTokenPayload {
@@ -653,23 +665,57 @@ pub async fn update_token(
         payload.organization_id,
         ORGANIZATION_ID_MAX_LEN,
     )?;
+    if payload.organization_id.is_some() {
+        payload.organization_id = match payload.organization_id {
+            None => None,
+            Some(Some(v)) => Some(Some(v)),
+            Some(None) => Some(Some(DEFAULT_ORGANIZATION_ID.to_string())),
+        };
+    }
     payload.ip_whitelist = normalize_ip_list_patch("ip_whitelist", payload.ip_whitelist)?;
     payload.ip_blacklist = normalize_ip_list_patch("ip_blacklist", payload.ip_blacklist)?;
-    // 若更新了 allowed_models，需要校验
-    if let Some(Some(list)) = payload.allowed_models.as_ref() {
-        use std::collections::HashSet;
-        let cached = crate::server::model_cache::get_cached_models_all(&app_state)
-            .await
-            .map_err(GatewayError::Db)?;
-        let set: HashSet<String> = cached.into_iter().map(|m| m.id).collect();
-        for m in list {
-            if !set.contains(m) {
-                return Err(GatewayError::NotFound(format!(
-                    "model '{}' not found in cache",
-                    m
-                )));
-            }
+    payload.allowed_models = crate::server::token_model_limits::normalize_model_list_patch(
+        "allowed_models",
+        payload.allowed_models,
+    )?;
+    payload.model_blacklist = crate::server::token_model_limits::normalize_model_list_patch(
+        "model_blacklist",
+        payload.model_blacklist,
+    )?;
+    if payload.allowed_models.is_some() || payload.model_blacklist.is_some() {
+        let current = app_state
+            .token_store
+            .get_token_by_id(&id)
+            .await?
+            .ok_or_else(|| GatewayError::NotFound("token not found".into()))?;
+        let mut next_allowed = current.allowed_models;
+        let mut next_blacklist = current.model_blacklist;
+        if let Some(v) = payload.allowed_models.as_ref() {
+            next_allowed = v.clone();
         }
+        if let Some(v) = payload.model_blacklist.as_ref() {
+            next_blacklist = v.clone();
+        }
+        crate::server::token_model_limits::ensure_model_lists_mutually_exclusive(
+            &next_allowed,
+            &next_blacklist,
+        )?;
+    }
+    if let Some(Some(list)) = payload.allowed_models.as_ref() {
+        crate::server::token_model_limits::validate_models_exist_in_cache(
+            &app_state,
+            "allowed_models",
+            &Some(list.clone()),
+        )
+        .await?;
+    }
+    if let Some(Some(list)) = payload.model_blacklist.as_ref() {
+        crate::server::token_model_limits::validate_models_exist_in_cache(
+            &app_state,
+            "model_blacklist",
+            &Some(list.clone()),
+        )
+        .await?;
     }
     match app_state
         .token_store
@@ -828,6 +874,7 @@ mod tests {
                 name: Some("  my-token  ".into()),
                 token: None,
                 allowed_models: None,
+                model_blacklist: None,
                 max_tokens: None,
                 max_amount: Some(10.0),
                 enabled: true,
@@ -945,6 +992,7 @@ mod tests {
                 name: Some("name".into()),
                 token: None,
                 allowed_models: None,
+                model_blacklist: None,
                 max_tokens: None,
                 max_amount: None,
                 enabled: true,
@@ -968,6 +1016,7 @@ mod tests {
                 name: Some("   ".into()),
                 token: None,
                 allowed_models: None,
+                model_blacklist: None,
                 max_tokens: None,
                 max_amount: None,
                 enabled: true,

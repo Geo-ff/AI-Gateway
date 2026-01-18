@@ -39,19 +39,15 @@ pub async fn select_provider_for_model(
                 .get_provider_key_rotation_strategy(provider_name)
                 .await
                 .unwrap_or_default();
-            let api_key = app_state
-                .load_balancer_state
-                .select_provider_key(provider_name, strategy, &keys)?;
+            let api_key = app_state.load_balancer_state.select_provider_key(
+                provider_name,
+                strategy,
+                &keys,
+            )?;
             if api_key.is_empty() {
                 return Err(GatewayError::from(BalanceError::NoApiKeysAvailable));
             }
-            return Ok((
-                SelectedProvider {
-                    provider,
-                    api_key,
-                },
-                parsed_model,
-            ));
+            return Ok((SelectedProvider { provider, api_key }, parsed_model));
         } else {
             // 指定供应商不存在
             return Err(GatewayError::NotFound(format!(
@@ -81,8 +77,10 @@ pub async fn select_provider(app_state: &AppState) -> Result<SelectedProvider, B
     }
 
     let mut candidates: Vec<crate::config::Provider> = Vec::new();
-    let mut keys_by_provider: std::collections::HashMap<String, Vec<crate::routing::ProviderKeyEntry>> =
-        std::collections::HashMap::new();
+    let mut keys_by_provider: std::collections::HashMap<
+        String,
+        Vec<crate::routing::ProviderKeyEntry>,
+    > = std::collections::HashMap::new();
 
     for p in providers {
         if !p.enabled {
@@ -93,7 +91,9 @@ pub async fn select_provider(app_state: &AppState) -> Result<SelectedProvider, B
             .list_provider_keys_raw(&p.name, &app_state.config.logging.key_log_strategy)
             .await
             .unwrap_or_default();
-        let has_active = keys.iter().any(|k| k.active && !k.value.is_empty() && k.weight >= 1);
+        let has_active = keys
+            .iter()
+            .any(|k| k.active && !k.value.is_empty() && k.weight >= 1);
         if has_active {
             keys_by_provider.insert(p.name.clone(), keys);
             candidates.push(p);
@@ -111,17 +111,16 @@ pub async fn select_provider(app_state: &AppState) -> Result<SelectedProvider, B
     );
     let provider = load_balancer.select_provider_only()?;
 
-    let keys = keys_by_provider
-        .remove(&provider.name)
-        .unwrap_or_default();
+    let keys = keys_by_provider.remove(&provider.name).unwrap_or_default();
     let strategy = app_state
         .providers
         .get_provider_key_rotation_strategy(&provider.name)
         .await
         .unwrap_or_default();
-    let api_key = app_state
-        .load_balancer_state
-        .select_provider_key(&provider.name, strategy, &keys)?;
+    let api_key =
+        app_state
+            .load_balancer_state
+            .select_provider_key(&provider.name, strategy, &keys)?;
 
     Ok(SelectedProvider { provider, api_key })
 }

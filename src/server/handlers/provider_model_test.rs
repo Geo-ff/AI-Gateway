@@ -59,7 +59,10 @@ fn classify_http_failure(
         return ("insufficient_balance".into(), Some(snippet.to_string()));
     }
 
-    ("other".into(), Some(snippet.to_string()).filter(|s| !s.is_empty()))
+    (
+        "other".into(),
+        Some(snippet.to_string()).filter(|s| !s.is_empty()),
+    )
 }
 
 fn format_upstream_error_detail(
@@ -126,7 +129,10 @@ async fn send_test_request(
 
     let model = model.trim();
     if model.is_empty() {
-        return Err(("model_not_found".into(), Some("model cannot be empty".into())));
+        return Err((
+            "model_not_found".into(),
+            Some("model cannot be empty".into()),
+        ));
     }
 
     match provider_type {
@@ -163,8 +169,7 @@ async fn send_test_request(
                 .await
                 .map_err(|e| ("other".into(), Some(e.to_string())))?;
             if !status.is_success() {
-                let detail =
-                    format_upstream_error_detail(status, content_type.as_deref(), &bytes);
+                let detail = format_upstream_error_detail(status, content_type.as_deref(), &bytes);
                 let snippet = String::from_utf8_lossy(&bytes);
                 let (ty, _) = classify_http_failure(status, &snippet);
                 return Err((ty, detail));
@@ -202,8 +207,7 @@ async fn send_test_request(
                 .await
                 .map_err(|e| ("other".into(), Some(e.to_string())))?;
             if !status.is_success() {
-                let detail =
-                    format_upstream_error_detail(status, content_type.as_deref(), &bytes);
+                let detail = format_upstream_error_detail(status, content_type.as_deref(), &bytes);
                 let snippet = String::from_utf8_lossy(&bytes);
                 let (ty, _) = classify_http_failure(status, &snippet);
                 return Err((ty, detail));
@@ -243,8 +247,7 @@ async fn send_test_request(
                 .await
                 .map_err(|e| ("other".into(), Some(e.to_string())))?;
             if !status.is_success() {
-                let detail =
-                    format_upstream_error_detail(status, content_type.as_deref(), &bytes);
+                let detail = format_upstream_error_detail(status, content_type.as_deref(), &bytes);
                 let snippet = String::from_utf8_lossy(&bytes);
                 let (ty, _) = classify_http_failure(status, &snippet);
                 return Err((ty, detail));
@@ -426,8 +429,14 @@ pub async fn test_provider_model(
 
     let api_type = provider.api_type.clone();
     let t0 = Instant::now();
-    let mut outcome =
-        send_test_request(api_type.clone(), &base_url, &api_key, &upstream_model, false).await;
+    let mut outcome = send_test_request(
+        api_type.clone(),
+        &base_url,
+        &api_key,
+        &upstream_model,
+        false,
+    )
+    .await;
     // Some upstream aggregators only work in stream mode for specific models. If we got a structured
     // upstream error indicating status/body parsing issues, retry with `stream=true` (SSE) and
     // treat any 2xx as success.

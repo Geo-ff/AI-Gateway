@@ -47,9 +47,8 @@ impl FavoritesStore for DatabaseLogger {
     ) -> BoxFuture<'a, rusqlite::Result<Vec<String>>> {
         Box::pin(async move {
             let conn = self.connection.lock().await;
-            let mut stmt = conn.prepare(
-                "SELECT target FROM favorites WHERE kind = ?1 AND favorite = 1",
-            )?;
+            let mut stmt =
+                conn.prepare("SELECT target FROM favorites WHERE kind = ?1 AND favorite = 1")?;
             let rows = stmt.query_map([kind.as_str()], |row| row.get::<_, String>(0))?;
             let mut out = Vec::new();
             for r in rows {
@@ -59,4 +58,3 @@ impl FavoritesStore for DatabaseLogger {
         })
     }
 }
-

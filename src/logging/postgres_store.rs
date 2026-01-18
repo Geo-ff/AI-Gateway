@@ -13,7 +13,7 @@ use crate::providers::openai::Model;
 use crate::routing::{KeyRotationStrategy, ProviderKeyEntry};
 use crate::server::storage_traits::{
     AdminPublicKeyRecord, BoxFuture, FavoriteKind, FavoritesStore, LoginCodeRecord, LoginStore,
-    ModelCache, ProviderStore, ProviderKeyEntryWithCreatedAt, RequestLogStore, TuiSessionRecord,
+    ModelCache, ProviderKeyEntryWithCreatedAt, ProviderStore, RequestLogStore, TuiSessionRecord,
     WebSessionRecord,
 };
 
@@ -1624,7 +1624,10 @@ impl ProviderStore for PgLogStore {
             let now_s = to_beijing_string(&now);
             let client = self.pool.pick();
             client
-                .execute("DELETE FROM model_redirects WHERE provider = $1", &[&provider])
+                .execute(
+                    "DELETE FROM model_redirects WHERE provider = $1",
+                    &[&provider],
+                )
                 .await
                 .map_err(pg_err)?;
             for (source, target) in redirects {

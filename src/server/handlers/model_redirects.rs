@@ -14,9 +14,9 @@ use crate::logging::types::{
     ProviderOpLog, REQ_TYPE_PROVIDER_MODEL_REDIRECTS_DELETE,
     REQ_TYPE_PROVIDER_MODEL_REDIRECTS_LIST, REQ_TYPE_PROVIDER_MODEL_REDIRECTS_SET,
 };
+use crate::server::AppState;
 use crate::server::request_logging::log_simple_request;
 use crate::server::util::bearer_token;
-use crate::server::AppState;
 
 #[derive(Debug, Serialize)]
 struct ModelRedirectsOut {
@@ -42,7 +42,9 @@ fn validate_redirects(redirects: &HashMap<String, String>) -> Result<(), Gateway
             return Err(GatewayError::Config("target_model cannot be empty".into()));
         }
         if source.trim() == target.trim() {
-            return Err(GatewayError::Config("source_model cannot equal target_model".into()));
+            return Err(GatewayError::Config(
+                "source_model cannot equal target_model".into(),
+            ));
         }
     }
 
@@ -75,7 +77,9 @@ fn validate_redirects(redirects: &HashMap<String, String>) -> Result<(), Gateway
 
     for node in redirects.keys() {
         if dfs(node.as_str(), redirects, &mut visiting, &mut visited) {
-            return Err(GatewayError::Config("redirect mapping contains a cycle".into()));
+            return Err(GatewayError::Config(
+                "redirect mapping contains a cycle".into(),
+            ));
         }
     }
 
@@ -322,7 +326,9 @@ pub async fn delete_model_redirect(
             timestamp: start_time,
             operation: REQ_TYPE_PROVIDER_MODEL_REDIRECTS_DELETE.to_string(),
             provider: Some(provider_name.clone()),
-            details: Some(serde_json::json!({"source_model": source_model, "deleted": deleted}).to_string()),
+            details: Some(
+                serde_json::json!({"source_model": source_model, "deleted": deleted}).to_string(),
+            ),
         })
         .await;
     log_simple_request(
@@ -380,4 +386,3 @@ mod tests {
         assert!(validate_redirects(&m).is_ok());
     }
 }
-

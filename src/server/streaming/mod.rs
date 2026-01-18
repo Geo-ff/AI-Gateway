@@ -50,7 +50,8 @@ pub async fn stream_chat_completions(
             );
         }
     }
-    let (selected, mut parsed_model) = select_provider_for_model(&app_state, &request.model).await?;
+    let (selected, mut parsed_model) =
+        select_provider_for_model(&app_state, &request.model).await?;
     if let Some((from, to)) = apply_provider_model_redirects_to_parsed_model(
         &app_state,
         &selected.provider.name,
@@ -175,11 +176,7 @@ pub async fn stream_chat_completions(
         return Err(GatewayError::Config("token expired".into()));
     }
 
-    if let Some(allow) = token.allowed_models.as_ref()
-        && !allow.iter().any(|m| m == &request.model)
-    {
-        return Err(GatewayError::Config("model not allowed for token".into()));
-    }
+    crate::server::token_model_limits::enforce_model_allowed_for_token(&token, &request.model)?;
 
     if let Some(max_tokens) = token.max_tokens
         && token.total_tokens_spent >= max_tokens

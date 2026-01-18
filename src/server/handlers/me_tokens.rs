@@ -19,6 +19,7 @@ pub struct MyTokenOut {
     pub id: String,
     pub name: String,
     pub allowed_models: Option<Vec<String>>,
+    pub model_blacklist: Option<Vec<String>>,
     pub max_tokens: Option<i64>,
     pub max_amount: Option<f64>,
     pub amount_spent: f64,
@@ -37,6 +38,7 @@ impl From<ClientToken> for MyTokenOut {
             id: t.id,
             name: t.name,
             allowed_models: t.allowed_models,
+            model_blacklist: t.model_blacklist,
             max_tokens: t.max_tokens,
             max_amount: t.max_amount,
             amount_spent: t.amount_spent,
@@ -60,6 +62,8 @@ pub struct CreateMyTokenPayload {
     pub name: Option<String>,
     #[serde(default)]
     pub allowed_models: Option<Vec<String>>,
+    #[serde(default)]
+    pub model_blacklist: Option<Vec<String>>,
     #[serde(default)]
     pub max_tokens: Option<i64>,
     #[serde(default)]
@@ -195,6 +199,30 @@ pub async fn create_my_token(
     {
         return Err(GatewayError::Config("max_amount 必须 >= 0".into()));
     }
+    let allowed_models = crate::server::token_model_limits::normalize_model_list(
+        "allowed_models",
+        payload.allowed_models,
+    )?;
+    let model_blacklist = crate::server::token_model_limits::normalize_model_list(
+        "model_blacklist",
+        payload.model_blacklist,
+    )?;
+    crate::server::token_model_limits::ensure_model_lists_mutually_exclusive(
+        &allowed_models,
+        &model_blacklist,
+    )?;
+    crate::server::token_model_limits::validate_models_exist_in_cache(
+        &app_state,
+        "allowed_models",
+        &allowed_models,
+    )
+    .await?;
+    crate::server::token_model_limits::validate_models_exist_in_cache(
+        &app_state,
+        "model_blacklist",
+        &model_blacklist,
+    )
+    .await?;
 
     let created = app_state
         .token_store
@@ -203,7 +231,8 @@ pub async fn create_my_token(
             user_id: Some(claims.sub.clone()),
             name,
             token: None,
-            allowed_models: payload.allowed_models,
+            allowed_models,
+            model_blacklist,
             max_tokens: payload.max_tokens,
             max_amount: payload.max_amount,
             enabled: payload.enabled,
@@ -335,6 +364,19 @@ pub async fn update_my_token(
         }
     };
 
+    if payload.id.is_some() {
+        return Err(GatewayError::Config("不允许修改 id".into()));
+    }
+    let mut payload = payload;
+    payload.allowed_models = crate::server::token_model_limits::normalize_model_list_patch(
+        "allowed_models",
+        payload.allowed_models,
+    )?;
+    payload.model_blacklist = crate::server::token_model_limits::normalize_model_list_patch(
+        "model_blacklist",
+        payload.model_blacklist,
+    )?;
+
     if app_state
         .token_store
         .get_token_by_id_scoped(&claims.sub, &id)
@@ -357,6 +399,42 @@ pub async fn update_my_token(
         )
         .await;
         return Err(ge);
+    }
+
+    if payload.allowed_models.is_some() || payload.model_blacklist.is_some() {
+        let current = app_state
+            .token_store
+            .get_token_by_id_scoped(&claims.sub, &id)
+            .await?
+            .ok_or_else(|| GatewayError::NotFound("token not found".into()))?;
+        let mut next_allowed = current.allowed_models;
+        let mut next_blacklist = current.model_blacklist;
+        if let Some(v) = payload.allowed_models.as_ref() {
+            next_allowed = v.clone();
+        }
+        if let Some(v) = payload.model_blacklist.as_ref() {
+            next_blacklist = v.clone();
+        }
+        crate::server::token_model_limits::ensure_model_lists_mutually_exclusive(
+            &next_allowed,
+            &next_blacklist,
+        )?;
+    }
+    if let Some(Some(list)) = payload.allowed_models.as_ref() {
+        crate::server::token_model_limits::validate_models_exist_in_cache(
+            &app_state,
+            "allowed_models",
+            &Some(list.clone()),
+        )
+        .await?;
+    }
+    if let Some(Some(list)) = payload.model_blacklist.as_ref() {
+        crate::server::token_model_limits::validate_models_exist_in_cache(
+            &app_state,
+            "model_blacklist",
+            &Some(list.clone()),
+        )
+        .await?;
     }
 
     let Some(updated) = app_state

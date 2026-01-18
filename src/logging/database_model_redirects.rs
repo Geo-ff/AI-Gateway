@@ -6,10 +6,7 @@ use crate::logging::time::to_beijing_string;
 use super::database::DatabaseLogger;
 
 impl DatabaseLogger {
-    pub async fn list_model_redirects(
-        &self,
-        provider: &str,
-    ) -> Result<Vec<(String, String)>> {
+    pub async fn list_model_redirects(&self, provider: &str) -> Result<Vec<(String, String)>> {
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare(
             "SELECT source_model, target_model FROM model_redirects WHERE provider = ?1 ORDER BY source_model",
@@ -31,7 +28,10 @@ impl DatabaseLogger {
         let conn = self.connection.lock().await;
         let now_s = to_beijing_string(&now);
         let tx = conn.unchecked_transaction()?;
-        tx.execute("DELETE FROM model_redirects WHERE provider = ?1", [provider])?;
+        tx.execute(
+            "DELETE FROM model_redirects WHERE provider = ?1",
+            [provider],
+        )?;
         for (source, target) in redirects {
             tx.execute(
                 "INSERT INTO model_redirects (provider, source_model, target_model, created_at, updated_at)

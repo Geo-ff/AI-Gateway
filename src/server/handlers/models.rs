@@ -80,15 +80,21 @@ pub async fn list_models(
         });
     }
 
-    // 若令牌有限制，仅返回该令牌允许的模型
+    // 若令牌有限制，仅返回该令牌允许的模型（支持白名单/黑名单）
     if !is_admin
         && let Some(tok) = token_for_limits.as_deref()
         && let Some(t) = app_state.token_store.get_token(tok).await?
-        && let Some(allow) = t.allowed_models.as_ref()
     {
-        use std::collections::HashSet;
-        let allow_set: HashSet<&str> = allow.iter().map(|s| s.as_str()).collect();
-        cached_models.retain(|m| allow_set.contains(m.id.as_str()));
+        if let Some(allow) = t.allowed_models.as_ref() {
+            use std::collections::HashSet;
+            let allow_set: HashSet<&str> = allow.iter().map(|s| s.as_str()).collect();
+            cached_models.retain(|m| allow_set.contains(m.id.as_str()));
+        }
+        if let Some(deny) = t.model_blacklist.as_ref() {
+            use std::collections::HashSet;
+            let deny_set: HashSet<&str> = deny.iter().map(|s| s.as_str()).collect();
+            cached_models.retain(|m| !deny_set.contains(m.id.as_str()));
+        }
     }
     let path = uri
         .path_and_query()

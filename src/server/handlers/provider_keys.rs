@@ -10,9 +10,9 @@ use std::sync::Arc;
 use super::auth::require_superadmin;
 use crate::error::GatewayError;
 use crate::logging::types::{
-    ProviderOpLog, REQ_TYPE_PROVIDER_KEY_ADD, REQ_TYPE_PROVIDER_KEY_DELETE,
-    REQ_TYPE_PROVIDER_KEY_CONFIG_GET, REQ_TYPE_PROVIDER_KEY_CONFIG_SET,
-    REQ_TYPE_PROVIDER_KEY_LIST, REQ_TYPE_PROVIDER_KEY_TOGGLE, REQ_TYPE_PROVIDER_KEY_WEIGHT_SET,
+    ProviderOpLog, REQ_TYPE_PROVIDER_KEY_ADD, REQ_TYPE_PROVIDER_KEY_CONFIG_GET,
+    REQ_TYPE_PROVIDER_KEY_CONFIG_SET, REQ_TYPE_PROVIDER_KEY_DELETE, REQ_TYPE_PROVIDER_KEY_LIST,
+    REQ_TYPE_PROVIDER_KEY_TOGGLE, REQ_TYPE_PROVIDER_KEY_WEIGHT_SET,
 };
 use crate::routing::KeyRotationStrategy;
 use crate::server::AppState;
@@ -239,7 +239,8 @@ pub async fn toggle_provider_key(
 
     let start_time = Utc::now();
     let key_hint = key_display_hint(&app_state.config.logging.key_log_strategy, &payload.key);
-    let details = key_hint.map(|v| serde_json::json!({"key": v, "active": payload.active}).to_string());
+    let details =
+        key_hint.map(|v| serde_json::json!({"key": v, "active": payload.active}).to_string());
     let _ = app_state
         .log_store
         .log_provider_op(ProviderOpLog {

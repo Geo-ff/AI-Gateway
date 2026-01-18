@@ -10,9 +10,9 @@ use super::auth::require_superadmin;
 use crate::config::settings::{Provider, ProviderType};
 use crate::error::GatewayError;
 use crate::logging::types::{
-    ProviderOpLog, REQ_TYPE_PROVIDER_CREATE, REQ_TYPE_PROVIDER_DELETE, REQ_TYPE_PROVIDER_GET,
-    REQ_TYPE_PROVIDER_ENABLED_SET, REQ_TYPE_PROVIDER_FAVORITE_SET, REQ_TYPE_PROVIDER_LIST,
-    REQ_TYPE_PROVIDER_UPDATE,
+    ProviderOpLog, REQ_TYPE_PROVIDER_CREATE, REQ_TYPE_PROVIDER_DELETE,
+    REQ_TYPE_PROVIDER_ENABLED_SET, REQ_TYPE_PROVIDER_FAVORITE_SET, REQ_TYPE_PROVIDER_GET,
+    REQ_TYPE_PROVIDER_LIST, REQ_TYPE_PROVIDER_UPDATE,
 };
 use crate::server::AppState;
 use crate::server::request_logging::log_simple_request;
@@ -85,7 +85,8 @@ pub async fn list_providers(
         .get_cached_models(None)
         .await
         .unwrap_or_default();
-    let mut cached_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut cached_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for m in &all_cached {
         *cached_counts.entry(m.provider.clone()).or_insert(0) += 1;
     }
@@ -194,7 +195,11 @@ pub async fn get_provider(
                 None,
             )
             .await;
-            Ok(Json(ProviderOut::from_provider(p, cached_count, is_favorite)))
+            Ok(Json(ProviderOut::from_provider(
+                p,
+                cached_count,
+                is_favorite,
+            )))
         }
         None => {
             let token_log = token_for_log(provided_token.as_deref());
@@ -431,7 +436,11 @@ pub async fn update_provider(
         .is_favorite(FavoriteKind::Provider, &p.name)
         .await
         .map_err(GatewayError::Db)?;
-    Ok(Json(ProviderOut::from_provider(p, cached_count, is_favorite)))
+    Ok(Json(ProviderOut::from_provider(
+        p,
+        cached_count,
+        is_favorite,
+    )))
 }
 
 #[derive(Debug, Deserialize)]

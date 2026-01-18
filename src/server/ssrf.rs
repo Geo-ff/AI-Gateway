@@ -37,8 +37,8 @@ fn is_disallowed_host(domain: &str) -> bool {
 /// - 禁止 userinfo
 /// - 禁止本机/内网/链路本地/ULA 等地址（域名会进行 DNS 解析校验）
 pub async fn validate_outbound_base_url(raw: &str) -> Result<Url, GatewayError> {
-    let url = Url::parse(raw)
-        .map_err(|_| GatewayError::Config("base_url 不是合法的 URL".into()))?;
+    let url =
+        Url::parse(raw).map_err(|_| GatewayError::Config("base_url 不是合法的 URL".into()))?;
 
     match url.scheme() {
         "http" | "https" => {}
@@ -46,7 +46,9 @@ pub async fn validate_outbound_base_url(raw: &str) -> Result<Url, GatewayError> 
     }
 
     if !url.username().is_empty() || url.password().is_some() {
-        return Err(GatewayError::Config("base_url 不允许包含用户名/密码".into()));
+        return Err(GatewayError::Config(
+            "base_url 不允许包含用户名/密码".into(),
+        ));
     }
 
     let host = url
@@ -80,7 +82,9 @@ pub fn join_models_url(base_url: &Url, models_endpoint: Option<&str>) -> Result<
     if let Some(ep) = models_endpoint {
         let ep = ep.trim();
         if ep.is_empty() {
-            return Err(GatewayError::Config("models_endpoint 不能为空字符串".into()));
+            return Err(GatewayError::Config(
+                "models_endpoint 不能为空字符串".into(),
+            ));
         }
         if ep.starts_with("http://") || ep.starts_with("https://") {
             return Url::parse(ep)
@@ -121,11 +125,7 @@ mod tests {
 
     #[tokio::test]
     async fn ssrf_rejects_private_v4() {
-        assert!(
-            validate_outbound_base_url("http://10.0.0.1")
-                .await
-                .is_err()
-        );
+        assert!(validate_outbound_base_url("http://10.0.0.1").await.is_err());
         assert!(
             validate_outbound_base_url("http://192.168.1.1")
                 .await
@@ -149,7 +149,11 @@ mod tests {
 
     #[tokio::test]
     async fn ssrf_requires_http_scheme() {
-        assert!(validate_outbound_base_url("file:///etc/passwd").await.is_err());
+        assert!(
+            validate_outbound_base_url("file:///etc/passwd")
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

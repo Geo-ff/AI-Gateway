@@ -1,7 +1,7 @@
 use crate::config::{ModelRedirect, Settings};
 use crate::providers::openai::ChatCompletionRequest;
-use crate::server::model_parser::ParsedModel;
 use crate::server::AppState;
+use crate::server::model_parser::ParsedModel;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -66,8 +66,8 @@ pub async fn apply_provider_model_redirects_to_request(
     request: &mut ChatCompletionRequest,
 ) -> Result<Option<(String, String)>, crate::error::GatewayError> {
     let mut parsed = ParsedModel::parse(&request.model);
-    let applied = apply_provider_model_redirects_to_parsed_model(app_state, provider, &mut parsed)
-        .await?;
+    let applied =
+        apply_provider_model_redirects_to_parsed_model(app_state, provider, &mut parsed).await?;
     if applied.is_some() {
         request.model = if parsed.provider_name.is_some() {
             format!("{}/{}", provider, parsed.model_name)

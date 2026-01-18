@@ -153,11 +153,7 @@ pub async fn chat_completions(
             return Err(GatewayError::Config("token expired".into()));
         }
 
-        if let Some(allow) = token.allowed_models.as_ref()
-            && !allow.iter().any(|m| m == &request.model)
-        {
-            return Err(GatewayError::Config("model not allowed for token".into()));
-        }
+        crate::server::token_model_limits::enforce_model_allowed_for_token(&token, &request.model)?;
 
         if let Some(max_tokens) = token.max_tokens
             && token.total_tokens_spent >= max_tokens
