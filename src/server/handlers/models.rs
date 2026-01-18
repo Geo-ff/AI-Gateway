@@ -10,6 +10,7 @@ use std::sync::Arc;
 use super::auth::{ensure_admin, ensure_client_token};
 use crate::error::GatewayError;
 use crate::logging::types::{REQ_TYPE_MODELS_LIST, REQ_TYPE_PROVIDER_MODELS_LIST};
+use crate::providers::openai::Model;
 use crate::providers::openai::ModelListResponse;
 use crate::server::AppState;
 use crate::server::model_cache::{get_cached_models_all, get_cached_models_for_provider};
@@ -112,31 +113,89 @@ pub async fn list_models(
         cached_models.retain(|m| !disabled.contains(&m.id));
     }
 
-    // 若该 provider 配置了 redirects，则不向第三方暴露 source 模型（避免 source/target 重复可用）
+    // 若该 provider 配置了 redirects，则对外仅暴露 target 模型：
+    // - source 将被折叠为最终 target（链式重定向取最终落点）
+    // - 若 target 不在缓存列表中，则合成一个 target entry（复用 source 的元信息）
     {
         use std::collections::{HashMap, HashSet};
-        let mut providers = HashSet::<String>::new();
-        for m in &cached_models {
-            if let Some(pos) = m.id.find('/') {
-                providers.insert(m.id[..pos].to_string());
+        fn resolve_redirect_chain(
+            map: &HashMap<String, String>,
+            source_model: &str,
+            max_hops: usize,
+        ) -> String {
+            let mut current = source_model.to_string();
+            let mut seen = HashSet::<String>::new();
+            for _ in 0..max_hops {
+                if !seen.insert(current.clone()) {
+                    break;
+                }
+                match map.get(&current) {
+                    Some(next) if next != &current => current = next.clone(),
+                    _ => break,
+                }
             }
+            current
         }
-        let mut sources = HashSet::<String>::new();
-        for p in providers {
-            let pairs = app_state
-                .providers
-                .list_model_redirects(&p)
-                .await
-                .map_err(GatewayError::Db)?;
-            if pairs.is_empty() {
+
+        let original_ids: HashSet<String> = cached_models.iter().map(|m| m.id.clone()).collect();
+        let mut out = Vec::with_capacity(cached_models.len());
+        let mut seen = HashSet::<String>::new();
+        let mut redirects_cache = HashMap::<String, HashMap<String, String>>::new();
+
+        for m in cached_models.into_iter() {
+            let (provider, model_id) = match m.id.split_once('/') {
+                Some((p, mid)) => (p.to_string(), mid.to_string()),
+                None => {
+                    if seen.insert(m.id.clone()) {
+                        out.push(m);
+                    }
+                    continue;
+                }
+            };
+            let map = if redirects_cache.contains_key(&provider) {
+                redirects_cache.get(&provider).cloned().unwrap_or_default()
+            } else {
+                let pairs = app_state
+                    .providers
+                    .list_model_redirects(&provider)
+                    .await
+                    .map_err(GatewayError::Db)?;
+                let map: HashMap<String, String> = pairs.into_iter().collect();
+                redirects_cache.insert(provider.clone(), map.clone());
+                map
+            };
+
+            if map.is_empty() {
+                if seen.insert(m.id.clone()) {
+                    out.push(m);
+                }
                 continue;
             }
-            let map: HashMap<String, String> = pairs.into_iter().collect();
-            for source in map.keys() {
-                sources.insert(format!("{}/{}", p, source));
+
+            let resolved = resolve_redirect_chain(&map, &model_id, 16);
+            if resolved == model_id {
+                if seen.insert(m.id.clone()) {
+                    out.push(m);
+                }
+                continue;
             }
+
+            let target_id = format!("{}/{}", provider, resolved);
+            if original_ids.contains(&target_id) {
+                continue;
+            }
+            if !seen.insert(target_id.clone()) {
+                continue;
+            }
+            out.push(Model {
+                id: target_id,
+                object: m.object,
+                created: m.created,
+                owned_by: m.owned_by,
+            });
         }
-        cached_models.retain(|m| !sources.contains(&m.id));
+
+        cached_models = out;
     }
     let path = uri
         .path_and_query()
@@ -253,7 +312,7 @@ pub async fn list_provider_models(
             .filter(|m| !disabled.contains(&m.id))
             .collect();
 
-        // 若配置了 redirects，则不暴露 source 模型
+        // 若配置了 redirects，则对外仅暴露 target 模型（source 折叠为最终 target）
         {
             use std::collections::{HashMap, HashSet};
             let pairs = app_state
@@ -263,8 +322,51 @@ pub async fn list_provider_models(
                 .map_err(GatewayError::Db)?;
             if !pairs.is_empty() {
                 let map: HashMap<String, String> = pairs.into_iter().collect();
-                let sources: HashSet<String> = map.keys().cloned().collect();
-                cached_models.retain(|m| !sources.contains(&m.id));
+                fn resolve_redirect_chain(
+                    map: &HashMap<String, String>,
+                    source_model: &str,
+                    max_hops: usize,
+                ) -> String {
+                    let mut current = source_model.to_string();
+                    let mut seen = HashSet::<String>::new();
+                    for _ in 0..max_hops {
+                        if !seen.insert(current.clone()) {
+                            break;
+                        }
+                        match map.get(&current) {
+                            Some(next) if next != &current => current = next.clone(),
+                            _ => break,
+                        }
+                    }
+                    current
+                }
+
+                let original_ids: HashSet<String> =
+                    cached_models.iter().map(|m| m.id.clone()).collect();
+                let mut out = Vec::with_capacity(cached_models.len());
+                let mut seen = HashSet::<String>::new();
+                for m in cached_models.into_iter() {
+                    let resolved = resolve_redirect_chain(&map, &m.id, 16);
+                    if resolved == m.id {
+                        if seen.insert(m.id.clone()) {
+                            out.push(m);
+                        }
+                        continue;
+                    }
+                    if original_ids.contains(&resolved) {
+                        continue;
+                    }
+                    if !seen.insert(resolved.clone()) {
+                        continue;
+                    }
+                    out.push(Model {
+                        id: resolved,
+                        object: m.object,
+                        created: m.created,
+                        owned_by: m.owned_by,
+                    });
+                }
+                cached_models = out;
             }
         }
         log_simple_request(

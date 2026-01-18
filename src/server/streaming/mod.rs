@@ -12,7 +12,6 @@ use crate::providers::openai::ChatCompletionRequest;
 use crate::server::AppState;
 use crate::server::model_redirect::{
     apply_model_redirects, apply_provider_model_redirects_to_parsed_model,
-    apply_provider_model_redirects_to_request,
 };
 use crate::server::provider_dispatch::select_provider_for_model;
 
@@ -39,15 +38,14 @@ pub async fn stream_chat_completions(
     apply_model_redirects(&mut request);
     let parsed_for_prefix = crate::server::model_parser::ParsedModel::parse(&request.model);
     if let Some(p) = parsed_for_prefix.provider_name.as_deref() {
+        let mut parsed = parsed_for_prefix.clone();
         if let Some((from, to)) =
-            apply_provider_model_redirects_to_request(&app_state, p, &mut request).await?
+            apply_provider_model_redirects_to_parsed_model(&app_state, p, &mut parsed).await?
         {
-            tracing::info!(
-                provider = p,
-                source_model = %from,
-                target_model = %to,
-                "已应用 provider 维度模型重定向（前缀指定）"
-            );
+            return Err(GatewayError::Config(format!(
+                "model '{}' is redirected; use '{}' instead",
+                from, to
+            )));
         }
     }
     let (selected, mut parsed_model) =

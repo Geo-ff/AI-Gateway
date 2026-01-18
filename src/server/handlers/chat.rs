@@ -15,10 +15,7 @@ use crate::server::provider_dispatch::{
 use crate::server::streaming::stream_chat_completions;
 use crate::server::{
     AppState,
-    model_redirect::{
-        apply_model_redirects, apply_provider_model_redirects_to_parsed_model,
-        apply_provider_model_redirects_to_request,
-    },
+    model_redirect::{apply_model_redirects, apply_provider_model_redirects_to_parsed_model},
     request_logging::log_chat_request,
 };
 
@@ -39,18 +36,17 @@ pub async fn chat_completions(
         let mut request = request;
         let start_time = Utc::now();
         apply_model_redirects(&mut request);
-        // provider-scoped redirects can be applied early if the request explicitly pins a provider
+        // If request pins a provider, redirected source models should be rejected (not rewritten).
         let parsed_for_prefix = crate::server::model_parser::ParsedModel::parse(&request.model);
         if let Some(p) = parsed_for_prefix.provider_name.as_deref() {
+            let mut parsed = parsed_for_prefix.clone();
             if let Some((from, to)) =
-                apply_provider_model_redirects_to_request(&app_state, p, &mut request).await?
+                apply_provider_model_redirects_to_parsed_model(&app_state, p, &mut parsed).await?
             {
-                tracing::info!(
-                    provider = p,
-                    source_model = %from,
-                    target_model = %to,
-                    "已应用 provider 维度模型重定向（前缀指定）"
-                );
+                return Err(GatewayError::Config(format!(
+                    "model '{}' is redirected; use '{}' instead",
+                    from, to
+                )));
             }
         }
 

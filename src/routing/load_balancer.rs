@@ -243,8 +243,8 @@ impl LoadBalancer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BalanceStrategy, ProviderType};
     use crate::config::settings::DEFAULT_PROVIDER_COLLECTION;
+    use crate::config::{BalanceStrategy, ProviderType};
     use rand::SeedableRng;
 
     fn provider(name: &str, keys: &[&str]) -> Provider {
