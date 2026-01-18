@@ -9,11 +9,12 @@ impl DatabaseLogger {
     pub async fn insert_provider(&self, provider: &Provider) -> Result<bool> {
         let conn = self.connection.lock().await;
         let res = conn.execute(
-            "INSERT OR IGNORE INTO providers (name, display_name, api_type, base_url, models_endpoint)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT OR IGNORE INTO providers (name, display_name, collection, api_type, base_url, models_endpoint)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             (
                 &provider.name,
                 &provider.display_name,
+                &provider.collection,
                 provider_type_to_str(&provider.api_type),
                 &provider.base_url,
                 &provider.models_endpoint,
@@ -25,15 +26,17 @@ impl DatabaseLogger {
     pub async fn upsert_provider(&self, provider: &Provider) -> Result<()> {
         let conn = self.connection.lock().await;
         conn.execute(
-            "INSERT INTO providers (name, display_name, api_type, base_url, models_endpoint)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO providers (name, display_name, collection, api_type, base_url, models_endpoint)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(name) DO UPDATE SET api_type = excluded.api_type,
                                          display_name = excluded.display_name,
+                                         collection = excluded.collection,
                                          base_url = excluded.base_url,
                                          models_endpoint = excluded.models_endpoint",
             (
                 &provider.name,
                 &provider.display_name,
+                &provider.collection,
                 provider_type_to_str(&provider.api_type),
                 &provider.base_url,
                 &provider.models_endpoint,
@@ -52,19 +55,21 @@ impl DatabaseLogger {
     pub async fn get_provider(&self, name: &str) -> Result<Option<Provider>> {
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT name, display_name, api_type, base_url, models_endpoint, enabled FROM providers WHERE name = ?1 LIMIT 1",
+            "SELECT name, display_name, collection, api_type, base_url, models_endpoint, enabled FROM providers WHERE name = ?1 LIMIT 1",
         )?;
         let provider = stmt
             .query_row([name], |row| {
                 let name: String = row.get(0)?;
                 let display_name: Option<String> = row.get(1)?;
-                let api_type: String = row.get(2)?;
-                let base_url: String = row.get(3)?;
-                let models_endpoint: Option<String> = row.get(4)?;
-                let enabled: i64 = row.get(5)?;
+                let collection: String = row.get(2)?;
+                let api_type: String = row.get(3)?;
+                let base_url: String = row.get(4)?;
+                let models_endpoint: Option<String> = row.get(5)?;
+                let enabled: i64 = row.get(6)?;
                 Ok(Provider {
                     name,
                     display_name,
+                    collection,
                     api_type: provider_type_from_str(&api_type),
                     base_url,
                     api_keys: Vec::new(),
@@ -79,18 +84,20 @@ impl DatabaseLogger {
     pub async fn list_providers(&self) -> Result<Vec<Provider>> {
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT name, display_name, api_type, base_url, models_endpoint, enabled FROM providers ORDER BY name",
+            "SELECT name, display_name, collection, api_type, base_url, models_endpoint, enabled FROM providers ORDER BY name",
         )?;
         let rows = stmt.query_map([], |row| {
             let name: String = row.get(0)?;
             let display_name: Option<String> = row.get(1)?;
-            let api_type: String = row.get(2)?;
-            let base_url: String = row.get(3)?;
-            let models_endpoint: Option<String> = row.get(4)?;
-            let enabled: i64 = row.get(5)?;
+            let collection: String = row.get(2)?;
+            let api_type: String = row.get(3)?;
+            let base_url: String = row.get(4)?;
+            let models_endpoint: Option<String> = row.get(5)?;
+            let enabled: i64 = row.get(6)?;
             Ok(Provider {
                 name,
                 display_name,
+                collection,
                 api_type: provider_type_from_str(&api_type),
                 base_url,
                 api_keys: Vec::new(),
@@ -159,6 +166,28 @@ impl DatabaseLogger {
             (provider, strategy.as_db_value()),
         )?;
         Ok(affected > 0)
+    }
+
+    pub async fn list_provider_collections(&self) -> Result<Vec<String>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT name FROM provider_collections ORDER BY CASE WHEN name = '默认合集' THEN 0 ELSE 1 END, name",
+        )?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub async fn create_provider_collection(&self, name: &str) -> Result<()> {
+        let conn = self.connection.lock().await;
+        conn.execute(
+            "INSERT OR IGNORE INTO provider_collections (name) VALUES (?1)",
+            [name],
+        )?;
+        Ok(())
     }
 }
 

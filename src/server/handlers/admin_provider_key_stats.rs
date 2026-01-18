@@ -401,6 +401,7 @@ mod tests {
             .upsert_provider(&Provider {
                 name: "p1".into(),
                 display_name: None,
+                collection: crate::config::settings::DEFAULT_PROVIDER_COLLECTION.to_string(),
                 api_type: ProviderType::OpenAI,
                 base_url: "http://localhost".into(),
                 models_endpoint: None,
@@ -516,6 +517,7 @@ mod tests {
             .upsert_provider(&Provider {
                 name: "p1".into(),
                 display_name: None,
+                collection: crate::config::settings::DEFAULT_PROVIDER_COLLECTION.to_string(),
                 api_type: ProviderType::OpenAI,
                 base_url: "http://localhost".into(),
                 models_endpoint: None,

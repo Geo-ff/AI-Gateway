@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::auth::require_superadmin;
-use crate::config::settings::{Provider, ProviderType};
+use crate::config::settings::{DEFAULT_PROVIDER_COLLECTION, Provider, ProviderType};
 use crate::error::GatewayError;
 use crate::logging::types::{
     ProviderOpLog, REQ_TYPE_PROVIDER_CREATE, REQ_TYPE_PROVIDER_DELETE,
@@ -20,10 +20,21 @@ use crate::server::storage_traits::FavoriteKind;
 use crate::server::util::{bearer_token, mask_key, token_for_log};
 use chrono::Utc;
 
+fn normalize_collection(raw: Option<String>) -> String {
+    let v = raw.unwrap_or_default();
+    let trimmed = v.trim();
+    if trimmed.is_empty() || trimmed == "-" {
+        DEFAULT_PROVIDER_COLLECTION.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ProviderCreatePayload {
     pub name: String,
     pub display_name: Option<String>,
+    pub collection: Option<String>,
     pub api_type: ProviderType,
     pub base_url: String,
     pub models_endpoint: Option<String>,
@@ -32,6 +43,7 @@ pub struct ProviderCreatePayload {
 #[derive(Debug, Deserialize)]
 pub struct ProviderUpdatePayload {
     pub display_name: Option<String>,
+    pub collection: Option<String>,
     pub api_type: ProviderType,
     pub base_url: String,
     pub models_endpoint: Option<String>,
@@ -46,6 +58,7 @@ pub struct ProviderTogglePayload {
 pub struct ProviderOut {
     pub name: String,
     pub display_name: Option<String>,
+    pub collection: String,
     pub api_type: ProviderType,
     pub base_url: String,
     pub api_keys: Vec<String>,
@@ -60,6 +73,7 @@ impl ProviderOut {
         Self {
             name: p.name,
             display_name: p.display_name,
+            collection: normalize_collection(Some(p.collection)),
             api_type: p.api_type,
             base_url: p.base_url,
             api_keys: p.api_keys.into_iter().map(|k| mask_key(&k)).collect(),
@@ -260,6 +274,7 @@ pub async fn create_provider(
     let p = Provider {
         name: payload.name.clone(),
         display_name: payload.display_name.clone(),
+        collection: normalize_collection(payload.collection.clone()),
         api_type: payload.api_type,
         base_url: payload.base_url,
         api_keys: Vec::new(),
@@ -302,6 +317,11 @@ pub async fn create_provider(
     if !inserted {
         return Err(GatewayError::Config("provider already exists".into()));
     }
+    app_state
+        .providers
+        .create_provider_collection(&p.collection)
+        .await
+        .map_err(GatewayError::Db)?;
     let _ = app_state.log_store.log_provider_op(ProviderOpLog {
         id: None,
         timestamp: start_time,
@@ -380,9 +400,17 @@ pub async fn update_provider(
         .display_name
         .clone()
         .or_else(|| existing.as_ref().and_then(|p| p.display_name.clone()));
+    let collection = match payload.collection.clone() {
+        Some(v) => normalize_collection(Some(v)),
+        None => existing
+            .as_ref()
+            .map(|p| normalize_collection(Some(p.collection.clone())))
+            .unwrap_or_else(|| DEFAULT_PROVIDER_COLLECTION.to_string()),
+    };
     let mut p = Provider {
         name: name.clone(),
         display_name,
+        collection,
         api_type: payload.api_type,
         base_url: payload.base_url,
         api_keys: Vec::new(),
@@ -392,6 +420,11 @@ pub async fn update_provider(
     app_state
         .providers
         .upsert_provider(&p)
+        .await
+        .map_err(GatewayError::Db)?;
+    app_state
+        .providers
+        .create_provider_collection(&p.collection)
         .await
         .map_err(GatewayError::Db)?;
     p.api_keys = app_state
@@ -441,6 +474,51 @@ pub async fn update_provider(
         cached_count,
         is_favorite,
     )))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProviderCollectionCreatePayload {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProviderCollectionOut {
+    pub name: String,
+}
+
+pub async fn list_provider_collections(
+    State(app_state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<String>>, GatewayError> {
+    require_superadmin(&headers, &app_state).await?;
+    let mut cols = app_state
+        .providers
+        .list_provider_collections()
+        .await
+        .map_err(GatewayError::Db)?;
+    if !cols.iter().any(|c| c == DEFAULT_PROVIDER_COLLECTION) {
+        cols.insert(0, DEFAULT_PROVIDER_COLLECTION.to_string());
+    }
+    Ok(Json(cols))
+}
+
+pub async fn create_provider_collection(
+    State(app_state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<ProviderCollectionCreatePayload>,
+) -> Result<Json<ProviderCollectionOut>, GatewayError> {
+    require_superadmin(&headers, &app_state).await?;
+    let trimmed = payload.name.trim();
+    if trimmed.is_empty() {
+        return Err(GatewayError::Config("collection cannot be empty".into()));
+    }
+    let name = normalize_collection(Some(trimmed.to_string()));
+    app_state
+        .providers
+        .create_provider_collection(&name)
+        .await
+        .map_err(GatewayError::Db)?;
+    Ok(Json(ProviderCollectionOut { name }))
 }
 
 #[derive(Debug, Deserialize)]

@@ -121,6 +121,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             post(providers::toggle_provider),
         )
         .route(
+            "/providers/collections",
+            get(providers::list_provider_collections).post(providers::create_provider_collection),
+        )
+        .route(
             "/providers",
             get(providers::list_providers).post(providers::create_provider),
         )

@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+pub const DEFAULT_PROVIDER_COLLECTION: &str = "默认合集";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub load_balancing: LoadBalancing,
@@ -15,6 +17,8 @@ pub struct Provider {
     pub name: String,
     #[serde(default)]
     pub display_name: Option<String>,
+    #[serde(default = "default_provider_collection")]
+    pub collection: String,
     pub api_type: ProviderType,
     pub base_url: String,
     pub api_keys: Vec<String>,
@@ -96,6 +100,10 @@ fn default_database_path() -> String {
 
 fn default_provider_enabled() -> bool {
     true
+}
+
+fn default_provider_collection() -> String {
+    DEFAULT_PROVIDER_COLLECTION.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

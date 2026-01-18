@@ -244,12 +244,14 @@ impl LoadBalancer {
 mod tests {
     use super::*;
     use crate::config::{BalanceStrategy, ProviderType};
+    use crate::config::settings::DEFAULT_PROVIDER_COLLECTION;
     use rand::SeedableRng;
 
     fn provider(name: &str, keys: &[&str]) -> Provider {
         Provider {
             name: name.to_string(),
             display_name: None,
+            collection: DEFAULT_PROVIDER_COLLECTION.to_string(),
             api_type: ProviderType::OpenAI,
             base_url: "http://example.invalid".to_string(),
             api_keys: keys.iter().map(|s| s.to_string()).collect(),

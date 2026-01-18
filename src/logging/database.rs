@@ -731,11 +731,20 @@ impl DatabaseLogger {
             "CREATE TABLE IF NOT EXISTS providers (
                 name TEXT PRIMARY KEY,
                 display_name TEXT,
+                collection TEXT NOT NULL DEFAULT '默认合集',
                 api_type TEXT NOT NULL,
                 base_url TEXT NOT NULL,
                 models_endpoint TEXT,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential'
+            )",
+            [],
+        )?;
+
+        // Provider collections table (for UI dropdown)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS provider_collections (
+                name TEXT PRIMARY KEY
             )",
             [],
         )?;
@@ -751,7 +760,30 @@ impl DatabaseLogger {
         );
         let _ = conn.execute("ALTER TABLE providers ADD COLUMN display_name TEXT", []);
         let _ = conn.execute(
+            "ALTER TABLE providers ADD COLUMN collection TEXT NOT NULL DEFAULT '默认合集'",
+            [],
+        );
+        let _ = conn.execute(
             "ALTER TABLE providers ADD COLUMN key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential'",
+            [],
+        );
+        // One-time safe migration: fix legacy '-' collection values
+        let _ = conn.execute(
+            "UPDATE providers SET collection = '默认合集' WHERE collection = '-'",
+            [],
+        );
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO provider_collections (name) VALUES ('默认合集')",
+            [],
+        );
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO provider_collections (name)
+             SELECT DISTINCT collection FROM providers
+             WHERE collection IS NOT NULL AND collection != ''",
+            [],
+        );
+        let _ = conn.execute(
+            "DELETE FROM provider_collections WHERE name = '-'",
             [],
         );
 
