@@ -31,13 +31,14 @@ pub async fn list_model_prices(
         .map_err(GatewayError::Db)?;
     let out: Vec<_> = items
         .into_iter()
-        .map(|(provider, model, p_pm, c_pm, currency)| {
+        .map(|(provider, model, p_pm, c_pm, currency, model_type)| {
             serde_json::json!({
                 "provider": provider,
                 "model": model,
                 "prompt_price_per_million": p_pm,
                 "completion_price_per_million": c_pm,
                 "currency": currency,
+                "model_type": model_type,
             })
         })
         .collect();

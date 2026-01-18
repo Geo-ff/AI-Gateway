@@ -77,7 +77,7 @@ pub(super) async fn log_stream_success(
         && client_token.is_some()
     {
         match app_state.log_store.get_model_price(&provider, &model).await {
-            Ok(Some((p_pm, c_pm, _))) => {
+            Ok(Some((p_pm, c_pm, _, _))) => {
                 let p = u.prompt_tokens as f64 * p_pm / 1_000_000.0;
                 let c = u.completion_tokens as f64 * c_pm / 1_000_000.0;
                 Some(p + c)

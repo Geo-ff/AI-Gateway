@@ -2,6 +2,7 @@ use axum::{
     Json,
     extract::{Path, Query, State},
     http::HeaderMap,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -21,13 +22,30 @@ pub struct UpsertModelPricePayload {
     pub completion_price_per_million: f64,
     #[serde(default)]
     pub currency: Option<String>,
+    #[serde(default)]
+    pub model_type: Option<String>,
+}
+
+fn validate_model_type(model_type: Option<&str>) -> Result<(), GatewayError> {
+    if let Some(v) = model_type {
+        let v = v.trim();
+        if v.is_empty() {
+            return Ok(());
+        }
+        match v {
+            "chat" | "completion" | "embedding" | "image" | "audio" | "video" => Ok(()),
+            _ => Err(GatewayError::Config("invalid model_type".into())),
+        }
+    } else {
+        Ok(())
+    }
 }
 
 pub async fn upsert_model_price(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payload): Json<UpsertModelPricePayload>,
-) -> Result<axum::http::StatusCode, GatewayError> {
+) -> Result<Response, GatewayError> {
     let start_time = Utc::now();
     let provided_token = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -133,6 +151,7 @@ pub async fn upsert_model_price(
             .await;
         return Err(ge);
     }
+    validate_model_type(payload.model_type.as_deref())?;
     app_state
         .log_store
         .upsert_model_price(
@@ -141,6 +160,11 @@ pub async fn upsert_model_price(
             payload.prompt_price_per_million,
             payload.completion_price_per_million,
             payload.currency.as_deref(),
+            payload
+                .model_type
+                .as_deref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty()),
         )
         .await
         .map_err(GatewayError::Db)?;
@@ -158,6 +182,7 @@ pub async fn upsert_model_price(
                     "prompt_price_per_million": payload.prompt_price_per_million,
                     "completion_price_per_million": payload.completion_price_per_million,
                     "currency": payload.currency,
+                    "model_type": payload.model_type,
                 })
                 .to_string(),
             ),
@@ -172,11 +197,15 @@ pub async fn upsert_model_price(
         Some(payload.model.clone()),
         Some(payload.provider.clone()),
         provided_token.as_deref(),
-        201,
+        200,
         None,
     )
     .await;
-    Ok(axum::http::StatusCode::CREATED)
+    Ok((
+        axum::http::StatusCode::OK,
+        Json(serde_json::json!({ "success": true })),
+    )
+        .into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,13 +248,14 @@ pub async fn list_model_prices(
         .map_err(GatewayError::Db)?;
     let out: Vec<_> = items
         .into_iter()
-        .map(|(provider, model, p_pm, c_pm, currency)| {
+        .map(|(provider, model, p_pm, c_pm, currency, model_type)| {
             serde_json::json!({
                 "provider": provider,
                 "model": model,
                 "prompt_price_per_million": p_pm,
                 "completion_price_per_million": c_pm,
                 "currency": currency,
+                "model_type": model_type,
             })
         })
         .collect();
@@ -279,12 +309,13 @@ pub async fn get_model_price(
         .await
         .map_err(GatewayError::Db)?
     {
-        Some((p_pm, c_pm, currency)) => Ok(Json(serde_json::json!({
+        Some((p_pm, c_pm, currency, model_type)) => Ok(Json(serde_json::json!({
             "provider": provider,
             "model": model,
             "prompt_price_per_million": p_pm,
             "completion_price_per_million": c_pm,
             "currency": currency,
+            "model_type": model_type,
         }))),
         None => {
             let ge = GatewayError::NotFound("model price not set".into());

@@ -8,6 +8,7 @@ use crate::server::AppState;
 
 mod admin_logs;
 mod admin_metrics;
+mod admin_model_settings;
 mod admin_prices;
 mod admin_provider_key_stats;
 mod admin_users;
@@ -78,6 +79,11 @@ pub fn routes() -> Router<Arc<AppState>> {
             post(cache::update_provider_cache).delete(cache::delete_provider_cache),
         )
         .route("/admin/models/cache", get(cache::list_cached_models))
+        .route(
+            "/admin/models/enabled",
+            get(admin_model_settings::list_model_enabled)
+                .post(admin_model_settings::upsert_model_enabled),
+        )
         .route(
             "/providers/{provider}/keys",
             get(provider_keys::list_provider_keys)

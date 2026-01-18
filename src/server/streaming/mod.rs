@@ -210,6 +210,28 @@ pub async fn stream_chat_completions(
     }
 
     let upstream_model_for_check = parsed_model.get_upstream_model_name().to_string();
+    if let Ok(Some(false)) = app_state
+        .log_store
+        .get_model_enabled(&selected.provider.name, &upstream_model_for_check)
+        .await
+    {
+        let ge = GatewayError::Config("model is disabled".into());
+        let code = ge.status_code().as_u16();
+        crate::server::request_logging::log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            "/v1/chat/completions",
+            crate::logging::types::REQ_TYPE_CHAT_STREAM,
+            Some(upstream_req.model.clone()),
+            Some(selected.provider.name.clone()),
+            client_token.as_deref(),
+            code,
+            Some(ge.to_string()),
+        )
+        .await;
+        return Err(ge);
+    }
     let price = app_state
         .log_store
         .get_model_price(&selected.provider.name, &upstream_model_for_check)

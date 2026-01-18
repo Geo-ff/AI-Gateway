@@ -11,9 +11,14 @@ use chrono::{DateTime, Utc};
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 type DateRangeFuture<'a> = BoxFuture<'a, rusqlite::Result<Option<(DateTime<Utc>, DateTime<Utc>)>>>;
-type ModelPriceFuture<'a> = BoxFuture<'a, rusqlite::Result<Option<(f64, f64, Option<String>)>>>;
-type ModelPriceListFuture<'a> =
-    BoxFuture<'a, rusqlite::Result<Vec<(String, String, f64, f64, Option<String>)>>>;
+type ModelPriceFuture<'a> =
+    BoxFuture<'a, rusqlite::Result<Option<(f64, f64, Option<String>, Option<String>)>>>;
+type ModelPriceListFuture<'a> = BoxFuture<
+    'a,
+    rusqlite::Result<Vec<(String, String, f64, f64, Option<String>, Option<String>)>>,
+>;
+type ModelEnabledGetFuture<'a> = BoxFuture<'a, rusqlite::Result<Option<bool>>>;
+type ModelEnabledListFuture<'a> = BoxFuture<'a, rusqlite::Result<Vec<(String, String, bool)>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FavoriteKind {
@@ -116,6 +121,7 @@ pub trait RequestLogStore: Send + Sync {
         prompt_price_per_million: f64,
         completion_price_per_million: f64,
         currency: Option<&'a str>,
+        model_type: Option<&'a str>,
     ) -> BoxFuture<'a, rusqlite::Result<()>>;
     fn get_model_price<'a>(&'a self, provider: &'a str, model: &'a str) -> ModelPriceFuture<'a>;
     fn list_model_prices<'a>(&'a self, provider: Option<&'a str>) -> ModelPriceListFuture<'a>;
@@ -123,6 +129,20 @@ pub trait RequestLogStore: Send + Sync {
         &'a self,
         token: &'a str,
     ) -> BoxFuture<'a, rusqlite::Result<f64>>;
+
+    // model enabled settings
+    fn upsert_model_enabled<'a>(
+        &'a self,
+        provider: &'a str,
+        model: &'a str,
+        enabled: bool,
+    ) -> BoxFuture<'a, rusqlite::Result<()>>;
+    fn get_model_enabled<'a>(
+        &'a self,
+        provider: &'a str,
+        model: &'a str,
+    ) -> ModelEnabledGetFuture<'a>;
+    fn list_model_enabled<'a>(&'a self, provider: Option<&'a str>) -> ModelEnabledListFuture<'a>;
 }
 
 // 模型缓存抽象（可由 SQLite、Redis 等实现）
@@ -170,8 +190,10 @@ pub trait ProviderStore: Send + Sync {
     ) -> BoxFuture<'a, rusqlite::Result<bool>>;
 
     fn list_provider_collections<'a>(&'a self) -> BoxFuture<'a, rusqlite::Result<Vec<String>>>;
-    fn create_provider_collection<'a>(&'a self, name: &'a str)
-    -> BoxFuture<'a, rusqlite::Result<()>>;
+    fn create_provider_collection<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<()>>;
 
     fn get_provider_key_rotation_strategy<'a>(
         &'a self,
@@ -490,6 +512,7 @@ impl RequestLogStore for DatabaseLogger {
         prompt_price_per_million: f64,
         completion_price_per_million: f64,
         currency: Option<&'a str>,
+        model_type: Option<&'a str>,
     ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
             self.upsert_model_price(
@@ -498,23 +521,17 @@ impl RequestLogStore for DatabaseLogger {
                 prompt_price_per_million,
                 completion_price_per_million,
                 currency,
+                model_type,
             )
             .await
         })
     }
 
-    fn get_model_price<'a>(
-        &'a self,
-        provider: &'a str,
-        model: &'a str,
-    ) -> BoxFuture<'a, rusqlite::Result<Option<(f64, f64, Option<String>)>>> {
+    fn get_model_price<'a>(&'a self, provider: &'a str, model: &'a str) -> ModelPriceFuture<'a> {
         Box::pin(async move { self.get_model_price(provider, model).await })
     }
 
-    fn list_model_prices<'a>(
-        &'a self,
-        provider: Option<&'a str>,
-    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, String, f64, f64, Option<String>)>>> {
+    fn list_model_prices<'a>(&'a self, provider: Option<&'a str>) -> ModelPriceListFuture<'a> {
         Box::pin(async move { self.list_model_prices(provider).await })
     }
 
@@ -523,6 +540,27 @@ impl RequestLogStore for DatabaseLogger {
         token: &'a str,
     ) -> BoxFuture<'a, rusqlite::Result<f64>> {
         Box::pin(async move { self.sum_spent_amount_by_client_token(token).await })
+    }
+
+    fn upsert_model_enabled<'a>(
+        &'a self,
+        provider: &'a str,
+        model: &'a str,
+        enabled: bool,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move { self.upsert_model_enabled(provider, model, enabled).await })
+    }
+
+    fn get_model_enabled<'a>(
+        &'a self,
+        provider: &'a str,
+        model: &'a str,
+    ) -> ModelEnabledGetFuture<'a> {
+        Box::pin(async move { self.get_model_enabled(provider, model).await })
+    }
+
+    fn list_model_enabled<'a>(&'a self, provider: Option<&'a str>) -> ModelEnabledListFuture<'a> {
+        Box::pin(async move { self.list_model_enabled(provider).await })
     }
 }
 

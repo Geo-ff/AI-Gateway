@@ -782,10 +782,7 @@ impl DatabaseLogger {
              WHERE collection IS NOT NULL AND collection != ''",
             [],
         );
-        let _ = conn.execute(
-            "DELETE FROM provider_collections WHERE name = '-'",
-            [],
-        );
+        let _ = conn.execute("DELETE FROM provider_collections WHERE name = '-'", []);
 
         // Provider-scoped model redirects: (source_model -> target_model)
         conn.execute(
@@ -870,6 +867,20 @@ impl DatabaseLogger {
                 prompt_price_per_million REAL NOT NULL,
                 completion_price_per_million REAL NOT NULL,
                 currency TEXT,
+                model_type TEXT,
+                PRIMARY KEY (provider, model)
+            )",
+            [],
+        )?;
+        // Best-effort migrations for existing deployments
+        let _ = conn.execute("ALTER TABLE model_prices ADD COLUMN model_type TEXT", []);
+
+        // Model enabled settings (per provider+model)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS model_settings (
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
                 PRIMARY KEY (provider, model)
             )",
             [],

@@ -96,6 +96,21 @@ pub async fn list_models(
             cached_models.retain(|m| !deny_set.contains(m.id.as_str()));
         }
     }
+
+    // 过滤掉被管理员禁用的模型（single source: model_settings；未设置则视为 enabled）
+    {
+        use std::collections::HashSet;
+        let disabled: HashSet<String> = app_state
+            .log_store
+            .list_model_enabled(None)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_, _, enabled)| !*enabled)
+            .map(|(provider, model, _)| format!("{}/{}", provider, model))
+            .collect();
+        cached_models.retain(|m| !disabled.contains(&m.id));
+    }
     let path = uri
         .path_and_query()
         .map(|pq| pq.as_str().to_string())
@@ -197,6 +212,19 @@ pub async fn list_provider_models(
 
     if params.refresh != Some(true) {
         let cached_models = get_cached_models_for_provider(&app_state, &provider_name).await?;
+        let disabled = app_state
+            .log_store
+            .list_model_enabled(Some(&provider_name))
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_, _, enabled)| !*enabled)
+            .map(|(_, model, _)| model)
+            .collect::<std::collections::HashSet<_>>();
+        let cached_models: Vec<_> = cached_models
+            .into_iter()
+            .filter(|m| !disabled.contains(&m.id))
+            .collect();
         log_simple_request(
             &app_state,
             start_time,

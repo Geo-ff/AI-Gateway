@@ -2280,6 +2280,9 @@ paths:
                     currency:
                       type: string
                       nullable: true
+                    model_type:
+                      type: string
+                      nullable: true
 
   /me/tokens:
     get:
@@ -4762,6 +4765,108 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /admin/models/enabled:
+    get:
+      summary: 获取模型启用状态（管理员）
+      description: 获取模型启用/禁用配置（可选按 provider 过滤）
+      operationId: listAdminModelEnabled
+      tags:
+        - Models
+      security:
+        - AccessToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: provider
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 按提供商筛选（可选）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    provider:
+                      type: string
+                    model:
+                      type: string
+                    enabled:
+                      type: boolean
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      summary: 设置模型启用状态（管理员）
+      description: 设置或更新指定 provider+model 的启用状态
+      operationId: upsertAdminModelEnabled
+      tags:
+        - Models
+      security:
+        - AccessToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider:
+                  type: string
+                model:
+                  type: string
+                enabled:
+                  type: boolean
+              required:
+                - provider
+                - model
+                - enabled
+      responses:
+        '200':
+          description: 成功设置
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: provider 或 model 不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /models/{provider}/cache:
     post:
       summary: 更新模型缓存
@@ -4890,6 +4995,9 @@ paths:
                     currency:
                       type: string
                       nullable: true
+                    model_type:
+                      type: string
+                      nullable: true
         '401':
           description: 未授权
           content:
@@ -4938,6 +5046,10 @@ paths:
                   type: string
                   nullable: true
                   description: 货币单位
+                model_type:
+                  type: string
+                  nullable: true
+                  description: 模型类型（如 chat/image/embedding/audio 等）
               required:
                 - provider
                 - model
@@ -5007,6 +5119,9 @@ paths:
                     type: number
                     format: double
                   currency:
+                    type: string
+                    nullable: true
+                  model_type:
                     type: string
                     nullable: true
         '401':

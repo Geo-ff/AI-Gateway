@@ -252,12 +252,30 @@ impl PgLogStore {
                 prompt_price_per_million DOUBLE PRECISION NOT NULL,
                 completion_price_per_million DOUBLE PRECISION NOT NULL,
                 currency TEXT,
+                model_type TEXT,
                 PRIMARY KEY (provider, model)
             )"#,
                 &[],
             )
             .await
             .map_err(|e| GatewayError::Config(format!("Failed to init model_prices: {}", e)))?;
+        // best-effort migrations for existing deployments
+        let _ = client
+            .execute("ALTER TABLE model_prices ADD COLUMN model_type TEXT", &[])
+            .await;
+
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS model_settings (
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                PRIMARY KEY (provider, model)
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init model_settings: {}", e)))?;
 
         // Providers & provider_keys tables
         client
@@ -905,14 +923,15 @@ impl RequestLogStore for PgLogStore {
         prompt_price_per_million: f64,
         completion_price_per_million: f64,
         currency: Option<&'a str>,
+        model_type: Option<&'a str>,
     ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
             // 尝试 UPDATE，若未影响行则 INSERT（兼容不支持 ON CONFLICT 的库）
             let client = self.pool.pick();
             let updated = client
                 .execute(
-                    "UPDATE model_prices SET prompt_price_per_million=$3, completion_price_per_million=$4, currency=$5 WHERE provider=$1 AND model=$2",
-                    &[&provider, &model, &prompt_price_per_million, &completion_price_per_million, &currency],
+                    "UPDATE model_prices SET prompt_price_per_million=$3, completion_price_per_million=$4, currency=$5, model_type=$6 WHERE provider=$1 AND model=$2",
+                    &[&provider, &model, &prompt_price_per_million, &completion_price_per_million, &currency, &model_type],
                 )
                 .await
                 .map_err(pg_err)?;
@@ -920,8 +939,8 @@ impl RequestLogStore for PgLogStore {
                 let client = self.pool.pick();
                 client
                     .execute(
-                        "INSERT INTO model_prices (provider, model, prompt_price_per_million, completion_price_per_million, currency) VALUES ($1,$2,$3,$4,$5)",
-                        &[&provider, &model, &prompt_price_per_million, &completion_price_per_million, &currency],
+                        "INSERT INTO model_prices (provider, model, prompt_price_per_million, completion_price_per_million, currency, model_type) VALUES ($1,$2,$3,$4,$5,$6)",
+                        &[&provider, &model, &prompt_price_per_million, &completion_price_per_million, &currency, &model_type],
                     )
                     .await
                     .map_err(pg_err)?;
@@ -934,12 +953,12 @@ impl RequestLogStore for PgLogStore {
         &'a self,
         provider: &'a str,
         model: &'a str,
-    ) -> BoxFuture<'a, rusqlite::Result<Option<(f64, f64, Option<String>)>>> {
+    ) -> BoxFuture<'a, rusqlite::Result<Option<(f64, f64, Option<String>, Option<String>)>>> {
         Box::pin(async move {
             let client = self.pool.pick();
             let row = client
                 .query_opt(
-                    "SELECT prompt_price_per_million, completion_price_per_million, currency FROM model_prices WHERE provider = $1 AND model = $2",
+                    "SELECT prompt_price_per_million, completion_price_per_million, currency, model_type FROM model_prices WHERE provider = $1 AND model = $2",
                     &[&provider, &model],
                 )
                 .await
@@ -949,6 +968,7 @@ impl RequestLogStore for PgLogStore {
                     pg_row_f64_or(&r, 0, 0.0),
                     pg_row_f64_or(&r, 1, 0.0),
                     pg_row_opt_string(&r, 2),
+                    pg_row_opt_string(&r, 3),
                 )
             }))
         })
@@ -957,14 +977,17 @@ impl RequestLogStore for PgLogStore {
     fn list_model_prices<'a>(
         &'a self,
         provider: Option<&'a str>,
-    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, String, f64, f64, Option<String>)>>> {
+    ) -> BoxFuture<
+        'a,
+        rusqlite::Result<Vec<(String, String, f64, f64, Option<String>, Option<String>)>>,
+    > {
         Box::pin(async move {
             let mut out = Vec::new();
             if let Some(p) = provider {
                 let client = self.pool.pick();
                 let rows = client
                     .query(
-                        "SELECT provider, model, prompt_price_per_million, completion_price_per_million, currency FROM model_prices WHERE provider = $1 ORDER BY model",
+                        "SELECT provider, model, prompt_price_per_million, completion_price_per_million, currency, model_type FROM model_prices WHERE provider = $1 ORDER BY model",
                         &[&p],
                 )
                     .await
@@ -976,13 +999,14 @@ impl RequestLogStore for PgLogStore {
                         pg_row_f64_or(&r, 2, 0.0),
                         pg_row_f64_or(&r, 3, 0.0),
                         pg_row_opt_string(&r, 4),
+                        pg_row_opt_string(&r, 5),
                     ));
                 }
             } else {
                 let client = self.pool.pick();
                 let rows = client
                     .query(
-                        "SELECT provider, model, prompt_price_per_million, completion_price_per_million, currency FROM model_prices ORDER BY provider, model",
+                        "SELECT provider, model, prompt_price_per_million, completion_price_per_million, currency, model_type FROM model_prices ORDER BY provider, model",
                         &[],
                     )
                     .await
@@ -994,6 +1018,7 @@ impl RequestLogStore for PgLogStore {
                         pg_row_f64_or(&r, 2, 0.0),
                         pg_row_f64_or(&r, 3, 0.0),
                         pg_row_opt_string(&r, 4),
+                        pg_row_opt_string(&r, 5),
                     ));
                 }
             }
@@ -1016,6 +1041,96 @@ impl RequestLogStore for PgLogStore {
                 .await
                 .map_err(pg_err)?;
             Ok(pg_row_f64_or(&row, 0, 0.0))
+        })
+    }
+
+    fn upsert_model_enabled<'a>(
+        &'a self,
+        provider: &'a str,
+        model: &'a str,
+        enabled: bool,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let updated = client
+                .execute(
+                    "UPDATE model_settings SET enabled=$3 WHERE provider=$1 AND model=$2",
+                    &[&provider, &model, &enabled],
+                )
+                .await
+                .map_err(pg_err)?;
+            if updated == 0 {
+                let client = self.pool.pick();
+                client
+                    .execute(
+                        "INSERT INTO model_settings (provider, model, enabled) VALUES ($1,$2,$3)",
+                        &[&provider, &model, &enabled],
+                    )
+                    .await
+                    .map_err(pg_err)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn get_model_enabled<'a>(
+        &'a self,
+        provider: &'a str,
+        model: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<bool>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "SELECT enabled FROM model_settings WHERE provider = $1 AND model = $2",
+                    &[&provider, &model],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(row.map(|r| pg_row_bool_or(&r, 0, true)))
+        })
+    }
+
+    fn list_model_enabled<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<(String, String, bool)>>> {
+        Box::pin(async move {
+            let mut out = Vec::new();
+            if let Some(p) = provider {
+                let client = self.pool.pick();
+                let rows = client
+                    .query(
+                        "SELECT provider, model, enabled FROM model_settings WHERE provider = $1 ORDER BY model",
+                        &[&p],
+                    )
+                    .await
+                    .map_err(pg_err)?;
+                for r in rows {
+                    out.push((
+                        pg_row_string(&r, 0),
+                        pg_row_string(&r, 1),
+                        pg_row_bool_or(&r, 2, true),
+                    ));
+                }
+            } else {
+                let client = self.pool.pick();
+                let rows = client
+                    .query(
+                        "SELECT provider, model, enabled FROM model_settings ORDER BY provider, model",
+                        &[],
+                    )
+                    .await
+                    .map_err(pg_err)?;
+                for r in rows {
+                    out.push((
+                        pg_row_string(&r, 0),
+                        pg_row_string(&r, 1),
+                        pg_row_bool_or(&r, 2, true),
+                    ));
+                }
+            }
+            Ok(out)
         })
     }
 }
@@ -1350,7 +1465,10 @@ impl ProviderStore for PgLogStore {
         })
     }
 
-    fn create_provider_collection<'a>(&'a self, name: &'a str) -> BoxFuture<'a, rusqlite::Result<()>> {
+    fn create_provider_collection<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
             let client = self.pool.pick();
             client
