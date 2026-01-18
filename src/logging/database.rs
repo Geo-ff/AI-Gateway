@@ -725,6 +725,7 @@ impl DatabaseLogger {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS providers (
                 name TEXT PRIMARY KEY,
+                display_name TEXT,
                 api_type TEXT NOT NULL,
                 base_url TEXT NOT NULL,
                 models_endpoint TEXT,
@@ -743,6 +744,7 @@ impl DatabaseLogger {
             "ALTER TABLE providers ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
             [],
         );
+        let _ = conn.execute("ALTER TABLE providers ADD COLUMN display_name TEXT", []);
         let _ = conn.execute(
             "ALTER TABLE providers ADD COLUMN key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential'",
             [],

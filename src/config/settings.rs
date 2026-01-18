@@ -13,6 +13,8 @@ pub struct Settings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
     pub name: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
     pub api_type: ProviderType,
     pub base_url: String,
     pub api_keys: Vec<String>,

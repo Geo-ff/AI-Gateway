@@ -264,6 +264,7 @@ impl PgLogStore {
             .execute(
                 r#"CREATE TABLE IF NOT EXISTS providers (
                 name TEXT PRIMARY KEY,
+                display_name TEXT,
                 api_type TEXT NOT NULL,
                 base_url TEXT NOT NULL,
                 models_endpoint TEXT,
@@ -280,6 +281,9 @@ impl PgLogStore {
                 "ALTER TABLE providers ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT TRUE",
                 &[],
             )
+            .await;
+        let _ = client
+            .execute("ALTER TABLE providers ADD COLUMN display_name TEXT", &[])
             .await;
         let _ = client
             .execute(
@@ -1186,8 +1190,8 @@ impl ProviderStore for PgLogStore {
             let client = self.pool.pick();
             let res = client
                 .execute(
-                    "INSERT INTO providers (name, api_type, base_url, models_endpoint) VALUES ($1,$2,$3,$4)",
-                    &[&provider.name, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint],
+                    "INSERT INTO providers (name, display_name, api_type, base_url, models_endpoint) VALUES ($1,$2,$3,$4,$5)",
+                    &[&provider.name, &provider.display_name, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint],
                 )
                 .await
                 .map_err(pg_err)?;
@@ -1203,8 +1207,8 @@ impl ProviderStore for PgLogStore {
             let client = self.pool.pick();
             let updated = client
                 .execute(
-                    "UPDATE providers SET api_type=$2, base_url=$3, models_endpoint=$4 WHERE name=$1",
-                    &[&provider.name, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint],
+                    "UPDATE providers SET display_name=$2, api_type=$3, base_url=$4, models_endpoint=$5 WHERE name=$1",
+                    &[&provider.name, &provider.display_name, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint],
                 )
                 .await
                 .map_err(pg_err)?;
@@ -1212,8 +1216,8 @@ impl ProviderStore for PgLogStore {
                 let client = self.pool.pick();
                 client
                     .execute(
-                        "INSERT INTO providers (name, api_type, base_url, models_endpoint) VALUES ($1,$2,$3,$4)",
-                        &[&provider.name, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint],
+                        "INSERT INTO providers (name, display_name, api_type, base_url, models_endpoint) VALUES ($1,$2,$3,$4,$5)",
+                        &[&provider.name, &provider.display_name, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint],
                     )
                     .await
                     .map_err(pg_err)?;
@@ -1240,16 +1244,17 @@ impl ProviderStore for PgLogStore {
         Box::pin(async move {
             let client = self.pool.pick();
             let row = client
-                .query_opt("SELECT name, api_type, base_url, models_endpoint, enabled FROM providers WHERE name = $1", &[&name])
+                .query_opt("SELECT name, display_name, api_type, base_url, models_endpoint, enabled FROM providers WHERE name = $1", &[&name])
                 .await
                 .map_err(pg_err)?;
             Ok(row.map(|r| Provider {
                 name: pg_row_string(&r, 0),
-                api_type: provider_type_from_str(&pg_row_string(&r, 1)),
-                base_url: pg_row_string(&r, 2),
+                display_name: pg_row_opt_string(&r, 1),
+                api_type: provider_type_from_str(&pg_row_string(&r, 2)),
+                base_url: pg_row_string(&r, 3),
                 api_keys: Vec::new(),
-                models_endpoint: pg_row_opt_string(&r, 3),
-                enabled: pg_row_bool_or(&r, 4, true),
+                models_endpoint: pg_row_opt_string(&r, 4),
+                enabled: pg_row_bool_or(&r, 5, true),
             }))
         })
     }
@@ -1259,7 +1264,7 @@ impl ProviderStore for PgLogStore {
             let client = self.pool.pick();
             let rows = client
                 .query(
-                    "SELECT name, api_type, base_url, models_endpoint, enabled FROM providers ORDER BY name",
+                    "SELECT name, display_name, api_type, base_url, models_endpoint, enabled FROM providers ORDER BY name",
                     &[],
                 )
                 .await
@@ -1268,11 +1273,12 @@ impl ProviderStore for PgLogStore {
             for r in rows {
                 out.push(Provider {
                     name: pg_row_string(&r, 0),
-                    api_type: provider_type_from_str(&pg_row_string(&r, 1)),
-                    base_url: pg_row_string(&r, 2),
+                    display_name: pg_row_opt_string(&r, 1),
+                    api_type: provider_type_from_str(&pg_row_string(&r, 2)),
+                    base_url: pg_row_string(&r, 3),
                     api_keys: Vec::new(),
-                    models_endpoint: pg_row_opt_string(&r, 3),
-                    enabled: pg_row_bool_or(&r, 4, true),
+                    models_endpoint: pg_row_opt_string(&r, 4),
+                    enabled: pg_row_bool_or(&r, 5, true),
                 });
             }
             Ok(out)

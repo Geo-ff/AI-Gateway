@@ -23,6 +23,7 @@ use chrono::Utc;
 #[derive(Debug, Deserialize)]
 pub struct ProviderCreatePayload {
     pub name: String,
+    pub display_name: Option<String>,
     pub api_type: ProviderType,
     pub base_url: String,
     pub models_endpoint: Option<String>,
@@ -30,6 +31,7 @@ pub struct ProviderCreatePayload {
 
 #[derive(Debug, Deserialize)]
 pub struct ProviderUpdatePayload {
+    pub display_name: Option<String>,
     pub api_type: ProviderType,
     pub base_url: String,
     pub models_endpoint: Option<String>,
@@ -43,6 +45,7 @@ pub struct ProviderTogglePayload {
 #[derive(Debug, Serialize)]
 pub struct ProviderOut {
     pub name: String,
+    pub display_name: Option<String>,
     pub api_type: ProviderType,
     pub base_url: String,
     pub api_keys: Vec<String>,
@@ -56,6 +59,7 @@ impl ProviderOut {
     fn from_provider(p: Provider, cached_models_count: usize, is_favorite: bool) -> Self {
         Self {
             name: p.name,
+            display_name: p.display_name,
             api_type: p.api_type,
             base_url: p.base_url,
             api_keys: p.api_keys.into_iter().map(|k| mask_key(&k)).collect(),
@@ -249,7 +253,8 @@ pub async fn create_provider(
         return Err(GatewayError::Config("provider already exists".into()));
     }
     let p = Provider {
-        name: payload.name,
+        name: payload.name.clone(),
+        display_name: payload.display_name.clone(),
         api_type: payload.api_type,
         base_url: payload.base_url,
         api_keys: Vec::new(),
@@ -298,6 +303,7 @@ pub async fn create_provider(
         operation: REQ_TYPE_PROVIDER_CREATE.to_string(),
         provider: Some(p.name.clone()),
         details: Some(serde_json::to_string(&serde_json::json!({
+            "display_name": p.display_name,
             "api_type": match p.api_type { ProviderType::OpenAI => "openai", ProviderType::Anthropic => "anthropic", ProviderType::Zhipu => "zhipu" },
             "base_url": p.base_url,
             "models_endpoint": p.models_endpoint
@@ -359,19 +365,24 @@ pub async fn update_provider(
             name
         )));
     }
+    let existing = app_state
+        .providers
+        .get_provider(&name)
+        .await
+        .map_err(GatewayError::Db)?;
+    let enabled = existing.as_ref().map(|p| p.enabled).unwrap_or(true);
+    let display_name = payload
+        .display_name
+        .clone()
+        .or_else(|| existing.as_ref().and_then(|p| p.display_name.clone()));
     let mut p = Provider {
         name: name.clone(),
+        display_name,
         api_type: payload.api_type,
         base_url: payload.base_url,
         api_keys: Vec::new(),
         models_endpoint: payload.models_endpoint,
-        enabled: app_state
-            .providers
-            .get_provider(&name)
-            .await
-            .map_err(GatewayError::Db)?
-            .map(|p| p.enabled)
-            .unwrap_or(true),
+        enabled,
     };
     app_state
         .providers
@@ -389,6 +400,7 @@ pub async fn update_provider(
         operation: REQ_TYPE_PROVIDER_UPDATE.to_string(),
         provider: Some(p.name.clone()),
         details: Some(serde_json::to_string(&serde_json::json!({
+            "display_name": p.display_name,
             "api_type": match p.api_type { ProviderType::OpenAI => "openai", ProviderType::Anthropic => "anthropic", ProviderType::Zhipu => "zhipu" },
             "base_url": p.base_url,
             "models_endpoint": p.models_endpoint

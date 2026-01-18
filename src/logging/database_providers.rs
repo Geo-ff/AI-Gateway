@@ -9,10 +9,11 @@ impl DatabaseLogger {
     pub async fn insert_provider(&self, provider: &Provider) -> Result<bool> {
         let conn = self.connection.lock().await;
         let res = conn.execute(
-            "INSERT OR IGNORE INTO providers (name, api_type, base_url, models_endpoint)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR IGNORE INTO providers (name, display_name, api_type, base_url, models_endpoint)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
             (
                 &provider.name,
+                &provider.display_name,
                 provider_type_to_str(&provider.api_type),
                 &provider.base_url,
                 &provider.models_endpoint,
@@ -24,13 +25,15 @@ impl DatabaseLogger {
     pub async fn upsert_provider(&self, provider: &Provider) -> Result<()> {
         let conn = self.connection.lock().await;
         conn.execute(
-            "INSERT INTO providers (name, api_type, base_url, models_endpoint)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO providers (name, display_name, api_type, base_url, models_endpoint)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(name) DO UPDATE SET api_type = excluded.api_type,
+                                         display_name = excluded.display_name,
                                          base_url = excluded.base_url,
                                          models_endpoint = excluded.models_endpoint",
             (
                 &provider.name,
+                &provider.display_name,
                 provider_type_to_str(&provider.api_type),
                 &provider.base_url,
                 &provider.models_endpoint,
@@ -49,17 +52,19 @@ impl DatabaseLogger {
     pub async fn get_provider(&self, name: &str) -> Result<Option<Provider>> {
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT name, api_type, base_url, models_endpoint, enabled FROM providers WHERE name = ?1 LIMIT 1",
+            "SELECT name, display_name, api_type, base_url, models_endpoint, enabled FROM providers WHERE name = ?1 LIMIT 1",
         )?;
         let provider = stmt
             .query_row([name], |row| {
                 let name: String = row.get(0)?;
-                let api_type: String = row.get(1)?;
-                let base_url: String = row.get(2)?;
-                let models_endpoint: Option<String> = row.get(3)?;
-                let enabled: i64 = row.get(4)?;
+                let display_name: Option<String> = row.get(1)?;
+                let api_type: String = row.get(2)?;
+                let base_url: String = row.get(3)?;
+                let models_endpoint: Option<String> = row.get(4)?;
+                let enabled: i64 = row.get(5)?;
                 Ok(Provider {
                     name,
+                    display_name,
                     api_type: provider_type_from_str(&api_type),
                     base_url,
                     api_keys: Vec::new(),
@@ -74,16 +79,18 @@ impl DatabaseLogger {
     pub async fn list_providers(&self) -> Result<Vec<Provider>> {
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT name, api_type, base_url, models_endpoint, enabled FROM providers ORDER BY name",
+            "SELECT name, display_name, api_type, base_url, models_endpoint, enabled FROM providers ORDER BY name",
         )?;
         let rows = stmt.query_map([], |row| {
             let name: String = row.get(0)?;
-            let api_type: String = row.get(1)?;
-            let base_url: String = row.get(2)?;
-            let models_endpoint: Option<String> = row.get(3)?;
-            let enabled: i64 = row.get(4)?;
+            let display_name: Option<String> = row.get(1)?;
+            let api_type: String = row.get(2)?;
+            let base_url: String = row.get(3)?;
+            let models_endpoint: Option<String> = row.get(4)?;
+            let enabled: i64 = row.get(5)?;
             Ok(Provider {
                 name,
+                display_name,
                 api_type: provider_type_from_str(&api_type),
                 base_url,
                 api_keys: Vec::new(),
