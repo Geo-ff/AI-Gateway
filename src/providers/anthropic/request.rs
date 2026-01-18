@@ -8,6 +8,7 @@ use super::utils::{extract_system_prompt, image_source_from_url};
 #[allow(deprecated)]
 pub fn convert_openai_to_anthropic(
     openai_req: &ChatCompletionRequest,
+    top_k: Option<u32>,
 ) -> anthropic::CreateMessageParams {
     let system_prompt = extract_system_prompt(openai_req);
 
@@ -168,8 +169,9 @@ pub fn convert_openai_to_anthropic(
             .max_completion_tokens
             .or(openai_req.max_tokens)
             .unwrap_or(1024),
-        temperature: Some(openai_req.temperature.unwrap_or(1.0)),
-        top_p: Some(openai_req.top_p.unwrap_or(1.0)),
+        temperature: openai_req.temperature,
+        top_k,
+        top_p: openai_req.top_p,
         stream: Some(openai_req.stream.unwrap_or(false)),
         ..Default::default()
     }

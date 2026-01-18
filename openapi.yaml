@@ -1317,6 +1317,10 @@ components:
           format: float
           nullable: true
           description: Top-p 采样参数
+        top_k:
+          type: integer
+          nullable: true
+          description: Top-k 采样参数（尽力而为：目前仅 Anthropic 生效）
       required:
         - model
         - messages

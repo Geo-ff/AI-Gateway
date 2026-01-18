@@ -130,6 +130,7 @@ pub async fn call_provider_with_parsed_model(
     selected: &SelectedProvider,
     request: &ChatCompletionRequest,
     parsed_model: &ParsedModel,
+    top_k: Option<u32>,
 ) -> Result<RawAndTypedChatCompletion, GatewayError> {
     // 创建一个新的请求，使用实际的模型名称
     let mut modified_request = request.clone();
@@ -137,7 +138,9 @@ pub async fn call_provider_with_parsed_model(
 
     match selected.provider.api_type {
         ProviderType::OpenAI => call_openai_provider(selected, &modified_request).await,
-        ProviderType::Anthropic => call_anthropic_provider(selected, &modified_request).await,
+        ProviderType::Anthropic => {
+            call_anthropic_provider(selected, &modified_request, top_k).await
+        }
         ProviderType::Zhipu => call_zhipu_provider(selected, &modified_request).await,
     }
 }
@@ -152,8 +155,10 @@ async fn call_openai_provider(
 async fn call_anthropic_provider(
     selected: &SelectedProvider,
     request: &ChatCompletionRequest,
+    top_k: Option<u32>,
 ) -> Result<RawAndTypedChatCompletion, GatewayError> {
-    let anthropic_request = AnthropicProvider::convert_openai_to_anthropic(request);
+    let anthropic_request =
+        AnthropicProvider::convert_openai_to_anthropic_with_top_k(request, top_k);
 
     let anthropic_response = AnthropicProvider::chat_completions(
         &selected.provider.base_url,
@@ -162,13 +167,23 @@ async fn call_anthropic_provider(
     )
     .await?;
 
-    Ok(RawAndTypedChatCompletion {
-        typed: AnthropicProvider::convert_anthropic_to_openai(&anthropic_response),
-        raw: serde_json::to_value(AnthropicProvider::convert_anthropic_to_openai(
-            &anthropic_response,
-        ))
-        .unwrap_or(serde_json::json!({})),
-    })
+    let typed = AnthropicProvider::convert_anthropic_to_openai(&anthropic_response);
+    let mut raw = serde_json::to_value(&typed).unwrap_or(serde_json::json!({}));
+    if let Some(reasoning_content) =
+        AnthropicProvider::extract_reasoning_content(&anthropic_response)
+    {
+        if let Some(choices) = raw.get_mut("choices").and_then(|v| v.as_array_mut())
+            && let Some(choice0) = choices.get_mut(0)
+            && let Some(message) = choice0.get_mut("message").and_then(|v| v.as_object_mut())
+        {
+            message.insert(
+                "reasoning_content".to_string(),
+                serde_json::Value::String(reasoning_content),
+            );
+        }
+    }
+
+    Ok(RawAndTypedChatCompletion { typed, raw })
 }
 
 async fn call_zhipu_provider(

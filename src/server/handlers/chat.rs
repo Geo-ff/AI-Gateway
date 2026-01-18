@@ -5,6 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
+use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::error::GatewayError;
@@ -24,11 +25,21 @@ use crate::server::{
 /// - 校验并加载客户端令牌，检查额度/过期/模型白名单等限制
 /// - 根据模型选择具体 Provider，校验价格配置并调用上游
 /// - 记录详细请求日志与 usage，用于后续统计和自动禁用超限令牌
+#[derive(Debug, Clone, Deserialize)]
+pub struct GatewayChatCompletionRequest {
+    #[serde(flatten)]
+    pub request: ChatCompletionRequest,
+    /// Top-k 采样参数（尽力而为：目前仅 Anthropic 生效）
+    pub top_k: Option<u32>,
+}
+
 pub async fn chat_completions(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(request): Json<ChatCompletionRequest>,
+    Json(gateway_req): Json<GatewayChatCompletionRequest>,
 ) -> Result<Response, GatewayError> {
+    let top_k = gateway_req.top_k;
+    let request = gateway_req.request;
     if request.stream.unwrap_or(false) {
         let response = stream_chat_completions(State(app_state), headers, Json(request)).await?;
         Ok(response.into_response())
@@ -215,6 +226,7 @@ pub async fn chat_completions(
             return Err(ge);
         }
 
+        let mut redirected_from_for_price: Option<String> = None;
         if let Some((from, to)) = apply_provider_model_redirects_to_parsed_model(
             &app_state,
             &selected.provider.name,
@@ -228,6 +240,7 @@ pub async fn chat_completions(
                 target_model = %to,
                 "已应用 provider 维度模型重定向"
             );
+            redirected_from_for_price = Some(from.clone());
             request.model = if parsed_model.provider_name.is_some() {
                 format!("{}/{}", selected.provider.name, parsed_model.model_name)
             } else {
@@ -257,11 +270,73 @@ pub async fn chat_completions(
             .await;
             return Err(ge);
         }
-        let price = app_state
+        let mut price = app_state
             .log_store
             .get_model_price(&selected.provider.name, &upstream_model)
             .await
             .map_err(GatewayError::Db)?;
+        let mut effective_model_for_price = upstream_model.clone();
+        if price.is_none() {
+            if let Some(fallback) = redirected_from_for_price.as_deref() {
+                if let Ok(p) = app_state
+                    .log_store
+                    .get_model_price(&selected.provider.name, fallback)
+                    .await
+                {
+                    if p.is_some() {
+                        price = p;
+                        effective_model_for_price = fallback.to_string();
+                    }
+                }
+            }
+        }
+        // 若客户端直接使用了重定向后的 target 模型，尝试回溯找到一个 source 模型价格（best-effort）
+        if price.is_none() {
+            let pairs = app_state
+                .providers
+                .list_model_redirects(&selected.provider.name)
+                .await
+                .map_err(GatewayError::Db)?;
+            if !pairs.is_empty() {
+                use std::collections::{HashMap, HashSet};
+                let map: HashMap<String, String> = pairs.into_iter().collect();
+                fn resolve_redirect_chain(
+                    map: &HashMap<String, String>,
+                    source_model: &str,
+                    max_hops: usize,
+                ) -> String {
+                    let mut current = source_model.to_string();
+                    let mut seen = HashSet::<String>::new();
+                    for _ in 0..max_hops {
+                        if !seen.insert(current.clone()) {
+                            break;
+                        }
+                        match map.get(&current) {
+                            Some(next) if next != &current => current = next.clone(),
+                            _ => break,
+                        }
+                    }
+                    current
+                }
+
+                for (source, _) in map.iter() {
+                    let resolved = resolve_redirect_chain(&map, source, 16);
+                    if resolved != upstream_model {
+                        continue;
+                    }
+                    let p = app_state
+                        .log_store
+                        .get_model_price(&selected.provider.name, source)
+                        .await
+                        .map_err(GatewayError::Db)?;
+                    if p.is_some() {
+                        price = p;
+                        effective_model_for_price = source.to_string();
+                        break;
+                    }
+                }
+            }
+        }
         if price.is_none() {
             let ge = GatewayError::Config("model price not set".into());
             let code = ge.status_code().as_u16();
@@ -280,11 +355,12 @@ pub async fn chat_completions(
             .await;
             return Err(ge);
         }
-        let response = call_provider_with_parsed_model(&selected, &request, &parsed_model).await;
+        let response =
+            call_provider_with_parsed_model(&selected, &request, &parsed_model, top_k).await;
 
         // 日志使用 typed，用于提取 usage
         let token_for_log = client_token.as_deref();
-        let logged_model = parsed_model.get_upstream_model_name().to_string();
+        let logged_model = effective_model_for_price;
         log_chat_request(
             &app_state,
             start_time,

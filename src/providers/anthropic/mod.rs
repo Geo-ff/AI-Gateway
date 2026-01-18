@@ -13,13 +13,24 @@ impl AnthropicProvider {
     pub fn convert_openai_to_anthropic(
         openai_req: &ChatCompletionRequest,
     ) -> anthropic::CreateMessageParams {
-        request::convert_openai_to_anthropic(openai_req)
+        request::convert_openai_to_anthropic(openai_req, None)
+    }
+
+    pub fn convert_openai_to_anthropic_with_top_k(
+        openai_req: &ChatCompletionRequest,
+        top_k: Option<u32>,
+    ) -> anthropic::CreateMessageParams {
+        request::convert_openai_to_anthropic(openai_req, top_k)
     }
 
     pub fn convert_anthropic_to_openai(
         resp: &anthropic::CreateMessageResponse,
     ) -> oai::CreateChatCompletionResponse {
         response::convert_anthropic_to_openai(resp)
+    }
+
+    pub fn extract_reasoning_content(resp: &anthropic::CreateMessageResponse) -> Option<String> {
+        response::extract_reasoning_content(resp)
     }
 
     pub async fn chat_completions(

@@ -1,6 +1,33 @@
 use anthropic_ai_sdk::types::message as anthropic;
 use async_openai::types as oai;
 
+pub fn extract_reasoning_content(resp: &anthropic::CreateMessageResponse) -> Option<String> {
+    let mut reasoning = String::new();
+    let mut has_redacted = false;
+    for block in &resp.content {
+        match block {
+            anthropic::ContentBlock::Thinking { thinking, .. } => {
+                if !reasoning.is_empty() {
+                    reasoning.push('\n');
+                }
+                reasoning.push_str(thinking);
+            }
+            anthropic::ContentBlock::RedactedThinking { .. } => {
+                has_redacted = true;
+            }
+            _ => {}
+        }
+    }
+
+    if !reasoning.is_empty() {
+        return Some(reasoning);
+    }
+    if has_redacted {
+        return Some("[redacted_thinking]".to_string());
+    }
+    None
+}
+
 #[allow(deprecated)]
 pub fn convert_anthropic_to_openai(
     resp: &anthropic::CreateMessageResponse,
