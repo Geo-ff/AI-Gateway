@@ -681,6 +681,24 @@ components:
       properties:
         id:
           type: string
+        name:
+          type: string
+          nullable: true
+          description: 显示名称（由 first_name/last_name 组合）
+        username:
+          type: string
+          nullable: true
+        bio:
+          type: string
+          nullable: true
+        theme:
+          type: string
+          nullable: true
+          enum: [light, dark, system]
+        font:
+          type: string
+          nullable: true
+          enum: [inter, manrope, system]
         email:
           type: string
         role:
@@ -695,6 +713,28 @@ components:
         - email
         - role
         - permissions
+
+    JwtPatchMeRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+          description: 显示名称（会写入用户表 first_name；best-effort 清空 last_name）
+        username:
+          type: string
+          nullable: true
+        bio:
+          type: string
+          nullable: true
+        theme:
+          type: string
+          nullable: true
+          enum: [light, dark, system]
+        font:
+          type: string
+          nullable: true
+          enum: [inter, manrope, system]
 
     JwtLoginResponse:
       type: object
@@ -1669,6 +1709,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/JwtMeResponse'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      summary: 更新当前登录用户（JWT）
+      description: |
+        更新当前用户的可编辑信息与外观偏好（部分字段可选，按需 patch）。
+        `username` 若与其他用户冲突会返回 400（可读 message）。
+      operationId: authPatchMe
+      tags:
+        - Auth
+      security:
+        - AccessToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JwtPatchMeRequest'
+      responses:
+        '200':
+          description: 成功响应（返回更新后的用户）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JwtAuthUser'
+        '400':
+          description: 参数错误/username 冲突
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           description: 未登录/Token 无效/过期
           content:

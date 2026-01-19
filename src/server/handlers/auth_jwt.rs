@@ -30,6 +30,16 @@ pub struct RegisterRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AuthUser {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bio: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
     pub email: String,
     pub role: String,
     pub permissions: Vec<String>,
@@ -81,10 +91,28 @@ fn permissions_from_env_or_default(role: Option<UserRole>) -> Vec<String> {
     default_permissions_for_role(role)
 }
 
-fn claims_to_user(claims: &AccessTokenClaims) -> AuthUser {
+fn db_user_to_auth_user(claims: &AccessTokenClaims, user: crate::users::User) -> AuthUser {
+    let name = {
+        let first = user.first_name.trim();
+        let last = user.last_name.trim();
+        if first.is_empty() && last.is_empty() {
+            None
+        } else if last.is_empty() {
+            Some(first.to_string())
+        } else if first.is_empty() {
+            Some(last.to_string())
+        } else {
+            Some(format!("{} {}", first, last))
+        }
+    };
     AuthUser {
-        id: claims.sub.clone(),
-        email: claims.email.clone(),
+        id: user.id,
+        name,
+        username: Some(user.username),
+        bio: user.bio,
+        theme: user.theme,
+        font: user.font,
+        email: user.email,
         role: claims.role.clone(),
         permissions: claims.permissions.clone(),
     }
@@ -126,6 +154,11 @@ pub async fn login(
     }
 
     let token = issue_access_token(&claims)?;
+    let db_user = app_state
+        .user_store
+        .get_user(&claims.sub)
+        .await?
+        .ok_or_else(|| GatewayError::Unauthorized("invalid credentials".into()))?;
 
     let refresh_token = issue_refresh_token();
     let refresh_hash = hash_refresh_token(&refresh_token);
@@ -149,20 +182,113 @@ pub async fn login(
         refresh_token,
         expires_at: exp.to_rfc3339(),
         refresh_expires_at: refresh_exp.to_rfc3339(),
-        user: claims_to_user(&claims),
+        user: db_user_to_auth_user(&claims, db_user),
     }))
 }
 
-pub async fn me(headers: HeaderMap) -> AppResult<Json<MeResponse>> {
+pub async fn me(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> AppResult<Json<MeResponse>> {
     let claims = ensure_access_token(&headers)?;
+    let db_user = app_state
+        .user_store
+        .get_user(&claims.sub)
+        .await?
+        .ok_or_else(|| GatewayError::Unauthorized("invalid credentials".into()))?;
     let exp = Utc
         .timestamp_opt(claims.exp, 0)
         .single()
         .unwrap_or_else(Utc::now);
     Ok(Json(MeResponse {
         expires_at: exp.to_rfc3339(),
-        user: claims_to_user(&claims),
+        user: db_user_to_auth_user(&claims, db_user),
     }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchMeRequest {
+    pub name: Option<String>,
+    pub username: Option<String>,
+    pub bio: Option<String>,
+    pub theme: Option<String>,
+    pub font: Option<String>,
+}
+
+fn validate_theme(theme: &str) -> bool {
+    matches!(theme, "light" | "dark" | "system")
+}
+
+fn validate_font(font: &str) -> bool {
+    matches!(font, "inter" | "manrope" | "system")
+}
+
+pub async fn patch_me(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<PatchMeRequest>,
+) -> AppResult<Json<AuthUser>> {
+    let claims = ensure_access_token(&headers)?;
+
+    let Some(existing) = app_state.user_store.get_user(&claims.sub).await? else {
+        return Err(GatewayError::Unauthorized("invalid credentials".into()));
+    };
+
+    if let Some(username) = payload.username.as_deref() {
+        let username = username.trim();
+        if username.is_empty() {
+            return Err(GatewayError::Config("username 不能为空".into()));
+        }
+        if username != existing.username {
+            if let Some(other) = app_state.user_store.get_user_by_username(username).await? {
+                if other.id != claims.sub {
+                    return Err(GatewayError::Config("username 已被占用".into()));
+                }
+            }
+        }
+    }
+    if let Some(theme) = payload.theme.as_deref() {
+        if !validate_theme(theme.trim()) {
+            return Err(GatewayError::Config("theme 取值必须为 light/dark/system".into()));
+        }
+    }
+    if let Some(font) = payload.font.as_deref() {
+        if !validate_font(font.trim()) {
+            return Err(GatewayError::Config(
+                "font 取值必须为 inter/manrope/system".into(),
+            ));
+        }
+    }
+
+    let (first_name, last_name) = match payload.name.as_deref().map(str::trim) {
+        Some(v) if !v.is_empty() => (Some(v.to_string()), Some(String::new())),
+        Some(_) => return Err(GatewayError::Config("name 不能为空".into())),
+        None => (None, None),
+    };
+
+    let updated = app_state
+        .user_store
+        .update_user(
+            &claims.sub,
+            UpdateUserPayload {
+                first_name,
+                last_name,
+                username: payload.username.map(|v| v.trim().to_string()),
+                bio: payload.bio.map(|v| v.trim().to_string()),
+                theme: payload.theme.map(|v| v.trim().to_string()),
+                font: payload.font.map(|v| v.trim().to_string()),
+                email: None,
+                phone_number: None,
+                password: None,
+                status: None,
+                role: None,
+            },
+        )
+        .await?;
+
+    let updated = updated.ok_or_else(|| GatewayError::NotFound("user not found".into()))?;
+    Ok(Json(db_user_to_auth_user(&claims, updated)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -185,9 +311,10 @@ pub async fn change_password(
     }
     let new_password = payload.new_password.trim();
     if new_password.len() < 7 {
-        return Err(GatewayError::Config(
-            "new_password must be at least 7 characters long".into(),
-        ));
+        return Err(GatewayError::Config("new_password 长度至少 7 位".into()));
+    }
+    if new_password == old_password {
+        return Err(GatewayError::Config("new_password 不能与 old_password 相同".into()));
     }
 
     let Some(user) = app_state
@@ -204,7 +331,7 @@ pub async fn change_password(
         return Err(GatewayError::Config("password not set".into()));
     };
     if !verify_password(old_password, password_hash)? {
-        return Err(GatewayError::Config("invalid old_password".into()));
+        return Err(GatewayError::Config("旧密码不正确".into()));
     }
 
     let updated = app_state
@@ -215,6 +342,9 @@ pub async fn change_password(
                 first_name: None,
                 last_name: None,
                 username: None,
+                bio: None,
+                theme: None,
+                font: None,
                 email: None,
                 phone_number: None,
                 password: Some(new_password.to_string()),
@@ -272,6 +402,11 @@ pub async fn register(
     let role = created.role;
     let user = AuthUser {
         id: created.id,
+        name: None,
+        username: Some(created.username),
+        bio: created.bio,
+        theme: created.theme,
+        font: created.font,
         email: created.email,
         role: role.as_str().to_string(),
         permissions: permissions_from_env_or_default(Some(role)),

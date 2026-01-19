@@ -487,6 +487,9 @@ impl PgLogStore {
                 first_name TEXT NOT NULL,
                 last_name TEXT NOT NULL,
                 username TEXT NOT NULL UNIQUE,
+                bio TEXT,
+                theme TEXT,
+                font TEXT,
                 email TEXT NOT NULL UNIQUE,
                 phone_number TEXT NOT NULL,
                 status TEXT NOT NULL,
@@ -504,6 +507,9 @@ impl PgLogStore {
         let _ = client
             .execute("ALTER TABLE users ADD COLUMN password_hash TEXT", &[])
             .await;
+        let _ = client.execute("ALTER TABLE users ADD COLUMN bio TEXT", &[]).await;
+        let _ = client.execute("ALTER TABLE users ADD COLUMN theme TEXT", &[]).await;
+        let _ = client.execute("ALTER TABLE users ADD COLUMN font TEXT", &[]).await;
         // Ensure there is at most one superadmin.
         let _ = client
             .execute(

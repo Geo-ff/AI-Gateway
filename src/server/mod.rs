@@ -152,6 +152,7 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
         .allow_methods([
             Method::GET,
             Method::POST,
+            Method::PATCH,
             Method::PUT,
             Method::DELETE,
             Method::OPTIONS,

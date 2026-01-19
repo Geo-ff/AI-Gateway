@@ -11,6 +11,11 @@ use crate::users::{
     hash_password,
 };
 
+fn is_missing_column_error(err: &rusqlite::Error) -> bool {
+    let msg = err.to_string();
+    msg.contains("no such column") || msg.contains("has no column named")
+}
+
 fn default_username_from_email(email: &str) -> String {
     let base = email
         .split('@')
@@ -26,6 +31,44 @@ fn default_username_from_email(email: &str) -> String {
 }
 
 fn row_to_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
+    let status_s: String = row.get(9)?;
+    let role_s: String = row.get(10)?;
+    let created_at_s: String = row.get(11)?;
+    let updated_at_s: String = row.get(12)?;
+    Ok(User {
+        id: row.get(0)?,
+        first_name: row.get(1)?,
+        last_name: row.get(2)?,
+        username: row.get(3)?,
+        bio: row.get(4)?,
+        theme: row.get(5)?,
+        font: row.get(6)?,
+        email: row.get(7)?,
+        phone_number: row.get(8)?,
+        status: UserStatus::parse(&status_s).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(9, "status".into(), rusqlite::types::Type::Text)
+        })?,
+        role: UserRole::parse(&role_s).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(10, "role".into(), rusqlite::types::Type::Text)
+        })?,
+        created_at: parse_beijing_string(&created_at_s).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                11,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            )
+        })?,
+        updated_at: parse_beijing_string(&updated_at_s).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                12,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            )
+        })?,
+    })
+}
+
+fn row_to_user_legacy(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
     let status_s: String = row.get(6)?;
     let role_s: String = row.get(7)?;
     let created_at_s: String = row.get(8)?;
@@ -35,6 +78,9 @@ fn row_to_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
         first_name: row.get(1)?,
         last_name: row.get(2)?,
         username: row.get(3)?,
+        bio: None,
+        theme: None,
+        font: None,
         email: row.get(4)?,
         phone_number: row.get(5)?,
         status: UserStatus::parse(&status_s).ok_or_else(|| {
@@ -118,14 +164,17 @@ impl UserStore for DatabaseLogger {
             username = format!("{}-{}", username, &id[..8]);
         }
 
-        conn.execute(
-            "INSERT INTO users (id, first_name, last_name, username, email, phone_number, password_hash, status, role, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        let insert_v2 = conn.execute(
+            "INSERT INTO users (id, first_name, last_name, username, bio, theme, font, email, phone_number, password_hash, status, role, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             rusqlite::params![
                 &id,
                 &first_name,
                 &last_name,
                 &username,
+                None::<String>,
+                None::<String>,
+                None::<String>,
                 &payload.email,
                 &phone_number,
                 password_hash,
@@ -134,13 +183,38 @@ impl UserStore for DatabaseLogger {
                 to_beijing_string(&now),
                 to_beijing_string(&now),
             ],
-        )?;
+        );
+        if let Err(e) = insert_v2 {
+            if !is_missing_column_error(&e) {
+                return Err(e.into());
+            }
+            conn.execute(
+                "INSERT INTO users (id, first_name, last_name, username, email, phone_number, password_hash, status, role, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                rusqlite::params![
+                    &id,
+                    &first_name,
+                    &last_name,
+                    &username,
+                    &payload.email,
+                    &phone_number,
+                    password_hash,
+                    payload.status.as_str(),
+                    role.as_str(),
+                    to_beijing_string(&now),
+                    to_beijing_string(&now),
+                ],
+            )?;
+        }
 
         Ok(User {
             id,
             first_name,
             last_name,
             username,
+            bio: None,
+            theme: None,
+            font: None,
             email: payload.email,
             phone_number,
             status: payload.status,
@@ -157,10 +231,18 @@ impl UserStore for DatabaseLogger {
     ) -> Result<Option<User>, GatewayError> {
         let conn = self.connection.lock().await;
 
-        let mut stmt = conn.prepare(
-            "SELECT id, first_name, last_name, username, email, phone_number, status, role, created_at, updated_at FROM users WHERE id = ?1",
-        )?;
-        let row = stmt.query_row([id], row_to_user).optional()?;
+        let (row, has_prefs_columns) = match conn.prepare(
+            "SELECT id, first_name, last_name, username, bio, theme, font, email, phone_number, status, role, created_at, updated_at FROM users WHERE id = ?1",
+        ) {
+            Ok(mut stmt) => (stmt.query_row([id], row_to_user).optional()?, true),
+            Err(e) if is_missing_column_error(&e) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, first_name, last_name, username, email, phone_number, status, role, created_at, updated_at FROM users WHERE id = ?1",
+                )?;
+                (stmt.query_row([id], row_to_user_legacy).optional()?, false)
+            }
+            Err(e) => return Err(e.into()),
+        };
         let Some(mut user) = row else {
             return Ok(None);
         };
@@ -173,6 +255,17 @@ impl UserStore for DatabaseLogger {
         }
         if let Some(v) = payload.username {
             user.username = v;
+        }
+        if has_prefs_columns {
+            if let Some(v) = payload.bio {
+                user.bio = Some(v);
+            }
+            if let Some(v) = payload.theme {
+                user.theme = Some(v);
+            }
+            if let Some(v) = payload.font {
+                user.font = Some(v);
+            }
         }
         if let Some(v) = payload.email {
             user.email = v;
@@ -195,31 +288,77 @@ impl UserStore for DatabaseLogger {
             .map(hash_password)
             .transpose()?;
 
-        conn.execute(
-            "UPDATE users SET first_name = ?2, last_name = ?3, username = ?4, email = ?5, phone_number = ?6, status = ?7, role = ?8, password_hash = COALESCE(?9, password_hash), updated_at = ?10 WHERE id = ?1",
-            rusqlite::params![
-                &user.id,
-                &user.first_name,
-                &user.last_name,
-                &user.username,
-                &user.email,
-                &user.phone_number,
-                user.status.as_str(),
-                user.role.as_str(),
-                password_hash_update,
-                to_beijing_string(&user.updated_at),
-            ],
-        )?;
+        if has_prefs_columns {
+            conn.execute(
+                "UPDATE users SET first_name = ?2, last_name = ?3, username = ?4, bio = ?5, theme = ?6, font = ?7, email = ?8, phone_number = ?9, status = ?10, role = ?11, password_hash = COALESCE(?12, password_hash), updated_at = ?13 WHERE id = ?1",
+                rusqlite::params![
+                    &user.id,
+                    &user.first_name,
+                    &user.last_name,
+                    &user.username,
+                    &user.bio,
+                    &user.theme,
+                    &user.font,
+                    &user.email,
+                    &user.phone_number,
+                    user.status.as_str(),
+                    user.role.as_str(),
+                    password_hash_update,
+                    to_beijing_string(&user.updated_at),
+                ],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE users SET first_name = ?2, last_name = ?3, username = ?4, email = ?5, phone_number = ?6, status = ?7, role = ?8, password_hash = COALESCE(?9, password_hash), updated_at = ?10 WHERE id = ?1",
+                rusqlite::params![
+                    &user.id,
+                    &user.first_name,
+                    &user.last_name,
+                    &user.username,
+                    &user.email,
+                    &user.phone_number,
+                    user.status.as_str(),
+                    user.role.as_str(),
+                    password_hash_update,
+                    to_beijing_string(&user.updated_at),
+                ],
+            )?;
+        }
 
         Ok(Some(user))
     }
 
     async fn get_user(&self, id: &str) -> Result<Option<User>, GatewayError> {
         let conn = self.connection.lock().await;
-        let mut stmt = conn.prepare(
-            "SELECT id, first_name, last_name, username, email, phone_number, status, role, created_at, updated_at FROM users WHERE id = ?1",
-        )?;
-        let row = stmt.query_row([id], row_to_user).optional()?;
+        let row = match conn.prepare(
+            "SELECT id, first_name, last_name, username, bio, theme, font, email, phone_number, status, role, created_at, updated_at FROM users WHERE id = ?1",
+        ) {
+            Ok(mut stmt) => stmt.query_row([id], row_to_user).optional()?,
+            Err(e) if is_missing_column_error(&e) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, first_name, last_name, username, email, phone_number, status, role, created_at, updated_at FROM users WHERE id = ?1",
+                )?;
+                stmt.query_row([id], row_to_user_legacy).optional()?
+            }
+            Err(e) => return Err(e.into()),
+        };
+        Ok(row)
+    }
+
+    async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, GatewayError> {
+        let conn = self.connection.lock().await;
+        let row = match conn.prepare(
+            "SELECT id, first_name, last_name, username, bio, theme, font, email, phone_number, status, role, created_at, updated_at FROM users WHERE username = ?1 LIMIT 1",
+        ) {
+            Ok(mut stmt) => stmt.query_row([username], row_to_user).optional()?,
+            Err(e) if is_missing_column_error(&e) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, first_name, last_name, username, email, phone_number, status, role, created_at, updated_at FROM users WHERE username = ?1 LIMIT 1",
+                )?;
+                stmt.query_row([username], row_to_user_legacy).optional()?
+            }
+            Err(e) => return Err(e.into()),
+        };
         Ok(row)
     }
 
@@ -259,13 +398,26 @@ impl UserStore for DatabaseLogger {
 
     async fn list_users(&self) -> Result<Vec<User>, GatewayError> {
         let conn = self.connection.lock().await;
-        let mut stmt = conn.prepare(
-            "SELECT id, first_name, last_name, username, email, phone_number, status, role, created_at, updated_at FROM users ORDER BY created_at DESC",
-        )?;
-        let rows = stmt.query_map([], row_to_user)?;
         let mut out = Vec::new();
-        for r in rows {
-            out.push(r?);
+        match conn.prepare(
+            "SELECT id, first_name, last_name, username, bio, theme, font, email, phone_number, status, role, created_at, updated_at FROM users ORDER BY created_at DESC",
+        ) {
+            Ok(mut stmt) => {
+                let rows = stmt.query_map([], row_to_user)?;
+                for r in rows {
+                    out.push(r?);
+                }
+            }
+            Err(e) if is_missing_column_error(&e) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, first_name, last_name, username, email, phone_number, status, role, created_at, updated_at FROM users ORDER BY created_at DESC",
+                )?;
+                let rows = stmt.query_map([], row_to_user_legacy)?;
+                for r in rows {
+                    out.push(r?);
+                }
+            }
+            Err(e) => return Err(e.into()),
         }
         Ok(out)
     }
@@ -336,6 +488,9 @@ mod tests {
                     first_name: Some("Alicia".into()),
                     last_name: None,
                     username: None,
+                    bio: None,
+                    theme: None,
+                    font: None,
                     email: None,
                     phone_number: None,
                     password: None,

@@ -837,6 +837,9 @@ impl DatabaseLogger {
                 first_name TEXT NOT NULL,
                 last_name TEXT NOT NULL,
                 username TEXT NOT NULL UNIQUE,
+                bio TEXT,
+                theme TEXT,
+                font TEXT,
                 email TEXT NOT NULL UNIQUE,
                 phone_number TEXT NOT NULL,
                 status TEXT NOT NULL,
@@ -850,6 +853,9 @@ impl DatabaseLogger {
 
         // Best-effort migrations for existing deployments
         let _ = conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT", []);
+        let _ = conn.execute("ALTER TABLE users ADD COLUMN bio TEXT", []);
+        let _ = conn.execute("ALTER TABLE users ADD COLUMN theme TEXT", []);
+        let _ = conn.execute("ALTER TABLE users ADD COLUMN font TEXT", []);
         // Ensure there is at most one superadmin.
         let _ = conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS users_one_superadmin_uidx ON users(role) WHERE role='superadmin'",

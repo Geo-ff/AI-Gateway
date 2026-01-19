@@ -115,6 +115,12 @@ pub struct User {
     pub first_name: String,
     pub last_name: String,
     pub username: String,
+    #[serde(default)]
+    pub bio: Option<String>,
+    #[serde(default)]
+    pub theme: Option<String>,
+    #[serde(default)]
+    pub font: Option<String>,
     pub email: String,
     pub phone_number: String,
     pub status: UserStatus,
@@ -161,6 +167,12 @@ pub struct UpdateUserPayload {
     #[serde(default)]
     pub username: Option<String>,
     #[serde(default)]
+    pub bio: Option<String>,
+    #[serde(default)]
+    pub theme: Option<String>,
+    #[serde(default)]
+    pub font: Option<String>,
+    #[serde(default)]
     pub email: Option<String>,
     #[serde(default)]
     pub phone_number: Option<String>,
@@ -189,6 +201,7 @@ pub trait UserStore: Send + Sync {
         payload: UpdateUserPayload,
     ) -> Result<Option<User>, GatewayError>;
     async fn get_user(&self, id: &str) -> Result<Option<User>, GatewayError>;
+    async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, GatewayError>;
     async fn get_auth_by_email(&self, email: &str) -> Result<Option<UserAuthRecord>, GatewayError>;
     async fn any_users(&self) -> Result<bool, GatewayError>;
     async fn list_users(&self) -> Result<Vec<User>, GatewayError>;
