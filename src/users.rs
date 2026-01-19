@@ -34,13 +34,27 @@ pub(crate) fn verify_password(password: &str, password_hash: &str) -> Result<boo
         .is_ok())
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UserStatus {
     Active,
     Inactive,
-    Invited,
-    Suspended,
+    Disabled,
+}
+
+impl<'de> serde::Deserialize<'de> for UserStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Self::parse(&s).ok_or_else(|| {
+            serde::de::Error::unknown_variant(
+                &s,
+                &["active", "inactive", "disabled", "invited", "suspended"],
+            )
+        })
+    }
 }
 
 impl UserStatus {
@@ -48,8 +62,7 @@ impl UserStatus {
         match self {
             UserStatus::Active => "active",
             UserStatus::Inactive => "inactive",
-            UserStatus::Invited => "invited",
-            UserStatus::Suspended => "suspended",
+            UserStatus::Disabled => "disabled",
         }
     }
 
@@ -57,8 +70,10 @@ impl UserStatus {
         match s {
             "active" => Some(UserStatus::Active),
             "inactive" => Some(UserStatus::Inactive),
-            "invited" => Some(UserStatus::Invited),
-            "suspended" => Some(UserStatus::Suspended),
+            "disabled" => Some(UserStatus::Disabled),
+            // 向后兼容：将旧的 suspended 和 invited 映射到新状态
+            "suspended" => Some(UserStatus::Disabled),
+            "invited" => Some(UserStatus::Inactive),
             _ => None,
         }
     }
@@ -125,10 +140,12 @@ pub struct CreateUserPayload {
     pub status: UserStatus,
     #[serde(default = "default_role_admin")]
     pub role: UserRole,
+    #[serde(default)]
+    pub is_anonymous: bool,
 }
 
 fn default_status_invited() -> UserStatus {
-    UserStatus::Invited
+    UserStatus::Inactive
 }
 
 fn default_role_admin() -> UserRole {
@@ -187,11 +204,13 @@ mod tests {
         for (s, expected) in [
             ("active", UserStatus::Active),
             ("inactive", UserStatus::Inactive),
-            ("invited", UserStatus::Invited),
-            ("suspended", UserStatus::Suspended),
+            ("disabled", UserStatus::Disabled),
         ] {
             assert_eq!(UserStatus::parse(s).unwrap().as_str(), expected.as_str());
         }
+        // 测试向后兼容
+        assert_eq!(UserStatus::parse("suspended").unwrap().as_str(), "disabled");
+        assert_eq!(UserStatus::parse("invited").unwrap().as_str(), "inactive");
         assert!(UserStatus::parse("nope").is_none());
     }
 

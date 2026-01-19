@@ -65,8 +65,17 @@ impl UserStore for DatabaseLogger {
     async fn create_user(&self, payload: CreateUserPayload) -> Result<User, GatewayError> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
-        let first_name = payload.first_name.unwrap_or_default();
-        let last_name = payload.last_name.unwrap_or_default();
+
+        // 处理匿名用户：如果是匿名用户，自动填充姓名为"匿名用户"
+        let (first_name, last_name) = if payload.is_anonymous {
+            ("匿名用户".to_string(), String::new())
+        } else {
+            (
+                payload.first_name.unwrap_or_default(),
+                payload.last_name.unwrap_or_default(),
+            )
+        };
+
         let phone_number = payload.phone_number.unwrap_or_default();
         let password_hash = payload
             .password
@@ -292,6 +301,7 @@ mod tests {
                 password: None,
                 status: UserStatus::Active,
                 role: UserRole::Admin,
+                is_anonymous: false,
             })
             .await
             .unwrap();
@@ -307,6 +317,7 @@ mod tests {
                 password: None,
                 status: UserStatus::Active,
                 role: UserRole::Manager,
+                is_anonymous: false,
             })
             .await
             .unwrap();
@@ -328,7 +339,7 @@ mod tests {
                     email: None,
                     phone_number: None,
                     password: None,
-                    status: Some(UserStatus::Suspended),
+                    status: Some(UserStatus::Disabled),
                     role: None,
                 },
             )
@@ -336,7 +347,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(updated.first_name, "Alicia");
-        assert_eq!(updated.status.as_str(), "suspended");
+        assert_eq!(updated.status.as_str(), "disabled");
 
         let users = db.list_users().await.unwrap();
         assert_eq!(users.len(), 2);
@@ -367,8 +378,9 @@ mod tests {
                 email: "dup1@example.com".into(),
                 phone_number: None,
                 password: None,
-                status: UserStatus::Invited,
+                status: UserStatus::Inactive,
                 role: UserRole::Admin,
+                is_anonymous: false,
             })
             .await
             .unwrap();
@@ -382,8 +394,9 @@ mod tests {
                 email: "dup2@example.com".into(),
                 phone_number: None,
                 password: None,
-                status: UserStatus::Invited,
+                status: UserStatus::Inactive,
                 role: UserRole::Admin,
+                is_anonymous: false,
             })
             .await
             .unwrap();

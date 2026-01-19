@@ -1,7 +1,8 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, header},
+    response::IntoResponse,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -307,6 +308,81 @@ pub async fn delete_user(
     }
 }
 
+pub async fn export_users_csv(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, GatewayError> {
+    let start_time = Utc::now();
+    let provided_token = bearer_token(&headers);
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
+        let code = e.status_code().as_u16();
+        log_simple_request(
+            &app_state,
+            start_time,
+            "GET",
+            "/admin/users/export",
+            "admin_users_export",
+            None,
+            None,
+            provided_token.as_deref(),
+            code,
+            Some(e.to_string()),
+        )
+        .await;
+        return Err(e);
+    }
+
+    let users = app_state.user_store.list_users().await?;
+
+    // 构建CSV内容
+    let mut csv_content = String::from("ID,姓,名,用户名,邮箱,电话,状态,角色,创建时间,更新时间\n");
+    for user in users {
+        let line = format!(
+            "{},{},{},{},{},{},{},{},{},{}\n",
+            escape_csv_field(&user.id),
+            escape_csv_field(&user.first_name),
+            escape_csv_field(&user.last_name),
+            escape_csv_field(&user.username),
+            escape_csv_field(&user.email),
+            escape_csv_field(&user.phone_number),
+            user.status.as_str(),
+            user.role.as_str(),
+            crate::logging::time::to_iso8601_utc_string(&user.created_at),
+            crate::logging::time::to_iso8601_utc_string(&user.updated_at),
+        );
+        csv_content.push_str(&line);
+    }
+
+    log_simple_request(
+        &app_state,
+        start_time,
+        "GET",
+        "/admin/users/export",
+        "admin_users_export",
+        None,
+        None,
+        token_for_log(provided_token.as_deref()),
+        200,
+        None,
+    )
+    .await;
+
+    let headers = [
+        (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+        (header::CONTENT_DISPOSITION, "attachment; filename=\"users.csv\""),
+    ];
+
+    Ok((headers, csv_content))
+}
+
+fn escape_csv_field(field: &str) -> String {
+    if field.contains(',') || field.contains('"') || field.contains('\n') {
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +509,7 @@ mod tests {
                 password: None,
                 status: UserStatus::Active,
                 role: UserRole::Admin,
+                is_anonymous: false,
             }),
         )
         .await

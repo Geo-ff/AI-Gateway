@@ -170,6 +170,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/admin/users",
             get(admin_users::list_users).post(admin_users::create_user),
         )
+        .route("/admin/users/export", get(admin_users::export_users_csv))
         .route(
             "/admin/users/{id}",
             get(admin_users::get_user)
