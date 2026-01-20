@@ -7,7 +7,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::auth::{ensure_admin, ensure_client_token};
+use super::auth::{ensure_admin, ensure_client_token, require_user};
 use crate::error::GatewayError;
 use crate::logging::types::{REQ_TYPE_MODELS_LIST, REQ_TYPE_PROVIDER_MODELS_LIST};
 use crate::providers::openai::Model;
@@ -25,11 +25,13 @@ pub async fn list_models(
 ) -> Result<Json<ModelListResponse>, GatewayError> {
     let start_time = Utc::now();
     let provided_token = bearer_token(&headers);
-    // 鉴权：优先允许已登录管理员身份（Cookie/TUI Session），否则校验 Client Token
+    // 鉴权：优先允许已登录管理员身份（Cookie/TUI Session），否则允许 AccessToken（登录用户），再否则校验 Client Token
     let mut is_admin = false;
     let mut token_for_limits: Option<String> = None;
     if ensure_admin(&headers, &app_state).await.is_ok() {
         is_admin = true;
+    } else if require_user(&headers).is_ok() {
+        // 登录用户（普通用户/超级管理员均可），仅用于读取可见模型信息
     } else {
         match ensure_client_token(&headers, &app_state).await {
             Ok(tok) => token_for_limits = Some(tok),
@@ -242,24 +244,24 @@ pub async fn list_provider_models(
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| format!("/models/{}", provider_name));
 
-    if ensure_admin(&headers, &app_state).await.is_err()
-        && let Err(e) = ensure_client_token(&headers, &app_state).await
-    {
-        let code = e.status_code().as_u16();
-        log_simple_request(
-            &app_state,
-            start_time,
-            "GET",
-            &full_path,
-            REQ_TYPE_PROVIDER_MODELS_LIST,
-            None,
-            Some(provider_name.clone()),
-            provided_token.as_deref(),
-            code,
-            Some(e.to_string()),
-        )
-        .await;
-        return Err(e);
+    if ensure_admin(&headers, &app_state).await.is_err() && require_user(&headers).is_err() {
+        if let Err(e) = ensure_client_token(&headers, &app_state).await {
+            let code = e.status_code().as_u16();
+            log_simple_request(
+                &app_state,
+                start_time,
+                "GET",
+                &full_path,
+                REQ_TYPE_PROVIDER_MODELS_LIST,
+                None,
+                Some(provider_name.clone()),
+                provided_token.as_deref(),
+                code,
+                Some(e.to_string()),
+            )
+            .await;
+            return Err(e);
+        }
     }
 
     let provider = match app_state

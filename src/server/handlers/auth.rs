@@ -66,7 +66,7 @@ fn jwt_secret_optional() -> Option<Vec<u8>> {
 fn jwt_secret_required() -> Result<Vec<u8>, GatewayError> {
     jwt_secret_optional().ok_or_else(|| {
         GatewayError::Config(
-            "JWT secret not configured (set env `GW_JWT_SECRET` to enable admin AccessToken)"
+            "JWT secret not configured (set env `GW_JWT_SECRET` to enable AccessToken)"
                 .into(),
         )
     })

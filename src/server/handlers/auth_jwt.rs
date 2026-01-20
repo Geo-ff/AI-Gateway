@@ -69,23 +69,22 @@ fn env_optional(name: &'static str) -> Option<String> {
 fn default_permissions_for_role(role: Option<UserRole>) -> Vec<String> {
     match role {
         Some(UserRole::Superadmin) => vec!["admin:*".into()],
-        Some(UserRole::Admin) => vec!["admin:*".into()],
-        Some(UserRole::Manager) => vec!["admin:read".into()],
-        Some(UserRole::Cashier) => vec!["admin:read".into()],
-        None => vec![],
+        _ => vec![],
     }
 }
 
 fn permissions_from_env_or_default(role: Option<UserRole>) -> Vec<String> {
-    if let Some(raw) = env_optional("GW_ADMIN_PERMISSIONS") {
-        let v: Vec<String> = raw
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .collect();
-        if !v.is_empty() {
-            return v;
+    if matches!(role, Some(UserRole::Superadmin)) {
+        if let Some(raw) = env_optional("GW_ADMIN_PERMISSIONS") {
+            let v: Vec<String> = raw
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
+            if !v.is_empty() {
+                return v;
+            }
         }
     }
     default_permissions_for_role(role)
@@ -139,7 +138,7 @@ pub async fn login(
     let now = Utc::now();
     let exp = now + Duration::seconds(jwt_ttl_secs() as i64);
     let role = user.role.as_str().to_string();
-    let mut claims = AccessTokenClaims {
+    let claims = AccessTokenClaims {
         sub: user.id,
         email: user.email,
         permissions: permissions_from_env_or_default(Some(user.role)),
@@ -148,10 +147,6 @@ pub async fn login(
         exp: exp.timestamp(),
         iat: Some(now.timestamp()),
     };
-
-    if claims.permissions.is_empty() {
-        claims.permissions = vec!["admin:read".into()];
-    }
 
     let token = issue_access_token(&claims)?;
     let db_user = app_state
@@ -471,7 +466,7 @@ pub async fn refresh(
 
     let exp = now + Duration::seconds(jwt_ttl_secs() as i64);
     let role = user.role.as_str().to_string();
-    let mut claims = AccessTokenClaims {
+    let claims = AccessTokenClaims {
         sub: user.id,
         email: user.email,
         permissions: permissions_from_env_or_default(Some(user.role)),
@@ -480,9 +475,6 @@ pub async fn refresh(
         exp: exp.timestamp(),
         iat: Some(now.timestamp()),
     };
-    if claims.permissions.is_empty() {
-        claims.permissions = vec!["admin:read".into()];
-    }
     let access_token = issue_access_token(&claims)?;
 
     let new_refresh_token = issue_refresh_token();
