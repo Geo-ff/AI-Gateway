@@ -221,7 +221,7 @@ pub async fn list_tokens(
         .into_iter()
         .map(|token| {
             let mut out = ClientTokenOut::from(token.clone());
-            if let Some(count) = usage_counts.get(&token.token) {
+            if let Some(count) = usage_counts.get(&token.id) {
                 out.usage_count = *count;
             }
             out.is_favorite = favorites.contains(&token.id);

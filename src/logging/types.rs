@@ -34,6 +34,11 @@ pub struct RequestLog {
     pub method: String,
     pub path: String,
     pub request_type: String,
+    /// 用户原始请求传入的模型名（重定向前）
+    pub requested_model: Option<String>,
+    /// 实际上游调用使用的模型名（重定向后）
+    pub effective_model: Option<String>,
+    /// 计费/价格计算使用的模型名（历史字段；可能与 effective_model 不同）
     pub model: Option<String>,
     pub provider: Option<String>,
     pub api_key: Option<String>,

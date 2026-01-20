@@ -23,6 +23,8 @@ pub async fn stream_zhipu_chat(
     app_state: Arc<AppState>,
     start_time: DateTime<Utc>,
     model_with_prefix: String,
+    requested_model: String,
+    effective_model: String,
     base_url: String,
     provider_name: String,
     api_key: String,
@@ -60,7 +62,9 @@ pub async fn stream_zhipu_chat(
             Err(e) => {
                 tracing::error!("Failed to open eventsource: {}", e);
                 let state_for_log = app_state_clone.clone();
-                let model_for_log = model_with_prefix.clone();
+                let billing_model_for_log = model_with_prefix.clone();
+                let requested_model_for_log = requested_model.clone();
+                let effective_model_for_log = effective_model.clone();
                 let provider_for_log = provider_name.clone();
                 let api_key_for_log = api_key_ref.clone();
                 let started_at = start_time;
@@ -70,7 +74,9 @@ pub async fn stream_zhipu_chat(
                     super::common::log_stream_error(
                         state_for_log,
                         started_at,
-                        model_for_log,
+                        billing_model_for_log,
+                        requested_model_for_log,
+                        effective_model_for_log,
                         provider_for_log,
                         api_key_for_log,
                         ct_err,
@@ -94,14 +100,18 @@ pub async fn stream_zhipu_chat(
                             let ct_done = client_token_for_outer.clone();
                             tokio::spawn({
                                 let app = app_state_clone.clone();
-                                let model = model_with_prefix.clone();
+                                let billing_model = model_with_prefix.clone();
+                                let requested_model = requested_model.clone();
+                                let effective_model = effective_model.clone();
                                 let provider = provider_name.clone();
                                 let api_key = api_key_ref.clone();
                                 async move {
                                     super::common::log_stream_success(
                                         app,
                                         start_time,
-                                        model,
+                                        billing_model,
+                                        requested_model,
+                                        effective_model,
                                         provider,
                                         api_key,
                                         ct_done,
@@ -129,7 +139,9 @@ pub async fn stream_zhipu_chat(
                     let error_msg = e.to_string();
                     if !logged_flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
                         let state_for_log = app_state_clone.clone();
-                        let model_for_log = model_with_prefix.clone();
+                        let billing_model_for_log = model_with_prefix.clone();
+                        let requested_model_for_log = requested_model.clone();
+                        let effective_model_for_log = effective_model.clone();
                         let provider_for_log = provider_name.clone();
                         let api_key_for_log = api_key_ref.clone();
                         let started_at = start_time;
@@ -139,7 +151,9 @@ pub async fn stream_zhipu_chat(
                             super::common::log_stream_error(
                                 state_for_log,
                                 started_at,
-                                model_for_log,
+                                billing_model_for_log,
+                                requested_model_for_log,
+                                effective_model_for_log,
                                 provider_for_log,
                                 api_key_for_log,
                                 ct_stream_err,
@@ -162,14 +176,18 @@ pub async fn stream_zhipu_chat(
             let ct_fallback = client_token_for_outer.clone();
             tokio::spawn({
                 let app = app_state_clone.clone();
-                let model = model_with_prefix.clone();
+                let billing_model = model_with_prefix.clone();
+                let requested_model = requested_model.clone();
+                let effective_model = effective_model.clone();
                 let provider = provider_name.clone();
                 let api_key = api_key_ref.clone();
                 async move {
                     super::common::log_stream_success(
                         app,
                         start_time,
-                        model,
+                        billing_model,
+                        requested_model,
+                        effective_model,
                         provider,
                         api_key,
                         ct_fallback,

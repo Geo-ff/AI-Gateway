@@ -148,18 +148,28 @@ components:
           type: string
         request_type:
           type: string
-        model:
+        requested_model:
           type: string
           nullable: true
+          description: 原始请求模型名（重定向前）
+        effective_model:
+          type: string
+          nullable: true
+          description: 实际上游模型名（重定向后）
         provider:
           type: string
           nullable: true
         api_key:
           type: string
           nullable: true
-        client_token:
+        client_token_id:
           type: string
           nullable: true
+          description: Client Token ID（不可逆/非明文）
+        client_token_name:
+          type: string
+          nullable: true
+          description: Client Token 名称（用于展示）
         amount_spent:
           type: number
           format: double
@@ -4457,12 +4467,12 @@ paths:
           in: query
           schema:
             type: string
-          description: 模型筛选（可选）
+          description: 模型筛选（可选；匹配 requested/effective/billing 任一字段）
         - name: client_token
           in: query
           schema:
             type: string
-          description: Client Token 筛选（可选）
+          description: Client Token ID 筛选（可选）
         - name: api_key
           in: query
           schema:

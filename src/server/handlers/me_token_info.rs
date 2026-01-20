@@ -220,7 +220,7 @@ pub async fn my_token_usage(
     for t in selected.iter() {
         let logs = app_state
             .log_store
-            .get_logs_by_client_token(&t.token, fetch_limit)
+            .get_logs_by_client_token(&t.id, fetch_limit)
             .await
             .map_err(GatewayError::Db)?;
         for l in logs.into_iter() {

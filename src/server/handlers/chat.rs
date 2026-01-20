@@ -46,6 +46,7 @@ pub async fn chat_completions(
     } else {
         let mut request = request;
         let start_time = Utc::now();
+        let requested_model = request.model.clone();
         apply_model_redirects(&mut request);
         // If request pins a provider, redirected source models should be rejected (not rewritten).
         let parsed_for_prefix = crate::server::model_parser::ParsedModel::parse(&request.model);
@@ -66,6 +67,9 @@ pub async fn chat_completions(
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.strip_prefix("Bearer "))
             .map(|s| s.to_string());
+        let client_token_log_id = client_token
+            .as_deref()
+            .map(crate::admin::client_token_id_for_token);
         let token_str = match client_token.as_deref() {
             Some(tok) => tok,
             None => {
@@ -102,7 +106,7 @@ pub async fn chat_completions(
                     crate::logging::types::REQ_TYPE_CHAT_ONCE,
                     Some(request.model.clone()),
                     None,
-                    client_token.as_deref(),
+                    client_token_log_id.as_deref(),
                     code,
                     Some(ge.to_string()),
                 )
@@ -115,7 +119,7 @@ pub async fn chat_completions(
             if let Some(max_amount) = token.max_amount
                 && let Ok(spent) = app_state
                     .log_store
-                    .sum_spent_amount_by_client_token(token_str)
+                    .sum_spent_amount_by_client_token(&token.id)
                     .await
                 && spent >= max_amount
             {
@@ -129,7 +133,7 @@ pub async fn chat_completions(
                     crate::logging::types::REQ_TYPE_CHAT_ONCE,
                     Some(request.model.clone()),
                     None,
-                    client_token.as_deref(),
+                    client_token_log_id.as_deref(),
                     code,
                     Some(ge.to_string()),
                 )
@@ -146,7 +150,7 @@ pub async fn chat_completions(
                 crate::logging::types::REQ_TYPE_CHAT_ONCE,
                 Some(request.model.clone()),
                 None,
-                client_token.as_deref(),
+                client_token_log_id.as_deref(),
                 code,
                 Some(ge.to_string()),
             )
@@ -175,7 +179,7 @@ pub async fn chat_completions(
                 crate::logging::types::REQ_TYPE_CHAT_ONCE,
                 Some(request.model.clone()),
                 None,
-                client_token.as_deref(),
+                client_token_log_id.as_deref(),
                 code,
                 Some(ge.to_string()),
             )
@@ -186,7 +190,7 @@ pub async fn chat_completions(
         if let Some(max_amount) = token.max_amount
             && let Ok(spent) = app_state
                 .log_store
-                .sum_spent_amount_by_client_token(token_str)
+                .sum_spent_amount_by_client_token(&token.id)
                 .await
             && spent > max_amount
         {
@@ -218,7 +222,7 @@ pub async fn chat_completions(
                 crate::logging::types::REQ_TYPE_CHAT_ONCE,
                 Some(from),
                 Some(selected.provider.name.clone()),
-                client_token.as_deref(),
+                client_token_log_id.as_deref(),
                 code,
                 Some(ge.to_string()),
             )
@@ -263,7 +267,7 @@ pub async fn chat_completions(
                 crate::logging::types::REQ_TYPE_CHAT_ONCE,
                 Some(upstream_model.clone()),
                 Some(selected.provider.name.clone()),
-                client_token.as_deref(),
+                client_token_log_id.as_deref(),
                 code,
                 Some(ge.to_string()),
             )
@@ -348,7 +352,7 @@ pub async fn chat_completions(
                 crate::logging::types::REQ_TYPE_CHAT_ONCE,
                 Some(upstream_model.clone()),
                 Some(selected.provider.name.clone()),
-                client_token.as_deref(),
+                client_token_log_id.as_deref(),
                 code,
                 Some(ge.to_string()),
             )
@@ -359,12 +363,15 @@ pub async fn chat_completions(
             call_provider_with_parsed_model(&selected, &request, &parsed_model, top_k).await;
 
         // 日志使用 typed，用于提取 usage
-        let token_for_log = client_token.as_deref();
-        let logged_model = effective_model_for_price;
+        let token_for_log = Some(token.id.as_str());
+        let billing_model = effective_model_for_price;
+        let effective_model = upstream_model;
         log_chat_request(
             &app_state,
             start_time,
-            &logged_model,
+            &billing_model,
+            &requested_model,
+            &effective_model,
             &selected.provider.name,
             &selected.api_key,
             token_for_log,

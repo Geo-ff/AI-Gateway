@@ -139,9 +139,10 @@ pub async fn token_usage(
     let limit = q.limit.unwrap_or(20).clamp(1, 200);
     // 为避免暴露非聊天日志，这里拉取更大的窗口后过滤为聊天类型
     let fetch_limit = (limit * 5).min(1000);
+    let token_id = crate::admin::client_token_id_for_token(&token);
     let logs = app_state
         .log_store
-        .get_logs_by_client_token(&token, fetch_limit)
+        .get_logs_by_client_token(&token_id, fetch_limit)
         .await
         .map_err(GatewayError::Db)?;
     let mut chat_items = Vec::with_capacity(limit as usize);

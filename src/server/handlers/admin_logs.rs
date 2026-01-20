@@ -60,10 +60,12 @@ pub struct RequestLogEntry {
     pub method: String,
     pub path: String,
     pub request_type: String,
-    pub model: Option<String>,
+    pub requested_model: Option<String>,
+    pub effective_model: Option<String>,
     pub provider: Option<String>,
     pub api_key: Option<String>,
-    pub client_token: Option<String>,
+    pub client_token_id: Option<String>,
+    pub client_token_name: Option<String>,
     pub amount_spent: Option<f64>,
     pub status_code: u16,
     pub response_time_ms: i64,
@@ -140,11 +142,14 @@ fn filter_logs<'a>(logs: &'a [RequestLog], query: &LogsQuery) -> Vec<&'a Request
             None => true,
         })
         .filter(|log| match query.model.as_ref() {
-            Some(model) => log
-                .model
-                .as_ref()
-                .map(|m| m.eq_ignore_ascii_case(model))
-                .unwrap_or(false),
+            Some(model) => {
+                let matches = |v: &Option<String>| {
+                    v.as_ref()
+                        .map(|m| m.eq_ignore_ascii_case(model))
+                        .unwrap_or(false)
+                };
+                matches(&log.requested_model) || matches(&log.effective_model) || matches(&log.model)
+            }
             None => true,
         })
         .filter(|log| match query.client_token.as_ref() {
@@ -207,6 +212,16 @@ pub async fn list_request_logs(
     };
 
     let filtered = filter_logs(&raw_logs, &query);
+    let name_by_id = {
+        use std::collections::HashMap;
+        let mut map: HashMap<String, String> = HashMap::new();
+        if let Ok(tokens) = app_state.token_store.list_tokens().await {
+            for t in tokens {
+                map.insert(t.id, t.name);
+            }
+        }
+        map
+    };
     let data: Vec<RequestLogEntry> = filtered
         .into_iter()
         .map(|log| RequestLogEntry {
@@ -215,10 +230,23 @@ pub async fn list_request_logs(
             method: log.method.clone(),
             path: log.path.clone(),
             request_type: log.request_type.clone(),
-            model: log.model.clone(),
+            requested_model: log
+                .requested_model
+                .clone()
+                .or_else(|| log.model.clone()),
+            effective_model: log
+                .effective_model
+                .clone()
+                .or_else(|| log.model.clone()),
             provider: log.provider.clone(),
             api_key: log.api_key.clone(),
-            client_token: log.client_token.clone(),
+            client_token_id: log.client_token.clone(),
+            client_token_name: log.client_token.as_deref().map(|id| {
+                name_by_id
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| crate::admin::normalize_client_token_name(None, id))
+            }),
             amount_spent: log.amount_spent,
             status_code: log.status_code,
             response_time_ms: log.response_time_ms,
@@ -272,6 +300,16 @@ pub async fn list_chat_completion_logs(
         .await
         .map_err(GatewayError::Db)?;
 
+    let name_by_id = {
+        use std::collections::HashMap;
+        let mut map: HashMap<String, String> = HashMap::new();
+        if let Ok(tokens) = app_state.token_store.list_tokens().await {
+            for t in tokens {
+                map.insert(t.id, t.name);
+            }
+        }
+        map
+    };
     let data: Vec<RequestLogEntry> = raw_logs
         .iter()
         .map(|log| RequestLogEntry {
@@ -280,10 +318,23 @@ pub async fn list_chat_completion_logs(
             method: log.method.clone(),
             path: log.path.clone(),
             request_type: log.request_type.clone(),
-            model: log.model.clone(),
+            requested_model: log
+                .requested_model
+                .clone()
+                .or_else(|| log.model.clone()),
+            effective_model: log
+                .effective_model
+                .clone()
+                .or_else(|| log.model.clone()),
             provider: log.provider.clone(),
             api_key: log.api_key.clone(),
-            client_token: log.client_token.clone(),
+            client_token_id: log.client_token.clone(),
+            client_token_name: log.client_token.as_deref().map(|id| {
+                name_by_id
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| crate::admin::normalize_client_token_name(None, id))
+            }),
             amount_spent: log.amount_spent,
             status_code: log.status_code,
             response_time_ms: log.response_time_ms,

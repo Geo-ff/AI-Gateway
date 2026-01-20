@@ -666,6 +666,8 @@ impl DatabaseLogger {
                 method TEXT NOT NULL,
                 path TEXT NOT NULL,
                 request_type TEXT NOT NULL DEFAULT 'chat_once',
+                requested_model TEXT,
+                effective_model TEXT,
                 model TEXT,
                 provider TEXT,
                 api_key TEXT,
@@ -688,6 +690,8 @@ impl DatabaseLogger {
             "ALTER TABLE request_logs ADD COLUMN request_type TEXT NOT NULL DEFAULT 'chat_once'",
             [],
         );
+        let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN requested_model TEXT", []);
+        let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN effective_model TEXT", []);
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN api_key TEXT", []);
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN error_message TEXT", []);
         let _ = conn.execute(
@@ -1011,16 +1015,18 @@ impl DatabaseLogger {
 
         conn.execute(
             "INSERT INTO request_logs (
-                timestamp, method, path, request_type, model, provider,
+                timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                 api_key, status_code, response_time_ms, prompt_tokens,
                 completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
                 client_token, amount_spent
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             rusqlite::params![
                 to_beijing_string(&log.timestamp),
                 &log.method,
                 &log.path,
                 &log.request_type,
+                &log.requested_model,
+                &log.effective_model,
                 &log.model,
                 &log.provider,
                 &log.api_key,
@@ -1055,7 +1061,7 @@ impl DatabaseLogger {
         let conn = self.connection.lock().await;
         let mut stmt = if cursor.is_some() {
             conn.prepare(
-                "SELECT id, timestamp, method, path, request_type, model, provider,
+                "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                         api_key, status_code, response_time_ms, prompt_tokens,
                         completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
                         client_token, amount_spent
@@ -1066,7 +1072,7 @@ impl DatabaseLogger {
             )?
         } else {
             conn.prepare(
-                "SELECT id, timestamp, method, path, request_type, model, provider,
+                "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                         api_key, status_code, response_time_ms, prompt_tokens,
                         completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
                         client_token, amount_spent
@@ -1100,7 +1106,7 @@ impl DatabaseLogger {
 
         let mut stmt = if cursor.is_some() {
             conn.prepare(
-                "SELECT id, timestamp, method, path, request_type, model, provider,
+                "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                         api_key, status_code, response_time_ms, prompt_tokens,
                         completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
                         client_token, amount_spent
@@ -1111,7 +1117,7 @@ impl DatabaseLogger {
             )?
         } else {
             conn.prepare(
-                "SELECT id, timestamp, method, path, request_type, model, provider,
+                "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                         api_key, status_code, response_time_ms, prompt_tokens,
                         completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
                         client_token, amount_spent
@@ -1144,7 +1150,7 @@ impl DatabaseLogger {
         let conn = self.connection.lock().await;
         let mut stmt = if cursor.is_some() {
             conn.prepare(
-                "SELECT id, timestamp, method, path, request_type, model, provider,
+                "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                         api_key, status_code, response_time_ms, prompt_tokens,
                         completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
                         client_token, amount_spent
@@ -1155,7 +1161,7 @@ impl DatabaseLogger {
             )?
         } else {
             conn.prepare(
-                "SELECT id, timestamp, method, path, request_type, model, provider,
+                "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                         api_key, status_code, response_time_ms, prompt_tokens,
                         completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
                         client_token, amount_spent
@@ -1204,7 +1210,7 @@ impl DatabaseLogger {
     ) -> Result<Vec<RequestLog>> {
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT id, timestamp, method, path, request_type, model, provider,
+            "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                     api_key, status_code, response_time_ms, prompt_tokens,
                     completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
                     client_token, amount_spent
@@ -1217,19 +1223,21 @@ impl DatabaseLogger {
                 method: row.get(2)?,
                 path: row.get(3)?,
                 request_type: row.get(4)?,
-                model: row.get(5)?,
-                provider: row.get(6)?,
-                api_key: row.get(7)?,
-                status_code: row.get(8)?,
-                response_time_ms: row.get(9)?,
-                prompt_tokens: row.get(10)?,
-                completion_tokens: row.get(11)?,
-                total_tokens: row.get(12)?,
-                cached_tokens: row.get(13)?,
-                reasoning_tokens: row.get(14)?,
-                error_message: row.get(15)?,
-                client_token: row.get(16)?,
-                amount_spent: row.get(17)?,
+                requested_model: row.get(5)?,
+                effective_model: row.get(6)?,
+                model: row.get(7)?,
+                provider: row.get(8)?,
+                api_key: row.get(9)?,
+                status_code: row.get(10)?,
+                response_time_ms: row.get(11)?,
+                prompt_tokens: row.get(12)?,
+                completion_tokens: row.get(13)?,
+                total_tokens: row.get(14)?,
+                cached_tokens: row.get(15)?,
+                reasoning_tokens: row.get(16)?,
+                error_message: row.get(17)?,
+                client_token: row.get(18)?,
+                amount_spent: row.get(19)?,
             })
         })?;
         let mut out = Vec::new();
@@ -1353,19 +1361,21 @@ fn map_request_log_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestLog> 
         method: row.get(2)?,
         path: row.get(3)?,
         request_type: row.get(4)?,
-        model: row.get(5)?,
-        provider: row.get(6)?,
-        api_key: row.get(7)?,
-        status_code: row.get(8)?,
-        response_time_ms: row.get(9)?,
-        prompt_tokens: row.get(10)?,
-        completion_tokens: row.get(11)?,
-        total_tokens: row.get(12)?,
-        cached_tokens: row.get(13)?,
-        reasoning_tokens: row.get(14)?,
-        error_message: row.get(15)?,
-        client_token: row.get(16)?,
-        amount_spent: row.get(17)?,
+        requested_model: row.get(5)?,
+        effective_model: row.get(6)?,
+        model: row.get(7)?,
+        provider: row.get(8)?,
+        api_key: row.get(9)?,
+        status_code: row.get(10)?,
+        response_time_ms: row.get(11)?,
+        prompt_tokens: row.get(12)?,
+        completion_tokens: row.get(13)?,
+        total_tokens: row.get(14)?,
+        cached_tokens: row.get(15)?,
+        reasoning_tokens: row.get(16)?,
+        error_message: row.get(17)?,
+        client_token: row.get(18)?,
+        amount_spent: row.get(19)?,
     })
 }
 

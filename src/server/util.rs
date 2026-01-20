@@ -13,7 +13,8 @@ pub fn bearer_token(headers: &HeaderMap) -> Option<String> {
 
 // Map provided token to a safe value for logging
 pub fn token_for_log(provided: Option<&str>) -> Option<&str> {
-    provided
+    let _ = provided;
+    None
 }
 
 // Key masking and hint utilities (DRY across modules)

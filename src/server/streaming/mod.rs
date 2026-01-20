@@ -35,6 +35,7 @@ pub async fn stream_chat_completions(
     }
 
     let start_time = Utc::now();
+    let requested_model = request.model.clone();
     apply_model_redirects(&mut request);
     let parsed_for_prefix = crate::server::model_parser::ParsedModel::parse(&request.model);
     if let Some(p) = parsed_for_prefix.provider_name.as_deref() {
@@ -111,6 +112,9 @@ pub async fn stream_chat_completions(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|s| s.to_string());
+    let client_token_log_id = client_token
+        .as_deref()
+        .map(crate::admin::client_token_id_for_token);
     let token_str = match client_token.as_deref() {
         Some(tok) => tok,
         None => {
@@ -147,7 +151,7 @@ pub async fn stream_chat_completions(
                 crate::logging::types::REQ_TYPE_CHAT_STREAM,
                 Some(upstream_req.model.clone()),
                 Some(selected.provider.name.clone()),
-                client_token.as_deref(),
+                client_token_log_id.as_deref(),
                 code,
                 Some(ge.to_string()),
             )
@@ -160,7 +164,7 @@ pub async fn stream_chat_completions(
         if let Some(max_amount) = token.max_amount
             && let Ok(spent) = app_state
                 .log_store
-                .sum_spent_amount_by_client_token(token_str)
+                .sum_spent_amount_by_client_token(&token.id)
                 .await
             && spent >= max_amount
         {
@@ -174,7 +178,7 @@ pub async fn stream_chat_completions(
                 crate::logging::types::REQ_TYPE_CHAT_STREAM,
                 Some(upstream_req.model.clone()),
                 Some(selected.provider.name.clone()),
-                client_token.as_deref(),
+                client_token_log_id.as_deref(),
                 code,
                 Some(ge.to_string()),
             )
@@ -191,7 +195,7 @@ pub async fn stream_chat_completions(
             crate::logging::types::REQ_TYPE_CHAT_STREAM,
             Some(upstream_req.model.clone()),
             Some(selected.provider.name.clone()),
-            client_token.as_deref(),
+            client_token_log_id.as_deref(),
             code,
             Some(ge.to_string()),
         )
@@ -220,7 +224,7 @@ pub async fn stream_chat_completions(
             crate::logging::types::REQ_TYPE_CHAT_STREAM,
             Some(upstream_req.model.clone()),
             Some(selected.provider.name.clone()),
-            client_token.as_deref(),
+            client_token_log_id.as_deref(),
             code,
             Some(ge.to_string()),
         )
@@ -231,7 +235,7 @@ pub async fn stream_chat_completions(
     if let Some(max_amount) = token.max_amount
         && let Ok(spent) = app_state
             .log_store
-            .sum_spent_amount_by_client_token(token_str)
+            .sum_spent_amount_by_client_token(&token.id)
             .await
         && spent > max_amount
     {
@@ -254,7 +258,7 @@ pub async fn stream_chat_completions(
             crate::logging::types::REQ_TYPE_CHAT_STREAM,
             Some(upstream_req.model.clone()),
             Some(selected.provider.name.clone()),
-            client_token.as_deref(),
+            client_token_log_id.as_deref(),
             code,
             Some(ge.to_string()),
         )
@@ -277,7 +281,7 @@ pub async fn stream_chat_completions(
             crate::logging::types::REQ_TYPE_CHAT_STREAM,
             Some(upstream_req.model.clone()),
             Some(selected.provider.name.clone()),
-            client_token.as_deref(),
+            client_token_log_id.as_deref(),
             code,
             Some(ge.to_string()),
         )
@@ -290,6 +294,8 @@ pub async fn stream_chat_completions(
             app_state.clone(),
             start_time,
             upstream_req.model.clone(),
+            requested_model.clone(),
+            upstream_req.model.clone(),
             selected.provider.base_url.clone(),
             selected.provider.name.clone(),
             selected.api_key.clone(),
@@ -301,6 +307,8 @@ pub async fn stream_chat_completions(
         crate::config::ProviderType::Zhipu => zhipu::stream_zhipu_chat(
             app_state.clone(),
             start_time,
+            upstream_req.model.clone(),
+            requested_model.clone(),
             upstream_req.model.clone(),
             selected.provider.base_url.clone(),
             selected.provider.name.clone(),

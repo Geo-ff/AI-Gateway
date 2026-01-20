@@ -142,7 +142,7 @@ pub async fn list_my_tokens(
         .into_iter()
         .map(|token| {
             let mut out = MyTokenOut::from(token.clone());
-            if let Some(count) = usage_counts.get(&token.token) {
+            if let Some(count) = usage_counts.get(&token.id) {
                 out.usage_count = *count;
             }
             out

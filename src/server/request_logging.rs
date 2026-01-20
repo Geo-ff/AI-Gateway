@@ -10,7 +10,9 @@ use chrono::{DateTime, Utc};
 pub async fn log_chat_request(
     app_state: &AppState,
     start_time: DateTime<Utc>,
-    model: &str,
+    billing_model: &str,
+    requested_model: &str,
+    effective_model: &str,
     provider_name: &str,
     api_key_raw: &str,
     client_token: Option<&str>,
@@ -29,7 +31,7 @@ pub async fn log_chat_request(
             if let (Some(u), Some(_tok)) = (usage, client_token) {
                 match app_state
                     .log_store
-                    .get_model_price(provider_name, model)
+                    .get_model_price(provider_name, billing_model)
                     .await
                 {
                     Ok(Some((p_pm, c_pm, _, _))) => {
@@ -52,7 +54,9 @@ pub async fn log_chat_request(
         method: "POST".to_string(),
         path: "/v1/chat/completions".to_string(),
         request_type: REQ_TYPE_CHAT_ONCE.to_string(),
-        model: Some(model.to_string()),
+        requested_model: Some(requested_model.to_string()),
+        effective_model: Some(effective_model.to_string()),
+        model: Some(billing_model.to_string()),
         provider: Some(provider_name.to_string()),
         api_key,
         client_token: client_token.map(|s| s.to_string()),
@@ -139,6 +143,8 @@ pub async fn log_simple_request(
         method: method.to_string(),
         path: path.to_string(),
         request_type: request_type.to_string(),
+        requested_model: model.clone(),
+        effective_model: model.clone(),
         model,
         provider,
         api_key: None,

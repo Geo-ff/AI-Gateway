@@ -11,7 +11,9 @@ use crate::server::AppState;
 pub(super) async fn log_stream_error(
     app_state: Arc<AppState>,
     start_time: DateTime<Utc>,
-    model: String,
+    billing_model: String,
+    requested_model: String,
+    effective_model: String,
     provider: String,
     api_key: Option<String>,
     client_token: Option<String>,
@@ -19,16 +21,21 @@ pub(super) async fn log_stream_error(
 ) {
     let end_time = Utc::now();
     let response_time_ms = (end_time - start_time).num_milliseconds();
+    let client_token_id = client_token
+        .as_deref()
+        .map(crate::admin::client_token_id_for_token);
     let log = RequestLog {
         id: None,
         timestamp: start_time,
         method: "POST".to_string(),
         path: "/v1/chat/completions".to_string(),
         request_type: REQ_TYPE_CHAT_STREAM.to_string(),
-        model: Some(model),
+        requested_model: Some(requested_model),
+        effective_model: Some(effective_model),
+        model: Some(billing_model),
         provider: Some(provider),
         api_key,
-        client_token,
+        client_token: client_token_id,
         amount_spent: None,
         status_code: 500,
         response_time_ms,
@@ -48,7 +55,9 @@ pub(super) async fn log_stream_error(
 pub(super) async fn log_stream_success(
     app_state: Arc<AppState>,
     start_time: DateTime<Utc>,
-    model: String,
+    billing_model: String,
+    requested_model: String,
+    effective_model: String,
     provider: String,
     api_key: Option<String>,
     client_token: Option<String>,
@@ -76,7 +85,11 @@ pub(super) async fn log_stream_success(
     let amount_spent = if let Some(u) = usage.as_ref()
         && client_token.is_some()
     {
-        match app_state.log_store.get_model_price(&provider, &model).await {
+        match app_state
+            .log_store
+            .get_model_price(&provider, &billing_model)
+            .await
+        {
             Ok(Some((p_pm, c_pm, _, _))) => {
                 let p = u.prompt_tokens as f64 * p_pm / 1_000_000.0;
                 let c = u.completion_tokens as f64 * c_pm / 1_000_000.0;
@@ -88,16 +101,21 @@ pub(super) async fn log_stream_success(
         None
     };
 
+    let client_token_id = client_token
+        .as_deref()
+        .map(crate::admin::client_token_id_for_token);
     let log = RequestLog {
         id: None,
         timestamp: start_time,
         method: "POST".to_string(),
         path: "/v1/chat/completions".to_string(),
         request_type: REQ_TYPE_CHAT_STREAM.to_string(),
-        model: Some(model),
+        requested_model: Some(requested_model),
+        effective_model: Some(effective_model),
+        model: Some(billing_model),
         provider: Some(provider),
         api_key,
-        client_token: client_token.clone(),
+        client_token: client_token_id,
         amount_spent,
         status_code: 200,
         response_time_ms,
