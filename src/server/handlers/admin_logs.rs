@@ -16,6 +16,7 @@ use crate::server::request_logging::log_simple_request;
 
 const MAX_LOG_LIMIT: usize = 1000;
 const DEFAULT_LOG_LIMIT: usize = 200;
+const CLIENT_TOKEN_ID_PREFIX: &str = "atk_";
 
 #[derive(Debug, Deserialize, Default)]
 pub struct OpsQuery {
@@ -66,6 +67,7 @@ pub struct RequestLogEntry {
     pub api_key: Option<String>,
     pub client_token_id: Option<String>,
     pub client_token_name: Option<String>,
+    pub username: Option<String>,
     pub amount_spent: Option<f64>,
     pub status_code: u16,
     pub response_time_ms: i64,
@@ -117,6 +119,39 @@ fn identity_label(identity: &AdminIdentity) -> &'static str {
         AdminIdentity::TuiSession(_) => "tui_session",
         AdminIdentity::WebSession(_) => "web_session",
     }
+}
+
+#[derive(Debug, Clone)]
+enum NormalizedClientToken {
+    TokenId(String),
+    AdminIdentity(&'static str),
+}
+
+fn normalize_client_token(raw: Option<&str>) -> Option<NormalizedClientToken> {
+    let raw = raw?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.starts_with(CLIENT_TOKEN_ID_PREFIX) {
+        return Some(NormalizedClientToken::TokenId(raw.to_string()));
+    }
+    if raw == "jwt" {
+        return Some(NormalizedClientToken::AdminIdentity("jwt"));
+    }
+    if raw == "web_session" {
+        return Some(NormalizedClientToken::AdminIdentity("web_session"));
+    }
+    if raw == "tui_session" {
+        return Some(NormalizedClientToken::AdminIdentity("tui_session"));
+    }
+    // 历史脏数据：直接写入 JWT 明文串（含 '.' 且通常以 'eyJ' 开头）
+    if raw.starts_with("eyJ") && raw.contains('.') {
+        return Some(NormalizedClientToken::AdminIdentity("jwt"));
+    }
+    // 历史脏数据：写入了明文 Client Token；响应层归一化为不可逆 token_id
+    Some(NormalizedClientToken::TokenId(
+        crate::admin::client_token_id_for_token(raw),
+    ))
 }
 
 fn filter_logs<'a>(logs: &'a [RequestLog], query: &LogsQuery) -> Vec<&'a RequestLog> {
@@ -212,51 +247,91 @@ pub async fn list_request_logs(
     };
 
     let filtered = filter_logs(&raw_logs, &query);
-    let name_by_id = {
+    let token_meta_by_id = {
         use std::collections::HashMap;
-        let mut map: HashMap<String, String> = HashMap::new();
+        #[derive(Clone)]
+        struct TokenMeta {
+            name: String,
+            user_id: Option<String>,
+        }
+        let mut map: HashMap<String, TokenMeta> = HashMap::new();
         if let Ok(tokens) = app_state.token_store.list_tokens().await {
             for t in tokens {
-                map.insert(t.id, t.name);
+                map.insert(
+                    t.id,
+                    TokenMeta {
+                        name: t.name,
+                        user_id: t.user_id,
+                    },
+                );
+            }
+        }
+        map
+    };
+    let username_by_user_id = {
+        use std::collections::HashMap;
+        let mut map: HashMap<String, String> = HashMap::new();
+        if let Ok(users) = app_state.user_store.list_users().await {
+            for u in users {
+                map.insert(u.id, u.username);
             }
         }
         map
     };
     let data: Vec<RequestLogEntry> = filtered
         .into_iter()
-        .map(|log| RequestLogEntry {
-            id: log.id,
-            timestamp: log.timestamp.to_rfc3339(),
-            method: log.method.clone(),
-            path: log.path.clone(),
-            request_type: log.request_type.clone(),
-            requested_model: log
-                .requested_model
-                .clone()
-                .or_else(|| log.model.clone()),
-            effective_model: log
-                .effective_model
-                .clone()
-                .or_else(|| log.model.clone()),
-            provider: log.provider.clone(),
-            api_key: log.api_key.clone(),
-            client_token_id: log.client_token.clone(),
-            client_token_name: log.client_token.as_deref().map(|id| {
-                name_by_id
-                    .get(id)
-                    .cloned()
-                    .unwrap_or_else(|| crate::admin::normalize_client_token_name(None, id))
-            }),
-            amount_spent: log.amount_spent,
-            status_code: log.status_code,
-            response_time_ms: log.response_time_ms,
-            prompt_tokens: log.prompt_tokens,
-            completion_tokens: log.completion_tokens,
-            total_tokens: log.total_tokens,
-            cached_tokens: log.cached_tokens,
-            reasoning_tokens: log.reasoning_tokens,
-            error_message: log.error_message.clone(),
-            success: log.status_code < 400,
+        .map(|log| {
+            // 注意：严禁返回 token/JWT 明文；这里始终对 client_token 做归一化输出
+            // - Token / 明文 token -> client_token_id = atk_...；client_token_name = token.name(或 fallback)
+            // - 管理员身份 / JWT -> client_token_id = null；client_token_name = 管理员(...)
+            let normalized = normalize_client_token(log.client_token.as_deref());
+            let (client_token_id, client_token_name, username) = match normalized {
+                Some(NormalizedClientToken::TokenId(id)) => {
+                    let meta = token_meta_by_id.get(&id);
+                    let name = meta
+                        .map(|m| m.name.clone())
+                        .unwrap_or_else(|| crate::admin::normalize_client_token_name(None, &id));
+                    let username = meta
+                        .and_then(|m| m.user_id.as_ref())
+                        .and_then(|user_id| username_by_user_id.get(user_id).cloned());
+                    (Some(id), Some(name), username)
+                }
+                Some(NormalizedClientToken::AdminIdentity(kind)) => {
+                    (None, Some(format!("管理员({})", kind)), None)
+                }
+                None => (None, None, None),
+            };
+
+            RequestLogEntry {
+                id: log.id,
+                timestamp: log.timestamp.to_rfc3339(),
+                method: log.method.clone(),
+                path: log.path.clone(),
+                request_type: log.request_type.clone(),
+                requested_model: log
+                    .requested_model
+                    .clone()
+                    .or_else(|| log.model.clone()),
+                effective_model: log
+                    .effective_model
+                    .clone()
+                    .or_else(|| log.model.clone()),
+                provider: log.provider.clone(),
+                api_key: log.api_key.clone(),
+                client_token_id,
+                client_token_name,
+                username,
+                amount_spent: log.amount_spent,
+                status_code: log.status_code,
+                response_time_ms: log.response_time_ms,
+                prompt_tokens: log.prompt_tokens,
+                completion_tokens: log.completion_tokens,
+                total_tokens: log.total_tokens,
+                cached_tokens: log.cached_tokens,
+                reasoning_tokens: log.reasoning_tokens,
+                error_message: log.error_message.clone(),
+                success: log.status_code < 400,
+            }
         })
         .collect();
 
@@ -300,51 +375,88 @@ pub async fn list_chat_completion_logs(
         .await
         .map_err(GatewayError::Db)?;
 
-    let name_by_id = {
+    let token_meta_by_id = {
         use std::collections::HashMap;
-        let mut map: HashMap<String, String> = HashMap::new();
+        #[derive(Clone)]
+        struct TokenMeta {
+            name: String,
+            user_id: Option<String>,
+        }
+        let mut map: HashMap<String, TokenMeta> = HashMap::new();
         if let Ok(tokens) = app_state.token_store.list_tokens().await {
             for t in tokens {
-                map.insert(t.id, t.name);
+                map.insert(
+                    t.id,
+                    TokenMeta {
+                        name: t.name,
+                        user_id: t.user_id,
+                    },
+                );
+            }
+        }
+        map
+    };
+    let username_by_user_id = {
+        use std::collections::HashMap;
+        let mut map: HashMap<String, String> = HashMap::new();
+        if let Ok(users) = app_state.user_store.list_users().await {
+            for u in users {
+                map.insert(u.id, u.username);
             }
         }
         map
     };
     let data: Vec<RequestLogEntry> = raw_logs
         .iter()
-        .map(|log| RequestLogEntry {
-            id: log.id,
-            timestamp: log.timestamp.to_rfc3339(),
-            method: log.method.clone(),
-            path: log.path.clone(),
-            request_type: log.request_type.clone(),
-            requested_model: log
-                .requested_model
-                .clone()
-                .or_else(|| log.model.clone()),
-            effective_model: log
-                .effective_model
-                .clone()
-                .or_else(|| log.model.clone()),
-            provider: log.provider.clone(),
-            api_key: log.api_key.clone(),
-            client_token_id: log.client_token.clone(),
-            client_token_name: log.client_token.as_deref().map(|id| {
-                name_by_id
-                    .get(id)
-                    .cloned()
-                    .unwrap_or_else(|| crate::admin::normalize_client_token_name(None, id))
-            }),
-            amount_spent: log.amount_spent,
-            status_code: log.status_code,
-            response_time_ms: log.response_time_ms,
-            prompt_tokens: log.prompt_tokens,
-            completion_tokens: log.completion_tokens,
-            total_tokens: log.total_tokens,
-            cached_tokens: log.cached_tokens,
-            reasoning_tokens: log.reasoning_tokens,
-            error_message: log.error_message.clone(),
-            success: log.status_code < 400,
+        .map(|log| {
+            let normalized = normalize_client_token(log.client_token.as_deref());
+            let (client_token_id, client_token_name, username) = match normalized {
+                Some(NormalizedClientToken::TokenId(id)) => {
+                    let meta = token_meta_by_id.get(&id);
+                    let name = meta
+                        .map(|m| m.name.clone())
+                        .unwrap_or_else(|| crate::admin::normalize_client_token_name(None, &id));
+                    let username = meta
+                        .and_then(|m| m.user_id.as_ref())
+                        .and_then(|user_id| username_by_user_id.get(user_id).cloned());
+                    (Some(id), Some(name), username)
+                }
+                Some(NormalizedClientToken::AdminIdentity(kind)) => {
+                    (None, Some(format!("管理员({})", kind)), None)
+                }
+                None => (None, None, None),
+            };
+
+            RequestLogEntry {
+                id: log.id,
+                timestamp: log.timestamp.to_rfc3339(),
+                method: log.method.clone(),
+                path: log.path.clone(),
+                request_type: log.request_type.clone(),
+                requested_model: log
+                    .requested_model
+                    .clone()
+                    .or_else(|| log.model.clone()),
+                effective_model: log
+                    .effective_model
+                    .clone()
+                    .or_else(|| log.model.clone()),
+                provider: log.provider.clone(),
+                api_key: log.api_key.clone(),
+                client_token_id,
+                client_token_name,
+                username,
+                amount_spent: log.amount_spent,
+                status_code: log.status_code,
+                response_time_ms: log.response_time_ms,
+                prompt_tokens: log.prompt_tokens,
+                completion_tokens: log.completion_tokens,
+                total_tokens: log.total_tokens,
+                cached_tokens: log.cached_tokens,
+                reasoning_tokens: log.reasoning_tokens,
+                error_message: log.error_message.clone(),
+                success: log.status_code < 400,
+            }
         })
         .collect();
 
