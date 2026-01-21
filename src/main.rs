@@ -1,4 +1,5 @@
 mod admin;
+mod balance;
 mod config;
 mod crypto;
 mod db;
@@ -9,6 +10,7 @@ mod providers;
 mod refresh_tokens;
 mod routing;
 mod server;
+mod subscription;
 mod users;
 
 use tracing_subscriber::{EnvFilter, fmt};

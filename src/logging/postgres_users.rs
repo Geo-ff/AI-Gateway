@@ -33,6 +33,7 @@ impl UserStore for PgLogStore {
         let theme: Option<String> = None;
         let font: Option<String> = None;
         let phone_number = payload.phone_number.unwrap_or_default();
+        let balance = 0.0f64;
         let password_hash = payload
             .password
             .as_deref()
@@ -61,8 +62,8 @@ impl UserStore for PgLogStore {
 
         client
             .execute(
-                "INSERT INTO users (id, first_name, last_name, username, bio, theme, font, email, phone_number, password_hash, status, role, created_at, updated_at)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
+                "INSERT INTO users (id, first_name, last_name, username, bio, theme, font, email, phone_number, balance, password_hash, status, role, created_at, updated_at)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
                 &[
                     &id,
                     &first_name,
@@ -73,6 +74,7 @@ impl UserStore for PgLogStore {
                     &font,
                     &payload.email,
                     &phone_number,
+                    &balance,
                     &password_hash,
                     &payload.status.as_str(),
                     &role.as_str(),
@@ -93,6 +95,7 @@ impl UserStore for PgLogStore {
             font,
             email: payload.email,
             phone_number,
+            balance,
             status: payload.status,
             role,
             created_at: now,
@@ -109,7 +112,7 @@ impl UserStore for PgLogStore {
 
         let row_opt = client
             .query_opt(
-                "SELECT id, first_name, last_name, username, bio, theme, font, email, phone_number, status, role, created_at, updated_at FROM users WHERE id = $1",
+                "SELECT id, first_name, last_name, username, bio, theme, font, email, phone_number, balance, status, role, created_at, updated_at FROM users WHERE id = $1",
                 &[&id],
             )
             .await
@@ -128,12 +131,13 @@ impl UserStore for PgLogStore {
             font: row.get(6),
             email: row.get(7),
             phone_number: row.get(8),
-            status: crate::users::UserStatus::parse(row.get::<usize, String>(9).as_str())
+            balance: row.get(9),
+            status: crate::users::UserStatus::parse(row.get::<usize, String>(10).as_str())
                 .ok_or_else(|| GatewayError::Config("invalid user status".into()))?,
-            role: crate::users::UserRole::parse(row.get::<usize, String>(10).as_str())
+            role: crate::users::UserRole::parse(row.get::<usize, String>(11).as_str())
                 .ok_or_else(|| GatewayError::Config("invalid user role".into()))?,
-            created_at: row.get(11),
-            updated_at: row.get(12),
+            created_at: row.get(12),
+            updated_at: row.get(13),
         };
 
         if let Some(v) = payload.first_name {
@@ -204,7 +208,7 @@ impl UserStore for PgLogStore {
         let client = self.pool.pick();
         let row_opt = client
             .query_opt(
-                "SELECT id, first_name, last_name, username, bio, theme, font, email, phone_number, status, role, created_at, updated_at FROM users WHERE id = $1",
+                "SELECT id, first_name, last_name, username, bio, theme, font, email, phone_number, balance, status, role, created_at, updated_at FROM users WHERE id = $1",
                 &[&id],
             )
             .await
@@ -222,12 +226,13 @@ impl UserStore for PgLogStore {
             font: row.get(6),
             email: row.get(7),
             phone_number: row.get(8),
-            status: crate::users::UserStatus::parse(row.get::<usize, String>(9).as_str())
+            balance: row.get(9),
+            status: crate::users::UserStatus::parse(row.get::<usize, String>(10).as_str())
                 .ok_or_else(|| GatewayError::Config("invalid user status".into()))?,
-            role: crate::users::UserRole::parse(row.get::<usize, String>(10).as_str())
+            role: crate::users::UserRole::parse(row.get::<usize, String>(11).as_str())
                 .ok_or_else(|| GatewayError::Config("invalid user role".into()))?,
-            created_at: row.get(11),
-            updated_at: row.get(12),
+            created_at: row.get(12),
+            updated_at: row.get(13),
         }))
     }
 
@@ -235,7 +240,7 @@ impl UserStore for PgLogStore {
         let client = self.pool.pick();
         let row_opt = client
             .query_opt(
-                "SELECT id, first_name, last_name, username, bio, theme, font, email, phone_number, status, role, created_at, updated_at FROM users WHERE username = $1 LIMIT 1",
+                "SELECT id, first_name, last_name, username, bio, theme, font, email, phone_number, balance, status, role, created_at, updated_at FROM users WHERE username = $1 LIMIT 1",
                 &[&username],
             )
             .await
@@ -253,12 +258,13 @@ impl UserStore for PgLogStore {
             font: row.get(6),
             email: row.get(7),
             phone_number: row.get(8),
-            status: crate::users::UserStatus::parse(row.get::<usize, String>(9).as_str())
+            balance: row.get(9),
+            status: crate::users::UserStatus::parse(row.get::<usize, String>(10).as_str())
                 .ok_or_else(|| GatewayError::Config("invalid user status".into()))?,
-            role: crate::users::UserRole::parse(row.get::<usize, String>(10).as_str())
+            role: crate::users::UserRole::parse(row.get::<usize, String>(11).as_str())
                 .ok_or_else(|| GatewayError::Config("invalid user role".into()))?,
-            created_at: row.get(11),
-            updated_at: row.get(12),
+            created_at: row.get(12),
+            updated_at: row.get(13),
         }))
     }
 
@@ -297,7 +303,7 @@ impl UserStore for PgLogStore {
         let client = self.pool.pick();
         let rows = client
             .query(
-                "SELECT id, first_name, last_name, username, bio, theme, font, email, phone_number, status, role, created_at, updated_at FROM users ORDER BY created_at DESC",
+                "SELECT id, first_name, last_name, username, bio, theme, font, email, phone_number, balance, status, role, created_at, updated_at FROM users ORDER BY created_at DESC",
                 &[],
             )
             .await
@@ -314,12 +320,13 @@ impl UserStore for PgLogStore {
                 font: row.get(6),
                 email: row.get(7),
                 phone_number: row.get(8),
-                status: crate::users::UserStatus::parse(row.get::<usize, String>(9).as_str())
+                balance: row.get(9),
+                status: crate::users::UserStatus::parse(row.get::<usize, String>(10).as_str())
                     .ok_or_else(|| GatewayError::Config("invalid user status".into()))?,
-                role: crate::users::UserRole::parse(row.get::<usize, String>(10).as_str())
+                role: crate::users::UserRole::parse(row.get::<usize, String>(11).as_str())
                     .ok_or_else(|| GatewayError::Config("invalid user role".into()))?,
-                created_at: row.get(11),
-                updated_at: row.get(12),
+                created_at: row.get(12),
+                updated_at: row.get(13),
             });
         }
         Ok(out)
@@ -332,5 +339,18 @@ impl UserStore for PgLogStore {
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         Ok(affected > 0)
+    }
+
+    async fn add_balance(&self, user_id: &str, delta: f64) -> Result<Option<f64>, GatewayError> {
+        let client = self.pool.pick();
+        let now = Utc::now();
+        let row_opt = client
+            .query_opt(
+                "UPDATE users SET balance = balance + $2, updated_at = $3 WHERE id = $1 RETURNING balance",
+                &[&user_id, &delta, &now],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
+        Ok(row_opt.map(|row| row.get::<usize, f64>(0)))
     }
 }

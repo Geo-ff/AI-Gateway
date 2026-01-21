@@ -284,6 +284,19 @@ impl TokenStore for DatabaseLogger {
         Ok(affected > 0)
     }
 
+    async fn set_enabled_for_user(
+        &self,
+        user_id: &str,
+        enabled: bool,
+    ) -> Result<u64, GatewayError> {
+        let conn = self.connection.lock().await;
+        let affected = conn.execute(
+            "UPDATE client_tokens SET enabled = ?2 WHERE user_id = ?1",
+            (user_id, if enabled { 1 } else { 0 }),
+        )?;
+        Ok(affected as u64)
+    }
+
     async fn get_token(&self, token: &str) -> Result<Option<ClientToken>, GatewayError> {
         let conn = self.connection.lock().await;
         use rusqlite::OptionalExtension;
@@ -840,5 +853,158 @@ impl TokenStore for DatabaseLogger {
             (id, if enabled { 1 } else { 0 }),
         )?;
         Ok(affected > 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::admin::{CreateTokenPayload, TokenStore};
+    use crate::users::{CreateUserPayload, UserRole, UserStatus, UserStore};
+    use chrono::Utc;
+    use rusqlite::Connection;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn sqlite_set_enabled_for_user_disables_all_tokens() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db_path = db_path.to_str().unwrap();
+        let db = DatabaseLogger::new(db_path).await.unwrap();
+
+        let user = db
+            .create_user(CreateUserPayload {
+                first_name: Some("U".into()),
+                last_name: Some("1".into()),
+                username: None,
+                email: "u1@example.com".into(),
+                phone_number: None,
+                password: None,
+                status: UserStatus::Active,
+                role: UserRole::Admin,
+                is_anonymous: false,
+            })
+            .await
+            .unwrap();
+
+        let t1 = db
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: Some(user.id.clone()),
+                name: Some("t1".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+        let _t2 = db
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: Some(user.id.clone()),
+                name: Some("t2".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+
+        let n = db.set_enabled_for_user(&user.id, false).await.unwrap();
+        assert_eq!(n, 2);
+
+        let tokens = db.list_tokens_by_user(&user.id).await.unwrap();
+        assert_eq!(tokens.len(), 2);
+        assert!(tokens.iter().all(|t| !t.enabled));
+
+        let found = db.get_token(&t1.token).await.unwrap().unwrap();
+        assert!(!found.enabled);
+    }
+
+    #[tokio::test]
+    async fn sqlite_migration_clears_max_amount_for_user_bound_tokens() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // Seed legacy/dirty data before DatabaseLogger::new runs migrations.
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "CREATE TABLE client_tokens (
+                    id TEXT,
+                    user_id TEXT,
+                    name TEXT,
+                    token TEXT PRIMARY KEY,
+                    allowed_models TEXT,
+                    max_tokens INTEGER,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    expires_at TEXT,
+                    created_at TEXT NOT NULL,
+                    max_amount REAL,
+                    amount_spent REAL DEFAULT 0,
+                    prompt_tokens_spent INTEGER DEFAULT 0,
+                    completion_tokens_spent INTEGER DEFAULT 0,
+                    total_tokens_spent INTEGER DEFAULT 0,
+                    remark TEXT,
+                    organization_id TEXT,
+                    ip_whitelist TEXT,
+                    ip_blacklist TEXT,
+                    model_blacklist TEXT
+                )",
+                [],
+            )
+            .unwrap();
+
+            let now_s = crate::logging::time::to_beijing_string(&Utc::now());
+            conn.execute(
+                "INSERT INTO client_tokens (id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist, model_blacklist)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                rusqlite::params![
+                    "atk_legacy",
+                    "u1",
+                    "legacy",
+                    "legacy-token",
+                    Option::<String>::None,
+                    Option::<i64>::None,
+                    1i64,
+                    Option::<String>::None,
+                    now_s,
+                    10.0f64,
+                    0.0f64,
+                    0i64,
+                    0i64,
+                    0i64,
+                    Option::<String>::None,
+                    Option::<String>::None,
+                    Option::<String>::None,
+                    Option::<String>::None,
+                    Option::<String>::None,
+                ],
+            )
+            .unwrap();
+        }
+
+        let db = DatabaseLogger::new(db_path.to_str().unwrap())
+            .await
+            .unwrap();
+        let fetched = db.get_token("legacy-token").await.unwrap().unwrap();
+        assert!(fetched.user_id.is_some());
+        assert!(fetched.max_amount.is_none());
     }
 }

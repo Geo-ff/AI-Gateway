@@ -13,6 +13,7 @@ pub(crate) mod token_model_limits;
 pub(crate) mod util;
 
 use crate::admin::{PgTokenStore, TokenStore};
+use crate::balance::BalanceStore;
 use crate::config::Settings;
 use crate::error::{GatewayError, Result as AppResult};
 use crate::logging::DatabaseLogger;
@@ -23,6 +24,7 @@ use crate::routing::LoadBalancerState;
 use crate::server::storage_traits::{
     AdminPublicKeyRecord, FavoritesStore, LoginStore, ModelCache, ProviderStore, RequestLogStore,
 };
+use crate::subscription::SubscriptionStore;
 use crate::users::UserStore;
 use axum::Router;
 use base64::Engine;
@@ -43,6 +45,8 @@ type StoreTuple = (
     Arc<dyn UserStore + Send + Sync>,
     Arc<dyn RefreshTokenStore + Send + Sync>,
     Arc<dyn PasswordResetTokenStore + Send + Sync>,
+    Arc<dyn BalanceStore + Send + Sync>,
+    Arc<dyn SubscriptionStore + Send + Sync>,
 );
 
 #[derive(Clone)]
@@ -58,6 +62,8 @@ pub struct AppState {
     pub user_store: Arc<dyn UserStore + Send + Sync>,
     pub refresh_token_store: Arc<dyn RefreshTokenStore + Send + Sync>,
     pub password_reset_token_store: Arc<dyn PasswordResetTokenStore + Send + Sync>,
+    pub balance_store: Arc<dyn BalanceStore + Send + Sync>,
+    pub subscription_store: Arc<dyn SubscriptionStore + Send + Sync>,
 }
 
 /// 创建 HTTP 应用：
@@ -77,6 +83,8 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
         user_store_arc,
         refresh_token_store_arc,
         password_reset_token_store_arc,
+        balance_store_arc,
+        subscription_store_arc,
     ): StoreTuple = if let Some(pg_url) = &config.logging.pg_url {
         // Strict Postgres-only mode (no SQLite fallback)
         let pool_size = config.logging.pg_pool_size.unwrap_or(4);
@@ -94,10 +102,14 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
             log_cache.clone(),
             log_cache.clone(),
             log_cache.clone(),
+            log_cache.clone(),
+            log_cache.clone(),
         )
     } else {
         let db_logger = Arc::new(DatabaseLogger::new(&config.logging.database_path).await?);
         (
+            db_logger.clone(),
+            db_logger.clone(),
             db_logger.clone(),
             db_logger.clone(),
             db_logger.clone(),
@@ -141,9 +153,17 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
         user_store: user_store_arc,
         refresh_token_store: refresh_token_store_arc,
         password_reset_token_store: password_reset_token_store_arc,
+        balance_store: balance_store_arc,
+        subscription_store: subscription_store_arc,
     };
 
-    let mut app = handlers::routes().with_state(Arc::new(app_state));
+    // Backward/forward compatibility:
+    // Serve the same API both at `/` and under `/api/*` (useful for reverse proxies).
+    let routes = handlers::routes();
+    let mut app = Router::new()
+        .merge(routes.clone())
+        .nest("/api", routes)
+        .with_state(Arc::new(app_state));
 
     // CORS（开发环境便于前端联调；生产应收敛来源并仅 HTTPS）
     use axum::http::{Method, header};

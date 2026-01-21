@@ -361,7 +361,17 @@ pub async fn create_token(
         &payload.allowed_models,
         &payload.model_blacklist,
     )?;
-    if let Some(user_id) = payload.user_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(user_id) = payload
+        .user_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if payload.max_amount.is_some() {
+            return Err(GatewayError::Config(
+                "该密钥已绑定用户：不允许设置 max_amount（请使用用户订阅余额）".into(),
+            ));
+        }
         let exists = app_state.user_store.get_user(user_id).await?;
         if exists.is_none() {
             return Err(GatewayError::Config("user_id 不存在".into()));
@@ -691,12 +701,22 @@ pub async fn update_token(
         "model_blacklist",
         payload.model_blacklist,
     )?;
-    if payload.allowed_models.is_some() || payload.model_blacklist.is_some() {
+    if payload.allowed_models.is_some()
+        || payload.model_blacklist.is_some()
+        || payload.max_amount.is_some()
+    {
         let current = app_state
             .token_store
             .get_token_by_id(&id)
             .await?
             .ok_or_else(|| GatewayError::NotFound("token not found".into()))?;
+
+        if current.user_id.is_some() && payload.max_amount.is_some() {
+            return Err(GatewayError::Config(
+                "该密钥已绑定用户：不允许设置 max_amount（请使用用户订阅余额）".into(),
+            ));
+        }
+
         let mut next_allowed = current.allowed_models;
         let mut next_blacklist = current.model_blacklist;
         if let Some(v) = payload.allowed_models.as_ref() {
@@ -852,6 +872,8 @@ mod tests {
             user_store: logger.clone(),
             refresh_token_store,
             password_reset_token_store,
+            balance_store: logger.clone(),
+            subscription_store: logger.clone(),
         });
 
         Harness {
@@ -1113,5 +1135,90 @@ mod tests {
 
         assert_eq!(code, axum::http::StatusCode::CREATED);
         assert_eq!(created.user_id.as_deref(), Some(user.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn client_tokens_reject_max_amount_when_user_bound() {
+        let h = harness().await;
+        let headers = auth_headers(&h.token);
+
+        let user = h
+            .state
+            .user_store
+            .create_user(CreateUserPayload {
+                first_name: Some("Test".into()),
+                last_name: Some("User".into()),
+                username: Some("test-user2".into()),
+                email: "test-user2@example.com".into(),
+                phone_number: None,
+                password: None,
+                status: crate::users::UserStatus::Active,
+                role: crate::users::UserRole::Admin,
+                is_anonymous: false,
+            })
+            .await
+            .unwrap();
+
+        let err = create_token(
+            State(h.state.clone()),
+            headers.clone(),
+            Json(CreateTokenPayload {
+                id: None,
+                user_id: Some(user.id.clone()),
+                name: Some("name".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: Some(10.0),
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, GatewayError::Config(_)));
+
+        let (code, Json(created)) = create_token(
+            State(h.state.clone()),
+            headers.clone(),
+            Json(CreateTokenPayload {
+                id: None,
+                user_id: Some(user.id.clone()),
+                name: Some("name-ok".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, axum::http::StatusCode::CREATED);
+        assert_eq!(created.user_id.as_deref(), Some(user.id.as_str()));
+        assert!(created.max_amount.is_none());
+
+        let payload: UpdateTokenPayload =
+            serde_json::from_value(serde_json::json!({ "max_amount": 10.0 })).unwrap();
+        let err = update_token(
+            Path(created.id.clone()),
+            State(h.state.clone()),
+            headers,
+            Json(payload),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, GatewayError::Config(_)));
     }
 }

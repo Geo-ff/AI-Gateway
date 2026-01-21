@@ -130,6 +130,8 @@ pub trait TokenStore: Send + Sync {
         payload: UpdateTokenPayload,
     ) -> Result<Option<ClientToken>, GatewayError>;
     async fn set_enabled(&self, token: &str, enabled: bool) -> Result<bool, GatewayError>;
+    async fn set_enabled_for_user(&self, user_id: &str, enabled: bool)
+    -> Result<u64, GatewayError>;
     async fn get_token(&self, token: &str) -> Result<Option<ClientToken>, GatewayError>;
     async fn get_token_by_id(&self, id: &str) -> Result<Option<ClientToken>, GatewayError>;
     async fn get_token_by_id_scoped(
@@ -602,6 +604,15 @@ async fn ensure_client_tokens_table_pg(
         }
     }
 
+    // 历史脏数据清理（best-effort）：
+    // 只要 token 绑定用户（user_id != NULL/''），就必须走“用户订阅余额”，其 max_amount 必须清空。
+    let _ = client
+        .execute(
+            "UPDATE client_tokens SET max_amount = NULL WHERE user_id IS NOT NULL AND user_id <> ''",
+            &[],
+        )
+        .await;
+
     Ok(())
 }
 
@@ -738,6 +749,22 @@ impl TokenStore for PgTokenStore {
             .await
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         Ok(res > 0)
+    }
+
+    async fn set_enabled_for_user(
+        &self,
+        user_id: &str,
+        enabled: bool,
+    ) -> Result<u64, GatewayError> {
+        let res = self
+            .client
+            .execute(
+                "UPDATE client_tokens SET enabled = $2 WHERE user_id = $1",
+                &[&user_id, &enabled],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
+        Ok(res)
     }
 
     async fn get_token(&self, token: &str) -> Result<Option<ClientToken>, GatewayError> {

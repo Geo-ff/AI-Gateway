@@ -141,6 +141,13 @@ fn ensure_client_tokens_table_sqlite(conn: &Connection) -> Result<()> {
         [],
     );
 
+    // 历史脏数据清理（best-effort）：
+    // 只要 token 绑定用户（user_id != NULL/''），就必须走“用户订阅余额”，其 max_amount 必须清空。
+    let _ = conn.execute(
+        "UPDATE client_tokens SET max_amount = NULL WHERE user_id IS NOT NULL AND user_id != ''",
+        [],
+    );
+
     Ok(())
 }
 
@@ -865,6 +872,7 @@ impl DatabaseLogger {
                 font TEXT,
                 email TEXT NOT NULL UNIQUE,
                 phone_number TEXT NOT NULL,
+                balance REAL NOT NULL DEFAULT 0,
                 status TEXT NOT NULL,
                 role TEXT NOT NULL,
                 password_hash TEXT,
@@ -879,11 +887,43 @@ impl DatabaseLogger {
         let _ = conn.execute("ALTER TABLE users ADD COLUMN bio TEXT", []);
         let _ = conn.execute("ALTER TABLE users ADD COLUMN theme TEXT", []);
         let _ = conn.execute("ALTER TABLE users ADD COLUMN font TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE users ADD COLUMN balance REAL NOT NULL DEFAULT 0",
+            [],
+        );
         // Ensure there is at most one superadmin.
         let _ = conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS users_one_superadmin_uidx ON users(role) WHERE role='superadmin'",
             [],
         );
+
+        // Balance transactions (topup/spend)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS balance_transactions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                amount REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                meta TEXT
+            )",
+            [],
+        )?;
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS balance_transactions_user_id_created_at_idx ON balance_transactions(user_id, created_at)",
+            [],
+        );
+
+        // Subscription plans (draft/published)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS subscription_plans (
+                scope TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                updated_by TEXT
+            )",
+            [],
+        )?;
 
         // Schema migrations for request_logs: client_token + amount_spent columns
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN client_token TEXT", []);

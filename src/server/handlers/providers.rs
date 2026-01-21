@@ -855,6 +855,8 @@ mod tests {
             user_store: logger.clone(),
             refresh_token_store,
             password_reset_token_store,
+            balance_store: logger.clone(),
+            subscription_store: logger.clone(),
         });
 
         Harness {

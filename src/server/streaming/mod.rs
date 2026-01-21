@@ -160,6 +160,33 @@ pub async fn stream_chat_completions(
         }
     };
 
+    if let Some(user_id) = token.user_id.as_deref() {
+        let user = app_state.user_store.get_user(user_id).await?;
+        let balance = user.as_ref().map(|u| u.balance).unwrap_or(0.0);
+        if balance <= 0.0 {
+            let _ = app_state
+                .token_store
+                .set_enabled_for_user(user_id, false)
+                .await;
+            let ge = GatewayError::Config("余额不足：密钥已失效；充值/订阅后需手动启用密钥".into());
+            let code = ge.status_code().as_u16();
+            crate::server::request_logging::log_simple_request(
+                &app_state,
+                start_time,
+                "POST",
+                "/v1/chat/completions",
+                crate::logging::types::REQ_TYPE_CHAT_STREAM,
+                Some(upstream_req.model.clone()),
+                Some(selected.provider.name.clone()),
+                client_token_log_id.as_deref(),
+                code,
+                Some(ge.to_string()),
+            )
+            .await;
+            return Err(ge);
+        }
+    }
+
     if !token.enabled {
         if let Some(max_amount) = token.max_amount
             && let Ok(spent) = app_state
@@ -339,4 +366,158 @@ pub async fn stream_chat_completions(
     }
 
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::admin::{CreateTokenPayload, TokenStore};
+    use crate::config::settings::{
+        BalanceStrategy, LoadBalancing, LoggingConfig, Provider, ProviderType, ServerConfig,
+    };
+    use crate::logging::DatabaseLogger;
+    use crate::server::login::LoginManager;
+    use crate::users::{CreateUserPayload, UserRole, UserStatus, UserStore};
+    use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    fn test_settings(db_path: String) -> crate::config::Settings {
+        crate::config::Settings {
+            load_balancing: LoadBalancing {
+                strategy: BalanceStrategy::FirstAvailable,
+            },
+            server: ServerConfig::default(),
+            logging: LoggingConfig {
+                database_path: db_path,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn user_balance_depleted_rejects_stream_and_disables_tokens() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("gateway.db");
+        let logger = Arc::new(
+            DatabaseLogger::new(db_path.to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+
+        let settings = test_settings(db_path.to_string_lossy().to_string());
+        // Provider selection for streaming happens before token validation: seed a provider + key.
+        logger
+            .insert_provider(&Provider {
+                name: "p1".into(),
+                display_name: None,
+                collection: crate::config::settings::DEFAULT_PROVIDER_COLLECTION.into(),
+                api_type: ProviderType::OpenAI,
+                base_url: "http://localhost".into(),
+                api_keys: Vec::new(),
+                models_endpoint: None,
+                enabled: true,
+                created_at: None,
+                updated_at: None,
+            })
+            .await
+            .unwrap();
+        logger
+            .add_provider_key("p1", "sk-test", &settings.logging.key_log_strategy)
+            .await
+            .unwrap();
+
+        let app_state = Arc::new(AppState {
+            config: settings,
+            load_balancer_state: Arc::new(crate::routing::LoadBalancerState::default()),
+            log_store: logger.clone(),
+            model_cache: logger.clone(),
+            providers: logger.clone(),
+            token_store: logger.clone(),
+            favorites_store: logger.clone(),
+            login_manager: Arc::new(LoginManager::new(logger.clone())),
+            user_store: logger.clone(),
+            refresh_token_store: logger.clone(),
+            password_reset_token_store: logger.clone(),
+            balance_store: logger.clone(),
+            subscription_store: logger.clone(),
+        });
+
+        let user = logger
+            .create_user(CreateUserPayload {
+                first_name: Some("U".into()),
+                last_name: Some("1".into()),
+                username: None,
+                email: "u1@example.com".into(),
+                phone_number: None,
+                password: None,
+                status: UserStatus::Active,
+                role: UserRole::Admin,
+                is_anonymous: false,
+            })
+            .await
+            .unwrap();
+
+        let t1 = logger
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: Some(user.id.clone()),
+                name: Some("t1".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+
+        let _t2 = logger
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: Some(user.id.clone()),
+                name: Some("t2".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", t1.token)).unwrap(),
+        );
+
+        let req: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
+            "model": "m1",
+            "messages": [{"role":"user","content":"hi"}],
+            "stream": true
+        }))
+        .unwrap();
+
+        let err = stream_chat_completions(State(app_state), headers, Json(req))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("余额不足"));
+
+        let tokens = logger.list_tokens_by_user(&user.id).await.unwrap();
+        assert!(!tokens.is_empty());
+        assert!(tokens.iter().all(|t| !t.enabled));
+    }
 }

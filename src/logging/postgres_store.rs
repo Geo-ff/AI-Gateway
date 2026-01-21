@@ -542,6 +542,7 @@ impl PgLogStore {
                 font TEXT,
                 email TEXT NOT NULL UNIQUE,
                 phone_number TEXT NOT NULL,
+                balance DOUBLE PRECISION NOT NULL DEFAULT 0,
                 status TEXT NOT NULL,
                 role TEXT NOT NULL,
                 password_hash TEXT,
@@ -566,6 +567,12 @@ impl PgLogStore {
         let _ = client
             .execute("ALTER TABLE users ADD COLUMN font TEXT", &[])
             .await;
+        let _ = client
+            .execute(
+                "ALTER TABLE users ADD COLUMN balance DOUBLE PRECISION NOT NULL DEFAULT 0",
+                &[],
+            )
+            .await;
         // Ensure there is at most one superadmin.
         let _ = client
             .execute(
@@ -573,6 +580,44 @@ impl PgLogStore {
                 &[],
             )
             .await;
+
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS balance_transactions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                amount DOUBLE PRECISION NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL,
+                meta TEXT
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| {
+                GatewayError::Config(format!("Failed to init balance_transactions: {}", e))
+            })?;
+        let _ = client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS balance_transactions_user_id_created_at_idx ON balance_transactions (user_id, created_at)",
+                &[],
+            )
+            .await;
+
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS subscription_plans (
+                scope TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL,
+                updated_by TEXT
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| {
+                GatewayError::Config(format!("Failed to init subscription_plans: {}", e))
+            })?;
 
         client
             .execute(

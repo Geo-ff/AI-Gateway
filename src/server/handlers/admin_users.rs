@@ -23,6 +23,7 @@ pub struct UserOut {
     pub username: String,
     pub email: String,
     pub phone_number: String,
+    pub balance: f64,
     pub status: crate::users::UserStatus,
     pub role: crate::users::UserRole,
     pub created_at: String,
@@ -38,6 +39,7 @@ impl From<User> for UserOut {
             username: u.username,
             email: u.email,
             phone_number: u.phone_number,
+            balance: u.balance,
             status: u.status,
             role: u.role,
             created_at: crate::logging::time::to_iso8601_utc_string(&u.created_at),
@@ -70,13 +72,16 @@ pub async fn list_users(
         return Err(e);
     }
 
-    let users = app_state
-        .user_store
-        .list_users()
-        .await?
-        .into_iter()
-        .map(UserOut::from)
-        .collect();
+    let users = app_state.user_store.list_users().await?;
+    for u in users.iter() {
+        if u.balance <= 0.0 {
+            let _ = app_state
+                .token_store
+                .set_enabled_for_user(&u.id, false)
+                .await;
+        }
+    }
+    let users = users.into_iter().map(UserOut::from).collect();
     log_simple_request(
         &app_state,
         start_time,
@@ -119,7 +124,15 @@ pub async fn get_user(
     }
 
     match app_state.user_store.get_user(&id).await? {
-        Some(u) => Ok(Json(UserOut::from(u))),
+        Some(u) => {
+            if u.balance <= 0.0 {
+                let _ = app_state
+                    .token_store
+                    .set_enabled_for_user(&u.id, false)
+                    .await;
+            }
+            Ok(Json(UserOut::from(u)))
+        }
         None => {
             let ge = GatewayError::NotFound("user not found".into());
             let code = ge.status_code().as_u16();
@@ -335,16 +348,18 @@ pub async fn export_users_csv(
     let users = app_state.user_store.list_users().await?;
 
     // 构建CSV内容
-    let mut csv_content = String::from("ID,姓,名,用户名,邮箱,电话,状态,角色,创建时间,更新时间\n");
+    let mut csv_content =
+        String::from("ID,姓,名,用户名,邮箱,电话,余额,状态,角色,创建时间,更新时间\n");
     for user in users {
         let line = format!(
-            "{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{}\n",
             escape_csv_field(&user.id),
             escape_csv_field(&user.first_name),
             escape_csv_field(&user.last_name),
             escape_csv_field(&user.username),
             escape_csv_field(&user.email),
             escape_csv_field(&user.phone_number),
+            user.balance,
             user.status.as_str(),
             user.role.as_str(),
             crate::logging::time::to_iso8601_utc_string(&user.created_at),
@@ -389,6 +404,7 @@ fn escape_csv_field(field: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::admin::CreateTokenPayload;
     use crate::config::BalanceStrategy;
     use crate::config::settings::{LoadBalancing, LoggingConfig, ServerConfig};
     use crate::logging::DatabaseLogger;
@@ -470,6 +486,8 @@ mod tests {
             user_store: logger.clone(),
             refresh_token_store,
             password_reset_token_store,
+            balance_store: logger.clone(),
+            subscription_store: logger.clone(),
         });
 
         Harness {
@@ -523,5 +541,64 @@ mod tests {
         let Json(list) = list_users(State(h.state), headers).await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, created.id);
+    }
+
+    #[tokio::test]
+    async fn admin_users_list_disables_tokens_when_balance_exhausted() {
+        let h = harness().await;
+        let headers = auth_headers(&h.token);
+
+        let (code, Json(created)) = create_user(
+            State(h.state.clone()),
+            headers.clone(),
+            Json(CreateUserPayload {
+                first_name: Some("Bob".into()),
+                last_name: Some("Builder".into()),
+                username: Some("bob".into()),
+                email: "bob@example.com".into(),
+                phone_number: Some("+1-555-1111".into()),
+                password: None,
+                status: UserStatus::Active,
+                role: UserRole::Admin,
+                is_anonymous: false,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, axum::http::StatusCode::CREATED);
+
+        let tok = h
+            .state
+            .token_store
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: Some(created.id.clone()),
+                name: Some("t1".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+        assert!(tok.enabled);
+
+        let _ = list_users(State(h.state.clone()), headers).await.unwrap();
+
+        let refreshed = h
+            .state
+            .token_store
+            .get_token(&tok.token)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!refreshed.enabled);
     }
 }

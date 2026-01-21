@@ -11,6 +11,7 @@ mod admin_metrics;
 mod admin_model_settings;
 mod admin_prices;
 mod admin_provider_key_stats;
+mod admin_subscription;
 mod admin_users;
 mod auth;
 mod auth_jwt;
@@ -22,6 +23,7 @@ mod auth_tui_admin;
 mod cache;
 mod chat;
 mod client_tokens;
+mod me_balance;
 mod me_token_info;
 mod me_tokens;
 mod model_prices;
@@ -31,6 +33,7 @@ mod provider_keys;
 mod provider_model_test;
 mod provider_models_list;
 mod providers;
+mod subscription;
 mod token_info;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -178,6 +181,14 @@ pub fn routes() -> Router<Arc<AppState>> {
                 .delete(admin_users::delete_user),
         )
         .route(
+            "/admin/subscription/plans/draft",
+            get(admin_subscription::get_draft_plans).put(admin_subscription::put_draft_plans),
+        )
+        .route(
+            "/admin/subscription/plans/publish",
+            post(admin_subscription::publish_draft),
+        )
+        .route(
             "/admin/model-prices",
             post(admin_prices::upsert_model_price).get(admin_prices::list_model_prices),
         )
@@ -222,6 +233,13 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/me/tokens/{id}/toggle", post(me_tokens::toggle_my_token))
         .route("/me/token/balance", get(me_token_info::my_token_balance))
         .route("/me/token/usage", get(me_token_info::my_token_usage))
+        .route("/me/balance", get(me_balance::get_balance))
+        .route(
+            "/me/balance/transactions",
+            get(me_balance::list_transactions),
+        )
+        .route("/subscription/plans", get(subscription::list_plans))
+        .route("/subscription/purchase", post(subscription::purchase_plan))
         .route("/v1/token/balance", get(token_info::token_balance))
         .route("/v1/token/usage", get(token_info::token_usage))
 }

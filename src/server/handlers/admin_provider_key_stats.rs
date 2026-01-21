@@ -375,6 +375,8 @@ mod tests {
             user_store: logger.clone(),
             refresh_token_store: logger.clone(),
             password_reset_token_store: logger.clone(),
+            balance_store: logger.clone(),
+            subscription_store: logger.clone(),
         });
 
         let mut headers = HeaderMap::new();

@@ -123,6 +123,8 @@ pub struct User {
     pub font: Option<String>,
     pub email: String,
     pub phone_number: String,
+    #[serde(default)]
+    pub balance: f64,
     pub status: UserStatus,
     pub role: UserRole,
     pub created_at: DateTime<Utc>,
@@ -206,6 +208,7 @@ pub trait UserStore: Send + Sync {
     async fn any_users(&self) -> Result<bool, GatewayError>;
     async fn list_users(&self) -> Result<Vec<User>, GatewayError>;
     async fn delete_user(&self, id: &str) -> Result<bool, GatewayError>;
+    async fn add_balance(&self, user_id: &str, delta: f64) -> Result<Option<f64>, GatewayError>;
 }
 
 #[cfg(test)]

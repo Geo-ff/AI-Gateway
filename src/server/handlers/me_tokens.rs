@@ -194,10 +194,10 @@ pub async fn create_my_token(
     };
 
     let name = validate_optional_name(payload.name)?;
-    if let Some(v) = payload.max_amount
-        && v < 0.0
-    {
-        return Err(GatewayError::Config("max_amount 必须 >= 0".into()));
+    if payload.max_amount.is_some() {
+        return Err(GatewayError::Config(
+            "绑定用户密钥不允许设置 max_amount（请使用用户订阅余额）".into(),
+        ));
     }
     let allowed_models = crate::server::token_model_limits::normalize_model_list(
         "allowed_models",
@@ -234,7 +234,7 @@ pub async fn create_my_token(
             allowed_models,
             model_blacklist,
             max_tokens: payload.max_tokens,
-            max_amount: payload.max_amount,
+            max_amount: None,
             enabled: payload.enabled,
             expires_at: payload.expires_at,
             remark: None,
@@ -368,6 +368,11 @@ pub async fn update_my_token(
         return Err(GatewayError::Config("不允许修改 id".into()));
     }
     let mut payload = payload;
+    if payload.max_amount.is_some() {
+        return Err(GatewayError::Config(
+            "绑定用户密钥不允许设置 max_amount（请使用用户订阅余额）".into(),
+        ));
+    }
     payload.allowed_models = crate::server::token_model_limits::normalize_model_list_patch(
         "allowed_models",
         payload.allowed_models,

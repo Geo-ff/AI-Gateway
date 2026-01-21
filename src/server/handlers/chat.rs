@@ -147,6 +147,34 @@ pub async fn chat_completions(
             }
         };
 
+        if let Some(user_id) = token.user_id.as_deref() {
+            let user = app_state.user_store.get_user(user_id).await?;
+            let balance = user.as_ref().map(|u| u.balance).unwrap_or(0.0);
+            if balance <= 0.0 {
+                let _ = app_state
+                    .token_store
+                    .set_enabled_for_user(user_id, false)
+                    .await;
+                let ge =
+                    GatewayError::Config("余额不足：密钥已失效；充值/订阅后需手动启用密钥".into());
+                let code = ge.status_code().as_u16();
+                crate::server::request_logging::log_simple_request(
+                    &app_state,
+                    start_time,
+                    "POST",
+                    "/v1/chat/completions",
+                    crate::logging::types::REQ_TYPE_CHAT_ONCE,
+                    Some(request.model.clone()),
+                    None,
+                    client_token_log_id.as_deref(),
+                    code,
+                    Some(ge.to_string()),
+                )
+                .await;
+                return Err(ge);
+            }
+        }
+
         if !token.enabled {
             if let Some(max_amount) = token.max_amount
                 && let Ok(spent) = app_state
@@ -471,6 +499,17 @@ pub async fn chat_completions(
 #[cfg(test)]
 mod tests {
     use super::{error_payload_to_chat_completion, is_openai_error_payload};
+    use crate::admin::{CreateTokenPayload, TokenStore};
+    use crate::config::settings::{BalanceStrategy, LoadBalancing, LoggingConfig, ServerConfig};
+    use crate::logging::DatabaseLogger;
+    use crate::server::AppState;
+    use crate::server::login::LoginManager;
+    use crate::users::{CreateUserPayload, UserRole, UserStatus, UserStore};
+    use axum::Json;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+    use std::sync::Arc;
+    use tempfile::tempdir;
 
     #[test]
     fn openai_error_payload_detection() {
@@ -512,5 +551,132 @@ mod tests {
         assert!(content.contains("provider error"));
         assert!(content.contains("```json"));
         assert!(content.contains("openai_error"));
+    }
+
+    fn test_settings(db_path: String) -> crate::config::Settings {
+        crate::config::Settings {
+            load_balancing: LoadBalancing {
+                strategy: BalanceStrategy::FirstAvailable,
+            },
+            server: ServerConfig::default(),
+            logging: LoggingConfig {
+                database_path: db_path,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn user_balance_depleted_rejects_chat_and_disables_tokens() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("gateway.db");
+        let logger = Arc::new(
+            DatabaseLogger::new(db_path.to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+
+        let settings = test_settings(db_path.to_string_lossy().to_string());
+        let app_state = Arc::new(AppState {
+            config: settings,
+            load_balancer_state: Arc::new(crate::routing::LoadBalancerState::default()),
+            log_store: logger.clone(),
+            model_cache: logger.clone(),
+            providers: logger.clone(),
+            token_store: logger.clone(),
+            favorites_store: logger.clone(),
+            login_manager: Arc::new(LoginManager::new(logger.clone())),
+            user_store: logger.clone(),
+            refresh_token_store: logger.clone(),
+            password_reset_token_store: logger.clone(),
+            balance_store: logger.clone(),
+            subscription_store: logger.clone(),
+        });
+
+        let user = logger
+            .create_user(CreateUserPayload {
+                first_name: Some("U".into()),
+                last_name: Some("1".into()),
+                username: None,
+                email: "u1@example.com".into(),
+                phone_number: None,
+                password: None,
+                status: UserStatus::Active,
+                role: UserRole::Admin,
+                is_anonymous: false,
+            })
+            .await
+            .unwrap();
+
+        let t1 = logger
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: Some(user.id.clone()),
+                name: Some("t1".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+
+        let _t2 = logger
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: Some(user.id.clone()),
+                name: Some("t2".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", t1.token)).unwrap(),
+        );
+
+        let req: crate::providers::openai::ChatCompletionRequest =
+            serde_json::from_value(serde_json::json!({
+                "model": "m1",
+                "messages": [{"role":"user","content":"hi"}],
+                "stream": false
+            }))
+            .unwrap();
+
+        let err = super::chat_completions(
+            State(app_state),
+            headers,
+            Json(super::GatewayChatCompletionRequest {
+                request: req,
+                top_k: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("余额不足"));
+
+        let tokens = logger.list_tokens_by_user(&user.id).await.unwrap();
+        assert!(!tokens.is_empty());
+        assert!(tokens.iter().all(|t| !t.enabled));
     }
 }

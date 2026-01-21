@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
+use crate::balance::BalanceTransactionKind;
 use crate::logging::RequestLog;
 use crate::logging::types::REQ_TYPE_CHAT_STREAM;
 use crate::providers::openai::Usage;
@@ -147,6 +148,42 @@ pub(super) async fn log_stream_success(
                 .await
             {
                 tracing::warn!("Failed to update token tokens: {}", e);
+            }
+        }
+
+        if let Some(delta) = amount_spent
+            && delta > 0.0
+            && let Ok(Some(t)) = app_state.token_store.get_token(tok).await
+            && let Some(user_id) = t.user_id.as_deref()
+        {
+            match app_state.user_store.add_balance(user_id, -delta).await {
+                Ok(Some(new_balance)) => {
+                    let meta = serde_json::json!({
+                        "client_token_id": t.id,
+                        "path": "/v1/chat/completions",
+                    })
+                    .to_string();
+                    if let Err(e) = app_state
+                        .balance_store
+                        .create_transaction(
+                            user_id,
+                            BalanceTransactionKind::Spend,
+                            -delta,
+                            Some(meta),
+                        )
+                        .await
+                    {
+                        tracing::warn!("Failed to insert balance transaction: {}", e);
+                    }
+                    if new_balance <= 0.0 {
+                        let _ = app_state
+                            .token_store
+                            .set_enabled_for_user(user_id, false)
+                            .await;
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!("Failed to deduct user balance: {}", e),
             }
         }
     }
