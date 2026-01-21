@@ -257,6 +257,8 @@ mod tests {
             api_keys: keys.iter().map(|s| s.to_string()).collect(),
             models_endpoint: None,
             enabled: true,
+            created_at: None,
+            updated_at: None,
         }
     }
 

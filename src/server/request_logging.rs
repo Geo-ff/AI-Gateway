@@ -1,3 +1,4 @@
+use crate::admin::client_token_id_for_token;
 use crate::error::GatewayError;
 use crate::logging::RequestLog;
 use crate::logging::types::REQ_TYPE_CHAT_ONCE;
@@ -23,6 +24,7 @@ pub async fn log_chat_request(
 
     // 统计与日志关联使用稳定脱敏值，避免明文泄露
     let api_key = Some(mask_key(api_key_raw));
+    let client_token_id = client_token.map(client_token_id_for_token);
 
     // 计算本次消耗金额（仅当有价格与 usage 可用，且有 Client Token）
     let amount_spent: Option<f64> = match response {
@@ -59,7 +61,7 @@ pub async fn log_chat_request(
         model: Some(billing_model.to_string()),
         provider: Some(provider_name.to_string()),
         api_key,
-        client_token: client_token.map(|s| s.to_string()),
+        client_token: client_token_id.clone(),
         amount_spent,
         status_code: if response.is_ok() { 200 } else { 500 },
         response_time_ms,
@@ -162,5 +164,132 @@ pub async fn log_simple_request(
 
     if let Err(e) = app_state.log_store.log_request(log).await {
         tracing::error!("Failed to log request: {}", e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::admin::{CreateTokenPayload, TokenStore};
+    use crate::config::settings::{BalanceStrategy, LoadBalancing, LoggingConfig, ServerConfig};
+    use crate::logging::DatabaseLogger;
+    use crate::server::AppState;
+    use crate::server::login::LoginManager;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    fn approx_eq(a: f64, b: f64, eps: f64) -> bool {
+        (a - b).abs() <= eps
+    }
+
+    #[tokio::test]
+    async fn log_chat_request_updates_token_store_but_logs_token_id() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("gateway.db");
+        let logger = Arc::new(
+            DatabaseLogger::new(db_path.to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+
+        let settings = crate::config::Settings {
+            load_balancing: LoadBalancing {
+                strategy: BalanceStrategy::FirstAvailable,
+            },
+            server: ServerConfig::default(),
+            logging: LoggingConfig {
+                database_path: db_path.to_string_lossy().to_string(),
+                ..LoggingConfig::default()
+            },
+        };
+
+        let app_state = AppState {
+            config: settings,
+            load_balancer_state: Arc::new(crate::routing::LoadBalancerState::default()),
+            log_store: logger.clone(),
+            model_cache: logger.clone(),
+            providers: logger.clone(),
+            token_store: logger.clone(),
+            favorites_store: logger.clone(),
+            login_manager: Arc::new(LoginManager::new(logger.clone())),
+            user_store: logger.clone(),
+            refresh_token_store: logger.clone(),
+            password_reset_token_store: logger.clone(),
+        };
+
+        // model pricing needed for amount_spent
+        logger
+            .upsert_model_price("p1", "m1", 2.0, 4.0, Some("USD"), None)
+            .await
+            .unwrap();
+
+        let created = logger
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: None,
+                name: Some("t1".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+
+        let raw = serde_json::json!({
+            "id": "chatcmpl_test",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "m1",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15 }
+        });
+        let typed: async_openai::types::CreateChatCompletionResponse =
+            serde_json::from_value(raw.clone()).unwrap();
+        let dual = RawAndTypedChatCompletion { typed, raw };
+
+        log_chat_request(
+            &app_state,
+            Utc::now(),
+            "m1",
+            "m1",
+            "m1",
+            "p1",
+            "sk-test",
+            Some(created.token.as_str()),
+            &Ok(dual),
+        )
+        .await;
+
+        let updated = logger.get_token(&created.token).await.unwrap().unwrap();
+        assert_eq!(updated.total_tokens_spent, 15);
+        assert_eq!(updated.prompt_tokens_spent, 10);
+        assert_eq!(updated.completion_tokens_spent, 5);
+
+        let expected_spent = (10.0 * 2.0 + 5.0 * 4.0) / 1_000_000.0;
+        assert!(
+            approx_eq(updated.amount_spent, expected_spent, 1e-12),
+            "amount_spent mismatch: got {}, expected {}",
+            updated.amount_spent,
+            expected_spent
+        );
+
+        // sum_spent_amount_by_client_token expects request_logs.client_token to store token id (not raw token).
+        let sum = logger
+            .sum_spent_amount_by_client_token(&created.id)
+            .await
+            .unwrap();
+        assert!(approx_eq(sum, expected_spent, 1e-12));
     }
 }

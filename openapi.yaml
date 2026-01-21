@@ -1239,6 +1239,16 @@ components:
         enabled:
           type: boolean
           description: 是否启用（禁用后调度不会选择该提供商）
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: 创建时间（UTC）
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: 更新时间（UTC）
       required:
         - name
         - api_type

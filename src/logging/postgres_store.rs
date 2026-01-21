@@ -6,7 +6,7 @@ use tokio_postgres::{Client, NoTls, Row};
 
 use crate::config::settings::{KeyLogStrategy, Provider, ProviderType};
 use crate::error::GatewayError;
-use crate::logging::time::{parse_datetime_string, to_beijing_string};
+use crate::logging::time::{parse_datetime_string, to_beijing_string, to_iso8601_utc_string};
 use crate::logging::types::ProviderOpLog;
 use crate::logging::{CachedModel, ProviderKeyStatsAgg, RequestLog};
 use crate::providers::openai::Model;
@@ -214,10 +214,16 @@ impl PgLogStore {
             )
             .await;
         let _ = client
-            .execute("ALTER TABLE request_logs ADD COLUMN requested_model TEXT", &[])
+            .execute(
+                "ALTER TABLE request_logs ADD COLUMN requested_model TEXT",
+                &[],
+            )
             .await;
         let _ = client
-            .execute("ALTER TABLE request_logs ADD COLUMN effective_model TEXT", &[])
+            .execute(
+                "ALTER TABLE request_logs ADD COLUMN effective_model TEXT",
+                &[],
+            )
             .await;
 
         client
@@ -296,7 +302,9 @@ impl PgLogStore {
                 base_url TEXT NOT NULL,
                 models_endpoint TEXT,
                 enabled BOOLEAN NOT NULL DEFAULT TRUE,
-                key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential'
+                key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential',
+                created_at TEXT,
+                updated_at TEXT
             )"#,
                 &[],
             )
@@ -322,6 +330,40 @@ impl PgLogStore {
             .execute(
                 "ALTER TABLE providers ADD COLUMN key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential'",
                 &[],
+            )
+            .await;
+        let _ = client
+            .execute("ALTER TABLE providers ADD COLUMN created_at TEXT", &[])
+            .await;
+        let _ = client
+            .execute("ALTER TABLE providers ADD COLUMN updated_at TEXT", &[])
+            .await;
+        // Backfill timestamps for existing rows (best-effort).
+        let now_utc = to_iso8601_utc_string(&Utc::now());
+        let _ = client
+            .execute(
+                "UPDATE providers
+                 SET created_at = COALESCE(created_at, $1),
+                     updated_at = COALESCE(updated_at, $1)
+                 WHERE created_at IS NULL OR updated_at IS NULL",
+                &[&now_utc],
+            )
+            .await;
+        // Text-only cleanup for accidental empty strings; ignore errors for non-text columns.
+        let _ = client
+            .execute(
+                "UPDATE providers
+                 SET created_at = $1
+                 WHERE created_at = ''",
+                &[&now_utc],
+            )
+            .await;
+        let _ = client
+            .execute(
+                "UPDATE providers
+                 SET updated_at = $1
+                 WHERE updated_at = ''",
+                &[&now_utc],
             )
             .await;
         // One-time safe migration: fix legacy '-' collection values
@@ -515,9 +557,15 @@ impl PgLogStore {
         let _ = client
             .execute("ALTER TABLE users ADD COLUMN password_hash TEXT", &[])
             .await;
-        let _ = client.execute("ALTER TABLE users ADD COLUMN bio TEXT", &[]).await;
-        let _ = client.execute("ALTER TABLE users ADD COLUMN theme TEXT", &[]).await;
-        let _ = client.execute("ALTER TABLE users ADD COLUMN font TEXT", &[]).await;
+        let _ = client
+            .execute("ALTER TABLE users ADD COLUMN bio TEXT", &[])
+            .await;
+        let _ = client
+            .execute("ALTER TABLE users ADD COLUMN theme TEXT", &[])
+            .await;
+        let _ = client
+            .execute("ALTER TABLE users ADD COLUMN font TEXT", &[])
+            .await;
         // Ensure there is at most one superadmin.
         let _ = client
             .execute(
@@ -1364,10 +1412,21 @@ impl ProviderStore for PgLogStore {
     ) -> BoxFuture<'a, rusqlite::Result<bool>> {
         Box::pin(async move {
             let client = self.pool.pick();
+            let now = chrono::Utc::now();
+            let created_at_s = provider
+                .created_at
+                .as_ref()
+                .map(to_iso8601_utc_string)
+                .unwrap_or_else(|| to_iso8601_utc_string(&now));
+            let updated_at_s = provider
+                .updated_at
+                .as_ref()
+                .map(to_iso8601_utc_string)
+                .unwrap_or_else(|| to_iso8601_utc_string(&now));
             let res = client
                 .execute(
-                    "INSERT INTO providers (name, display_name, collection, api_type, base_url, models_endpoint) VALUES ($1,$2,$3,$4,$5,$6)",
-                    &[&provider.name, &provider.display_name, &provider.collection, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint],
+                    "INSERT INTO providers (name, display_name, collection, api_type, base_url, models_endpoint, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+                    &[&provider.name, &provider.display_name, &provider.collection, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint, &created_at_s, &updated_at_s],
                 )
                 .await
                 .map_err(pg_err)?;
@@ -1381,10 +1440,21 @@ impl ProviderStore for PgLogStore {
     ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
             let client = self.pool.pick();
+            let now = chrono::Utc::now();
+            let created_at_s = provider
+                .created_at
+                .as_ref()
+                .map(to_iso8601_utc_string)
+                .unwrap_or_else(|| to_iso8601_utc_string(&now));
+            let updated_at_s = provider
+                .updated_at
+                .as_ref()
+                .map(to_iso8601_utc_string)
+                .unwrap_or_else(|| to_iso8601_utc_string(&now));
             let updated = client
                 .execute(
-                    "UPDATE providers SET display_name=$2, collection=$3, api_type=$4, base_url=$5, models_endpoint=$6 WHERE name=$1",
-                    &[&provider.name, &provider.display_name, &provider.collection, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint],
+                    "UPDATE providers SET display_name=$2, collection=$3, api_type=$4, base_url=$5, models_endpoint=$6, updated_at=$7 WHERE name=$1",
+                    &[&provider.name, &provider.display_name, &provider.collection, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint, &updated_at_s],
                 )
                 .await
                 .map_err(pg_err)?;
@@ -1392,8 +1462,8 @@ impl ProviderStore for PgLogStore {
                 let client = self.pool.pick();
                 client
                     .execute(
-                        "INSERT INTO providers (name, display_name, collection, api_type, base_url, models_endpoint) VALUES ($1,$2,$3,$4,$5,$6)",
-                        &[&provider.name, &provider.display_name, &provider.collection, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint],
+                        "INSERT INTO providers (name, display_name, collection, api_type, base_url, models_endpoint, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+                        &[&provider.name, &provider.display_name, &provider.collection, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint, &created_at_s, &updated_at_s],
                     )
                     .await
                     .map_err(pg_err)?;
@@ -1419,8 +1489,20 @@ impl ProviderStore for PgLogStore {
     ) -> BoxFuture<'a, rusqlite::Result<Option<Provider>>> {
         Box::pin(async move {
             let client = self.pool.pick();
+            // Defensive backfill: ensure timestamps exist so UI won't "jump" via client-side fallbacks.
+            // (Some legacy rows may have NULL / empty created_at/updated_at.)
+            let now_utc = to_iso8601_utc_string(&Utc::now());
+            let _ = client
+                .execute(
+                    "UPDATE providers
+                     SET created_at = COALESCE(NULLIF(created_at, ''), $2),
+                         updated_at = COALESCE(NULLIF(updated_at, ''), $2)
+                     WHERE name = $1 AND (created_at IS NULL OR created_at = '' OR updated_at IS NULL OR updated_at = '')",
+                    &[&name, &now_utc],
+                )
+                .await;
             let row = client
-                .query_opt("SELECT name, display_name, collection, api_type, base_url, models_endpoint, enabled FROM providers WHERE name = $1", &[&name])
+                .query_opt("SELECT name, display_name, collection, api_type, base_url, models_endpoint, enabled, created_at, updated_at FROM providers WHERE name = $1", &[&name])
                 .await
                 .map_err(pg_err)?;
             Ok(row.map(|r| Provider {
@@ -1432,6 +1514,12 @@ impl ProviderStore for PgLogStore {
                 api_keys: Vec::new(),
                 models_endpoint: pg_row_opt_string(&r, 5),
                 enabled: pg_row_bool_or(&r, 6, true),
+                created_at: r.try_get::<usize, DateTime<Utc>>(7).ok().or_else(|| {
+                    pg_row_opt_string(&r, 7).and_then(|s| parse_datetime_string(&s).ok())
+                }),
+                updated_at: r.try_get::<usize, DateTime<Utc>>(8).ok().or_else(|| {
+                    pg_row_opt_string(&r, 8).and_then(|s| parse_datetime_string(&s).ok())
+                }),
             }))
         })
     }
@@ -1439,15 +1527,32 @@ impl ProviderStore for PgLogStore {
     fn list_providers<'a>(&'a self) -> BoxFuture<'a, rusqlite::Result<Vec<Provider>>> {
         Box::pin(async move {
             let client = self.pool.pick();
+            // Defensive backfill: ensure timestamps exist so UI won't "jump" via client-side fallbacks.
+            let now_utc = to_iso8601_utc_string(&Utc::now());
+            let _ = client
+                .execute(
+                    "UPDATE providers
+                     SET created_at = COALESCE(NULLIF(created_at, ''), $1),
+                         updated_at = COALESCE(NULLIF(updated_at, ''), $1)
+                     WHERE created_at IS NULL OR created_at = '' OR updated_at IS NULL OR updated_at = ''",
+                    &[&now_utc],
+                )
+                .await;
             let rows = client
                 .query(
-                    "SELECT name, display_name, collection, api_type, base_url, models_endpoint, enabled FROM providers ORDER BY name",
+                    "SELECT name, display_name, collection, api_type, base_url, models_endpoint, enabled, created_at, updated_at FROM providers ORDER BY name",
                     &[],
                 )
                 .await
                 .map_err(pg_err)?;
             let mut out = Vec::new();
             for r in rows {
+                let created_at = r.try_get::<usize, DateTime<Utc>>(7).ok().or_else(|| {
+                    pg_row_opt_string(&r, 7).and_then(|s| parse_datetime_string(&s).ok())
+                });
+                let updated_at = r.try_get::<usize, DateTime<Utc>>(8).ok().or_else(|| {
+                    pg_row_opt_string(&r, 8).and_then(|s| parse_datetime_string(&s).ok())
+                });
                 out.push(Provider {
                     name: pg_row_string(&r, 0),
                     display_name: pg_row_opt_string(&r, 1),
@@ -1457,6 +1562,8 @@ impl ProviderStore for PgLogStore {
                     api_keys: Vec::new(),
                     models_endpoint: pg_row_opt_string(&r, 5),
                     enabled: pg_row_bool_or(&r, 6, true),
+                    created_at,
+                    updated_at,
                 });
             }
             Ok(out)
@@ -1532,10 +1639,11 @@ impl ProviderStore for PgLogStore {
     ) -> BoxFuture<'a, rusqlite::Result<bool>> {
         Box::pin(async move {
             let client = self.pool.pick();
+            let now_s = to_iso8601_utc_string(&chrono::Utc::now());
             let affected = client
                 .execute(
-                    "UPDATE providers SET enabled = $2 WHERE name = $1",
-                    &[&provider, &enabled],
+                    "UPDATE providers SET enabled = $2, updated_at = $3 WHERE name = $1",
+                    &[&provider, &enabled, &now_s],
                 )
                 .await
                 .map_err(pg_err)?;
@@ -1568,10 +1676,11 @@ impl ProviderStore for PgLogStore {
     ) -> BoxFuture<'a, rusqlite::Result<bool>> {
         Box::pin(async move {
             let client = self.pool.pick();
+            let now_s = to_iso8601_utc_string(&chrono::Utc::now());
             let affected = client
                 .execute(
-                    "UPDATE providers SET key_rotation_strategy = $2 WHERE name = $1",
-                    &[&provider, &strategy.as_db_value()],
+                    "UPDATE providers SET key_rotation_strategy = $2, updated_at = $3 WHERE name = $1",
+                    &[&provider, &strategy.as_db_value(), &now_s],
                 )
                 .await
                 .map_err(pg_err)?;

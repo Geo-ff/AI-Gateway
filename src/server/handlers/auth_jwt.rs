@@ -245,7 +245,9 @@ pub async fn patch_me(
     }
     if let Some(theme) = payload.theme.as_deref() {
         if !validate_theme(theme.trim()) {
-            return Err(GatewayError::Config("theme 取值必须为 light/dark/system".into()));
+            return Err(GatewayError::Config(
+                "theme 取值必须为 light/dark/system".into(),
+            ));
         }
     }
     if let Some(font) = payload.font.as_deref() {
@@ -309,7 +311,9 @@ pub async fn change_password(
         return Err(GatewayError::Config("new_password 长度至少 7 位".into()));
     }
     if new_password == old_password {
-        return Err(GatewayError::Config("new_password 不能与 old_password 相同".into()));
+        return Err(GatewayError::Config(
+            "new_password 不能与 old_password 相同".into(),
+        ));
     }
 
     let Some(user) = app_state

@@ -31,11 +31,52 @@ pub fn parse_beijing_string(s: &str) -> crate::error::Result<DateTime<Utc>> {
 
 /// 解析时间字符串为 UTC：
 /// - 优先 RFC3339 / ISO-8601（带时区偏移或 `Z`）
+/// - 兼容 Postgres 常见字符串格式：`YYYY-MM-DD HH:mm:ss(.f)?(+/-offset)`
 /// - 回退兼容旧格式：`YYYY-MM-DD HH:mm:ss`（按北京时间解释）
 pub fn parse_datetime_string(s: &str) -> crate::error::Result<DateTime<Utc>> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Ok(dt.with_timezone(&Utc));
     }
+
+    fn normalize_trailing_offset(raw: &str) -> Option<String> {
+        let pos = raw.rfind(|c| c == '+' || c == '-')?;
+        let (prefix, offset) = raw.split_at(pos);
+        if offset.contains(':') {
+            return None;
+        }
+        match offset.len() {
+            // +HH / -HH
+            3 => Some(format!("{prefix}{offset}:00")),
+            // +HHMM / -HHMM
+            5 => Some(format!("{prefix}{}:{}", &offset[..3], &offset[3..])),
+            _ => None,
+        }
+    }
+
+    // Some deployments might have stored timestamps like "YYYY-MM-DD HH:mm:ss UTC".
+    if let Some(stripped) = s.strip_suffix(" UTC") {
+        use chrono::NaiveDateTime;
+        let naive = NaiveDateTime::parse_from_str(stripped, DATETIME_FORMAT)
+            .map_err(|e| GatewayError::TimeParse(e.to_string()))?;
+        return Ok(Utc.from_utc_datetime(&naive));
+    }
+
+    // Postgres can surface "YYYY-MM-DD HH:mm:ss+00" / "+0000" / "+00:00" (optionally with .f)
+    // depending on column type / legacy values.
+    let candidates = [Some(s.to_string()), normalize_trailing_offset(s)];
+    for cand in candidates.into_iter().flatten() {
+        for fmt in [
+            "%Y-%m-%d %H:%M:%S%:z",
+            "%Y-%m-%d %H:%M:%S%.f%:z",
+            "%Y-%m-%d %H:%M:%S%z",
+            "%Y-%m-%d %H:%M:%S%.f%z",
+        ] {
+            if let Ok(dt) = DateTime::parse_from_str(&cand, fmt) {
+                return Ok(dt.with_timezone(&Utc));
+            }
+        }
+    }
+
     parse_beijing_string(s)
 }
 
@@ -47,5 +88,47 @@ impl tracing_subscriber::fmt::time::FormatTime for BeijingTimer {
         let now = Utc::now();
         let s = to_beijing_string(&now);
         write!(w, "{}", s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_datetime_string_accepts_rfc3339() {
+        let dt = parse_datetime_string("2026-01-20T10:20:30Z").unwrap();
+        assert_eq!(dt, Utc.with_ymd_and_hms(2026, 1, 20, 10, 20, 30).unwrap());
+    }
+
+    #[test]
+    fn parse_datetime_string_accepts_beijing_legacy() {
+        // 18:20:30 Beijing == 10:20:30 UTC
+        let dt = parse_datetime_string("2026-01-20 18:20:30").unwrap();
+        assert_eq!(dt, Utc.with_ymd_and_hms(2026, 1, 20, 10, 20, 30).unwrap());
+    }
+
+    #[test]
+    fn parse_datetime_string_accepts_pg_offset_short() {
+        let dt = parse_datetime_string("2026-01-20 10:20:30+00").unwrap();
+        assert_eq!(dt, Utc.with_ymd_and_hms(2026, 1, 20, 10, 20, 30).unwrap());
+    }
+
+    #[test]
+    fn parse_datetime_string_accepts_pg_offset_colon() {
+        let dt = parse_datetime_string("2026-01-20 10:20:30+00:00").unwrap();
+        assert_eq!(dt, Utc.with_ymd_and_hms(2026, 1, 20, 10, 20, 30).unwrap());
+    }
+
+    #[test]
+    fn parse_datetime_string_accepts_pg_offset_hhmm() {
+        let dt = parse_datetime_string("2026-01-20 10:20:30+0000").unwrap();
+        assert_eq!(dt, Utc.with_ymd_and_hms(2026, 1, 20, 10, 20, 30).unwrap());
+    }
+
+    #[test]
+    fn parse_datetime_string_accepts_pg_utc_suffix() {
+        let dt = parse_datetime_string("2026-01-20 10:20:30 UTC").unwrap();
+        assert_eq!(dt, Utc.with_ymd_and_hms(2026, 1, 20, 10, 20, 30).unwrap());
     }
 }

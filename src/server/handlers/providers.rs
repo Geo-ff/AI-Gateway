@@ -64,6 +64,8 @@ pub struct ProviderOut {
     pub api_keys: Vec<String>,
     pub models_endpoint: Option<String>,
     pub enabled: bool,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
     pub is_favorite: bool,
     pub cached_models_count: usize,
 }
@@ -79,6 +81,14 @@ impl ProviderOut {
             api_keys: p.api_keys.into_iter().map(|k| mask_key(&k)).collect(),
             models_endpoint: p.models_endpoint,
             enabled: p.enabled,
+            created_at: p
+                .created_at
+                .as_ref()
+                .map(crate::logging::time::to_iso8601_utc_string),
+            updated_at: p
+                .updated_at
+                .as_ref()
+                .map(crate::logging::time::to_iso8601_utc_string),
             is_favorite,
             cached_models_count,
         }
@@ -280,6 +290,8 @@ pub async fn create_provider(
         api_keys: Vec::new(),
         models_endpoint: payload.models_endpoint,
         enabled: true,
+        created_at: Some(start_time),
+        updated_at: Some(start_time),
     };
     let inserted = match app_state.providers.insert_provider(&p).await {
         Ok(v) => v,
@@ -396,6 +408,7 @@ pub async fn update_provider(
         .await
         .map_err(GatewayError::Db)?;
     let enabled = existing.as_ref().map(|p| p.enabled).unwrap_or(true);
+    let created_at = existing.as_ref().and_then(|p| p.created_at);
     let display_name = payload
         .display_name
         .clone()
@@ -416,6 +429,8 @@ pub async fn update_provider(
         api_keys: Vec::new(),
         models_endpoint: payload.models_endpoint,
         enabled,
+        created_at,
+        updated_at: Some(start_time),
     };
     app_state
         .providers
@@ -753,6 +768,162 @@ pub async fn toggle_provider(
             "Provider '{}' not found",
             name
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::BalanceStrategy;
+    use crate::config::settings::{LoadBalancing, LoggingConfig, ServerConfig};
+    use crate::logging::DatabaseLogger;
+    use crate::server::login::LoginManager;
+    use crate::server::storage_traits::{AdminPublicKeyRecord, LoginStore, TuiSessionRecord};
+    use axum::http::HeaderMap;
+    use axum::http::{HeaderValue, header::AUTHORIZATION};
+    use chrono::{Duration, Utc};
+    use tempfile::tempdir;
+
+    fn test_settings(db_path: String) -> crate::config::Settings {
+        crate::config::Settings {
+            load_balancing: LoadBalancing {
+                strategy: BalanceStrategy::FirstAvailable,
+            },
+            server: ServerConfig::default(),
+            logging: LoggingConfig {
+                database_path: db_path,
+                ..Default::default()
+            },
+        }
+    }
+
+    struct Harness {
+        _dir: tempfile::TempDir,
+        state: Arc<AppState>,
+        token: String,
+    }
+
+    async fn harness() -> Harness {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let settings = test_settings(db_path.to_str().unwrap().to_string());
+        let logger = Arc::new(
+            DatabaseLogger::new(&settings.logging.database_path)
+                .await
+                .unwrap(),
+        );
+
+        let fingerprint = "test-fp".to_string();
+        let now = Utc::now();
+        logger
+            .insert_admin_key(&AdminPublicKeyRecord {
+                fingerprint: fingerprint.clone(),
+                public_key: vec![0u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
+                comment: Some("test".into()),
+                enabled: true,
+                created_at: now,
+                last_used_at: None,
+            })
+            .await
+            .unwrap();
+
+        let token = "test-admin-token".to_string();
+        logger
+            .create_tui_session(&TuiSessionRecord {
+                session_id: token.clone(),
+                fingerprint,
+                issued_at: now,
+                expires_at: now + Duration::hours(1),
+                revoked: false,
+                last_code_at: None,
+            })
+            .await
+            .unwrap();
+
+        let refresh_token_store = logger.clone();
+        let password_reset_token_store = logger.clone();
+
+        let app_state = Arc::new(AppState {
+            config: settings,
+            load_balancer_state: Arc::new(crate::routing::LoadBalancerState::default()),
+            log_store: logger.clone(),
+            model_cache: logger.clone(),
+            providers: logger.clone(),
+            token_store: logger.clone(),
+            favorites_store: logger.clone(),
+            login_manager: Arc::new(LoginManager::new(logger.clone())),
+            user_store: logger.clone(),
+            refresh_token_store,
+            password_reset_token_store,
+        });
+
+        Harness {
+            _dir: dir,
+            state: app_state,
+            token,
+        }
+    }
+
+    fn auth_headers(token: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
+        );
+        headers
+    }
+
+    #[tokio::test]
+    async fn providers_created_at_and_updated_at_are_stable() {
+        let h = harness().await;
+        let headers = auth_headers(&h.token);
+
+        let Json(created) = create_provider(
+            State(h.state.clone()),
+            headers.clone(),
+            Json(ProviderCreatePayload {
+                name: "p1".into(),
+                display_name: None,
+                collection: None,
+                api_type: ProviderType::OpenAI,
+                base_url: "http://example.com".into(),
+                models_endpoint: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let created_at = created
+            .created_at
+            .clone()
+            .expect("created_at should be set");
+        let updated_at = created
+            .updated_at
+            .clone()
+            .expect("updated_at should be set");
+        assert_eq!(created_at, updated_at);
+
+        // update should keep created_at and change updated_at
+        let Json(updated) = update_provider(
+            Path("p1".into()),
+            State(h.state.clone()),
+            headers.clone(),
+            Json(ProviderUpdatePayload {
+                display_name: Some("new".into()),
+                collection: None,
+                api_type: ProviderType::OpenAI,
+                base_url: "http://example.com".into(),
+                models_endpoint: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.created_at.as_deref(), Some(created_at.as_str()));
+        assert!(updated.updated_at.as_deref().unwrap_or("") >= updated_at.as_str());
+
+        let Json(fetched) = get_provider(Path("p1".into()), State(h.state.clone()), headers)
+            .await
+            .unwrap();
+        assert_eq!(fetched.created_at.as_deref(), Some(created_at.as_str()));
     }
 }
 

@@ -183,7 +183,9 @@ fn filter_logs<'a>(logs: &'a [RequestLog], query: &LogsQuery) -> Vec<&'a Request
                         .map(|m| m.eq_ignore_ascii_case(model))
                         .unwrap_or(false)
                 };
-                matches(&log.requested_model) || matches(&log.effective_model) || matches(&log.model)
+                matches(&log.requested_model)
+                    || matches(&log.effective_model)
+                    || matches(&log.model)
             }
             None => true,
         })
@@ -308,14 +310,8 @@ pub async fn list_request_logs(
                 method: log.method.clone(),
                 path: log.path.clone(),
                 request_type: log.request_type.clone(),
-                requested_model: log
-                    .requested_model
-                    .clone()
-                    .or_else(|| log.model.clone()),
-                effective_model: log
-                    .effective_model
-                    .clone()
-                    .or_else(|| log.model.clone()),
+                requested_model: log.requested_model.clone().or_else(|| log.model.clone()),
+                effective_model: log.effective_model.clone().or_else(|| log.model.clone()),
                 provider: log.provider.clone(),
                 api_key: log.api_key.clone(),
                 client_token_id,
@@ -433,14 +429,8 @@ pub async fn list_chat_completion_logs(
                 method: log.method.clone(),
                 path: log.path.clone(),
                 request_type: log.request_type.clone(),
-                requested_model: log
-                    .requested_model
-                    .clone()
-                    .or_else(|| log.model.clone()),
-                effective_model: log
-                    .effective_model
-                    .clone()
-                    .or_else(|| log.model.clone()),
+                requested_model: log.requested_model.clone().or_else(|| log.model.clone()),
+                effective_model: log.effective_model.clone().or_else(|| log.model.clone()),
                 provider: log.provider.clone(),
                 api_key: log.api_key.clone(),
                 client_token_id,

@@ -369,7 +369,10 @@ pub async fn export_users_csv(
 
     let headers = [
         (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
-        (header::CONTENT_DISPOSITION, "attachment; filename=\"users.csv\""),
+        (
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=\"users.csv\"",
+        ),
     ];
 
     Ok((headers, csv_content))

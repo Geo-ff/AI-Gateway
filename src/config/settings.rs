@@ -1,4 +1,5 @@
 use crate::error::{GatewayError, Result as AppResult};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -25,6 +26,10 @@ pub struct Provider {
     pub models_endpoint: Option<String>,
     #[serde(default = "default_provider_enabled")]
     pub enabled: bool,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

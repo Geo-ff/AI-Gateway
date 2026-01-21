@@ -1,5 +1,5 @@
 use crate::logging::time::{
-    BEIJING_OFFSET, DATETIME_FORMAT, parse_beijing_string, to_beijing_string,
+    BEIJING_OFFSET, DATETIME_FORMAT, parse_beijing_string, to_beijing_string, to_iso8601_utc_string,
 };
 use crate::logging::types::{ProviderKeyStatsAgg, RequestLog};
 use crate::server::storage_traits::{
@@ -690,8 +690,14 @@ impl DatabaseLogger {
             "ALTER TABLE request_logs ADD COLUMN request_type TEXT NOT NULL DEFAULT 'chat_once'",
             [],
         );
-        let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN requested_model TEXT", []);
-        let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN effective_model TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE request_logs ADD COLUMN requested_model TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE request_logs ADD COLUMN effective_model TEXT",
+            [],
+        );
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN api_key TEXT", []);
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN error_message TEXT", []);
         let _ = conn.execute(
@@ -740,7 +746,9 @@ impl DatabaseLogger {
                 base_url TEXT NOT NULL,
                 models_endpoint TEXT,
                 enabled INTEGER NOT NULL DEFAULT 1,
-                key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential'
+                key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential',
+                created_at TEXT,
+                updated_at TEXT
             )",
             [],
         )?;
@@ -770,6 +778,17 @@ impl DatabaseLogger {
         let _ = conn.execute(
             "ALTER TABLE providers ADD COLUMN key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential'",
             [],
+        );
+        let _ = conn.execute("ALTER TABLE providers ADD COLUMN created_at TEXT", []);
+        let _ = conn.execute("ALTER TABLE providers ADD COLUMN updated_at TEXT", []);
+        // Backfill timestamps for existing rows (best-effort).
+        let now_utc = to_iso8601_utc_string(&Utc::now());
+        let _ = conn.execute(
+            "UPDATE providers
+             SET created_at = COALESCE(NULLIF(created_at, ''), ?1),
+                 updated_at = COALESCE(NULLIF(updated_at, ''), ?1)
+             WHERE created_at IS NULL OR created_at = '' OR updated_at IS NULL OR updated_at = ''",
+            [&now_utc],
         );
         // One-time safe migration: fix legacy '-' collection values
         let _ = conn.execute(

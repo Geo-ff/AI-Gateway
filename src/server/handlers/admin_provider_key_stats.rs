@@ -407,6 +407,8 @@ mod tests {
                 models_endpoint: None,
                 api_keys: Vec::new(),
                 enabled: true,
+                created_at: None,
+                updated_at: None,
             })
             .await
             .unwrap();
@@ -527,6 +529,8 @@ mod tests {
                 models_endpoint: None,
                 api_keys: Vec::new(),
                 enabled: true,
+                created_at: None,
+                updated_at: None,
             })
             .await
             .unwrap();

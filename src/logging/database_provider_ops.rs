@@ -2,7 +2,7 @@ use rusqlite::Result;
 
 use chrono::Utc;
 
-use crate::logging::time::{parse_beijing_string, to_beijing_string};
+use crate::logging::time::{parse_datetime_string, to_beijing_string};
 use crate::logging::types::ProviderOpLog;
 
 use super::database::DatabaseLogger;
@@ -64,9 +64,42 @@ fn map_provider_op_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProviderOpLo
     let ts: String = row.get(1)?;
     Ok(ProviderOpLog {
         id: Some(row.get(0)?),
-        timestamp: parse_beijing_string(&ts).unwrap_or_else(|_| Utc::now()),
+        timestamp: parse_datetime_string(&ts).unwrap_or_else(|_| Utc::now()),
         operation: row.get(2)?,
         provider: row.get(3)?,
         details: row.get(4)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::logging::DatabaseLogger;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn provider_ops_logs_timestamp_parses_rfc3339() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("gateway.db");
+        let logger = DatabaseLogger::new(db_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        let ts = "2026-01-20T10:20:30Z";
+        {
+            let conn = logger.connection.lock().await;
+            conn.execute(
+                "INSERT INTO provider_ops_logs (timestamp, operation, provider, details) VALUES (?1, ?2, ?3, ?4)",
+                (ts, "test_op", "p1", "d1"),
+            )
+            .unwrap();
+        }
+
+        let logs = logger.get_provider_ops_logs(10, None).await.unwrap();
+        assert!(!logs.is_empty());
+        let expected = chrono::DateTime::parse_from_rfc3339(ts)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(logs[0].timestamp, expected);
+    }
 }

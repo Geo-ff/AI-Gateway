@@ -20,6 +20,38 @@ use crate::server::{
     request_logging::log_chat_request,
 };
 
+fn is_openai_error_payload(v: &serde_json::Value) -> bool {
+    // OpenAI-style error payload is `{ "error": { ... } }` without `choices`.
+    v.get("error").is_some() && v.get("choices").is_none()
+}
+
+fn error_payload_to_chat_completion(
+    provider: &str,
+    effective_model: &str,
+    error: &serde_json::Value,
+) -> serde_json::Value {
+    let created = Utc::now().timestamp().max(0) as u64;
+    let id = format!("chatcmpl-error-{}", Utc::now().timestamp_millis());
+    let pretty = serde_json::to_string_pretty(error).unwrap_or_else(|_| error.to_string());
+    // Make the error visible in chat UIs that otherwise would show an empty assistant message.
+    // Frontends that support HTML-in-Markdown can render the title in red.
+    let content = format!(
+        "<span style=\"color:#ef4444\">({}) provider error</span>\n\n```json\n{}\n```",
+        provider, pretty
+    );
+    serde_json::json!({
+        "id": id,
+        "object": "chat.completion",
+        "created": created,
+        "model": effective_model,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": "stop"
+        }]
+    })
+}
+
 /// Chat Completions 主处理入口：
 /// - 根据 `stream` 标志分流到流式或一次性请求路径
 /// - 校验并加载客户端令牌，检查额度/过期/模型白名单等限制
@@ -362,22 +394,49 @@ pub async fn chat_completions(
         let response =
             call_provider_with_parsed_model(&selected, &request, &parsed_model, top_k).await;
 
-        // 日志使用 typed，用于提取 usage
-        let token_for_log = Some(token.id.as_str());
+        // 若上游返回 OpenAI 风格错误对象（有 error 无 choices），则对前端应当返回非 2xx，
+        // 否则一些对话界面会误判为成功响应并显示空 assistant 内容。
+        let upstream_error_body = response
+            .as_ref()
+            .ok()
+            .filter(|dual| is_openai_error_payload(&dual.raw))
+            .map(|dual| dual.raw.clone());
+
+        // 日志/计费：请求日志中存 token id（不落明文），但 client_tokens 用量增量更新仍需要原始 token 值
+        let token_for_log = client_token.as_deref();
         let billing_model = effective_model_for_price;
         let effective_model = upstream_model;
-        log_chat_request(
-            &app_state,
-            start_time,
-            &billing_model,
-            &requested_model,
-            &effective_model,
-            &selected.provider.name,
-            &selected.api_key,
-            token_for_log,
-            &response,
-        )
-        .await;
+        if let Some(body) = upstream_error_body.as_ref() {
+            let response_for_log: Result<_, GatewayError> = Err(GatewayError::Config(format!(
+                "upstream returned error payload: {}",
+                body
+            )));
+            log_chat_request(
+                &app_state,
+                start_time,
+                &billing_model,
+                &requested_model,
+                &effective_model,
+                &selected.provider.name,
+                &selected.api_key,
+                token_for_log,
+                &response_for_log,
+            )
+            .await;
+        } else {
+            log_chat_request(
+                &app_state,
+                start_time,
+                &billing_model,
+                &requested_model,
+                &effective_model,
+                &selected.provider.name,
+                &selected.api_key,
+                token_for_log,
+                &response,
+            )
+            .await;
+        }
 
         // Auto-disable token when exceeding budget (post-check)
         if let Some(tok) = client_token.as_deref()
@@ -395,10 +454,63 @@ pub async fn chat_completions(
             }
         }
 
-        // 将原始 JSON 透传给前端，以保留 reasoning_content 等扩展字段
+        // 将原始 JSON 透传给前端，以保留 reasoning_content 等扩展字段；
+        // 但若是上游错误对象（误返回 200 且无 choices），则构造一个“带错误文本的 assistant 消息”，避免对话界面出现空回复。
+        if let Some(body) = upstream_error_body {
+            let v =
+                error_payload_to_chat_completion(&selected.provider.name, &effective_model, &body);
+            return Ok(Json(v).into_response());
+        }
         match response {
             Ok(dual) => Ok(Json(dual.raw).into_response()),
             Err(e) => Err(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{error_payload_to_chat_completion, is_openai_error_payload};
+
+    #[test]
+    fn openai_error_payload_detection() {
+        let v = serde_json::json!({
+            "error": {
+                "message": "openai_error",
+                "type": "bad_response_status_code",
+                "param": "",
+                "code": "bad_response_status_code"
+            }
+        });
+        assert!(is_openai_error_payload(&v));
+
+        let ok = serde_json::json!({
+            "id": "chatcmpl_x",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop"
+            }]
+        });
+        assert!(!is_openai_error_payload(&ok));
+    }
+
+    #[test]
+    fn openai_error_payload_is_rendered_as_assistant_message() {
+        let err = serde_json::json!({
+            "error": {
+                "message": "openai_error",
+                "type": "bad_response_status_code",
+                "param": "",
+                "code": "bad_response_status_code"
+            }
+        });
+        let v = error_payload_to_chat_completion("fox", "m1", &err);
+        assert!(v.get("choices").is_some());
+        let content = v["choices"][0]["message"]["content"].as_str().unwrap_or("");
+        assert!(content.contains("provider error"));
+        assert!(content.contains("```json"));
+        assert!(content.contains("openai_error"));
     }
 }
