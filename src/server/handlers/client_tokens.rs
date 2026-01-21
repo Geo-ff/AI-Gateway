@@ -361,6 +361,15 @@ pub async fn create_token(
         &payload.allowed_models,
         &payload.model_blacklist,
     )?;
+    if let Some(user_id) = payload.user_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let exists = app_state.user_store.get_user(user_id).await?;
+        if exists.is_none() {
+            return Err(GatewayError::Config("user_id 不存在".into()));
+        }
+        payload.user_id = Some(user_id.to_string());
+    } else {
+        payload.user_id = None;
+    }
     crate::server::token_model_limits::validate_models_exist_in_cache(
         &app_state,
         "allowed_models",
@@ -767,6 +776,7 @@ mod tests {
     use crate::logging::DatabaseLogger;
     use crate::server::login::LoginManager;
     use crate::server::storage_traits::{AdminPublicKeyRecord, LoginStore, TuiSessionRecord};
+    use crate::users::CreateUserPayload;
     use axum::http::{HeaderValue, header::AUTHORIZATION};
     use chrono::{Duration, Utc};
     use tempfile::tempdir;
@@ -1030,5 +1040,78 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, GatewayError::Config(_)));
+    }
+
+    #[tokio::test]
+    async fn client_tokens_create_validates_user_id_exists_when_provided() {
+        let h = harness().await;
+        let headers = auth_headers(&h.token);
+
+        let err = create_token(
+            State(h.state.clone()),
+            headers.clone(),
+            Json(CreateTokenPayload {
+                id: None,
+                user_id: Some("no-such-user".into()),
+                name: Some("name".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, GatewayError::Config(_)));
+
+        let user = h
+            .state
+            .user_store
+            .create_user(CreateUserPayload {
+                first_name: Some("Test".into()),
+                last_name: Some("User".into()),
+                username: Some("test-user".into()),
+                email: "test-user@example.com".into(),
+                phone_number: None,
+                password: None,
+                status: crate::users::UserStatus::Active,
+                role: crate::users::UserRole::Admin,
+                is_anonymous: false,
+            })
+            .await
+            .unwrap();
+
+        let (code, Json(created)) = create_token(
+            State(h.state.clone()),
+            headers,
+            Json(CreateTokenPayload {
+                id: None,
+                user_id: Some(user.id.clone()),
+                name: Some("name".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(code, axum::http::StatusCode::CREATED);
+        assert_eq!(created.user_id.as_deref(), Some(user.id.as_str()));
     }
 }

@@ -976,7 +976,7 @@ components:
         user_id:
           type: string
           nullable: true
-          description: 归属用户ID（可选，仅 superadmin 使用；为空则创建为未绑定 token）
+          description: 绑定归属用户 ID（可选；为空则创建为服务 token/未绑定 token；创建后不可修改）
         name:
           type: string
           nullable: true
