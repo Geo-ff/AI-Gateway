@@ -73,7 +73,11 @@ fn derive_log_type(request_type: &str) -> Option<&'static str> {
 }
 
 fn normalize_status(status_code: u16) -> &'static str {
-    if status_code < 400 { "success" } else { "failed" }
+    if status_code < 400 {
+        "success"
+    } else {
+        "failed"
+    }
 }
 
 fn matches_query(
@@ -83,7 +87,12 @@ fn matches_query(
     token_name: Option<&str>,
     q: &MyLogsQuery,
 ) -> bool {
-    if let Some(want_type) = q.log_type.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(want_type) = q
+        .log_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         if want_type != log_type {
             return false;
         }
@@ -91,7 +100,11 @@ fn matches_query(
 
     if let Some(want_status) = q.status.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         let normalized = normalize_status(log.status_code);
-        let want = if want_status == "error" { "failed" } else { want_status };
+        let want = if want_status == "error" {
+            "failed"
+        } else {
+            want_status
+        };
         if want != normalized {
             return false;
         }
@@ -129,10 +142,8 @@ pub async fn list_my_request_logs(
 
     let tokens = app_state.token_store.list_tokens_by_user(&user_id).await?;
     let token_ids: HashSet<String> = tokens.iter().map(|t| t.id.clone()).collect();
-    let token_name_by_id: HashMap<String, String> = tokens
-        .into_iter()
-        .map(|t| (t.id, t.name))
-        .collect();
+    let token_name_by_id: HashMap<String, String> =
+        tokens.into_iter().map(|t| (t.id, t.name)).collect();
 
     let mut out: Vec<RequestLog> = Vec::with_capacity(limit);
     let mut next = query.cursor;
@@ -149,10 +160,7 @@ pub async fn list_my_request_logs(
         }
 
         for l in batch.iter() {
-            let belongs_to_user = l
-                .user_id
-                .as_deref()
-                .is_some_and(|uid| uid == user_id);
+            let belongs_to_user = l.user_id.as_deref().is_some_and(|uid| uid == user_id);
             let token_id = l.client_token.as_deref();
             let belongs_to_token = token_id.is_some_and(|id| token_ids.contains(id));
             if !belongs_to_user && !belongs_to_token {
@@ -185,10 +193,7 @@ pub async fn list_my_request_logs(
         }
     }
 
-    let next_cursor = out
-        .last()
-        .and_then(|l| l.id)
-        .filter(|_| out.len() == limit);
+    let next_cursor = out.last().and_then(|l| l.id).filter(|_| out.len() == limit);
 
     let data = out
         .into_iter()
@@ -226,4 +231,3 @@ pub async fn list_my_request_logs(
         next_cursor,
     }))
 }
-

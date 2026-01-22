@@ -98,8 +98,15 @@ pub async fn purchase_plan(
         Ok(v) => v,
         Err(e) => {
             let code = e.status_code().as_u16();
-            log_recharge_request(&app_state, start_time, None, code, None, Some(e.to_string()))
-                .await;
+            log_recharge_request(
+                &app_state,
+                start_time,
+                None,
+                code,
+                None,
+                Some(e.to_string()),
+            )
+            .await;
             return Err(e);
         }
     };
@@ -428,7 +435,10 @@ mod tests {
             .find(|l| l.request_type == "recharge" && l.path == "/subscription/purchase")
             .expect("missing admin recharge log entry");
         assert_eq!(admin_recharge.amount_spent, Some(9.9));
-        assert_eq!(admin_recharge.username.as_deref(), Some(user.username.as_str()));
+        assert_eq!(
+            admin_recharge.username.as_deref(),
+            Some(user.username.as_str())
+        );
     }
 
     #[tokio::test]

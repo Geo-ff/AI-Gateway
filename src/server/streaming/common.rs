@@ -279,8 +279,8 @@ pub(super) fn parse_usage_from_value(v: &serde_json::Value) -> Option<Usage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::balance::BalanceStore;
     use crate::admin::{CreateTokenPayload, TokenStore};
+    use crate::balance::BalanceStore;
     use crate::config::settings::{BalanceStrategy, LoadBalancing, LoggingConfig, ServerConfig};
     use crate::logging::DatabaseLogger;
     use crate::server::login::LoginManager;

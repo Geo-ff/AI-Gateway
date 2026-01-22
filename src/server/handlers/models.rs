@@ -293,7 +293,10 @@ pub async fn list_my_models(
         }
     };
 
-    let tokens = app_state.token_store.list_tokens_by_user(&claims.sub).await?;
+    let tokens = app_state
+        .token_store
+        .list_tokens_by_user(&claims.sub)
+        .await?;
     let now = Utc::now();
     let mut usable_tokens = Vec::new();
     for t in tokens {
@@ -343,10 +346,7 @@ pub async fn list_my_models(
         .await
         .unwrap_or_default();
     let providers_by_id: std::collections::HashMap<String, crate::config::settings::Provider> =
-        providers
-            .into_iter()
-            .map(|p| (p.name.clone(), p))
-            .collect();
+        providers.into_iter().map(|p| (p.name.clone(), p)).collect();
 
     // Cached models (base universe)
     let cached = app_state.model_cache.get_cached_models(None).await?;
@@ -437,16 +437,17 @@ pub async fn list_my_models(
             models_for_token.retain(|m| !deny_set.contains(m.full_id.as_str()));
         }
 
-        let original_ids: HashSet<String> = models_for_token
-            .iter()
-            .map(|m| m.full_id.clone())
-            .collect();
+        let original_ids: HashSet<String> =
+            models_for_token.iter().map(|m| m.full_id.clone()).collect();
         let mut out = Vec::with_capacity(models_for_token.len());
         let mut seen = HashSet::<String>::new();
 
         for m in models_for_token.into_iter() {
             let map = if redirects_cache.contains_key(&m.provider) {
-                redirects_cache.get(&m.provider).cloned().unwrap_or_default()
+                redirects_cache
+                    .get(&m.provider)
+                    .cloned()
+                    .unwrap_or_default()
             } else {
                 let pairs = app_state
                     .providers
@@ -529,12 +530,14 @@ pub async fn list_my_models(
             provider_id: m.provider.clone(),
             provider_enabled: provider.map(|p| p.enabled).unwrap_or(true),
             upstream_endpoint_type: provider
-                .map(|p| match p.api_type {
-                    crate::config::settings::ProviderType::OpenAI => "openai",
-                    crate::config::settings::ProviderType::Anthropic => "anthropic",
-                    crate::config::settings::ProviderType::Zhipu => "zhipu",
-                }
-                .to_string())
+                .map(|p| {
+                    match p.api_type {
+                        crate::config::settings::ProviderType::OpenAI => "openai",
+                        crate::config::settings::ProviderType::Anthropic => "anthropic",
+                        crate::config::settings::ProviderType::Zhipu => "zhipu",
+                    }
+                    .to_string()
+                })
                 .unwrap_or_else(|| "unknown".to_string()),
             input_price,
             output_price,

@@ -39,3 +39,4 @@ scripts/_biz/biz2_20260113T122115Z_1853ad.md
 scripts/_biz/biz2_20260113T122657Z_e9bba5.log
 scripts/_biz/biz2_20260113T122657Z_e9bba5.md
 scripts/test_provider_key_strategy_and_stats.sh
+scripts/purge_recharge_logs_before.sh

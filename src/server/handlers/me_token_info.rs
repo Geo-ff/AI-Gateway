@@ -48,6 +48,15 @@ pub async fn my_token_balance(
         }
     };
 
+    use std::collections::HashMap;
+    let usage_counts: HashMap<String, i64> = app_state
+        .log_store
+        .count_requests_by_client_token()
+        .await
+        .map_err(GatewayError::Db)?
+        .into_iter()
+        .collect();
+
     let tokens = app_state
         .token_store
         .list_tokens_by_user(&claims.sub)
@@ -73,6 +82,7 @@ pub async fn my_token_balance(
         };
         let spent = t.amount_spent;
         let remaining = t.max_amount.map(|m| (m - spent).max(0.0));
+        let usage_count = usage_counts.get(&t.id).copied().unwrap_or(0);
         log_simple_request(
             &app_state,
             start_time,
@@ -93,6 +103,7 @@ pub async fn my_token_balance(
             "max_amount": t.max_amount,
             "remaining": remaining,
             "total_tokens_spent": t.total_tokens_spent,
+            "usage_count": usage_count,
             "max_tokens": t.max_tokens,
         })));
     }
@@ -119,6 +130,7 @@ pub async fn my_token_balance(
                 "max_amount": t.max_amount,
                 "remaining": remaining,
                 "total_tokens_spent": t.total_tokens_spent,
+                "usage_count": usage_counts.get(&t.id).copied().unwrap_or(0),
                 "max_tokens": t.max_tokens,
                 "enabled": t.enabled,
                 "expires_at": t.expires_at.as_ref().map(crate::logging::time::to_iso8601_utc_string),
