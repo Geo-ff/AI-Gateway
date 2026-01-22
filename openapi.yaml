@@ -2387,6 +2387,74 @@ paths:
                       type: string
                       nullable: true
 
+  /me/models:
+    get:
+      summary: 获取我的可用模型列表（只读）
+      description: 返回当前登录用户已绑定且当前可使用的模型列表（只读；用于前端展示）
+      operationId: listMyModels
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    model_id:
+                      type: string
+                    model_type:
+                      type: string
+                      nullable: true
+                    provider:
+                      type: string
+                    provider_id:
+                      type: string
+                    provider_enabled:
+                      type: boolean
+                    upstream_endpoint_type:
+                      type: string
+                    input_price:
+                      type: number
+                      format: double
+                      nullable: true
+                    output_price:
+                      type: number
+                      format: double
+                      nullable: true
+                    redirect_name:
+                      type: string
+                    status:
+                      type: string
+                    created_at:
+                      type: string
+                    is_favorite:
+                      type: boolean
+                    tokens:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                          name:
+                            type: string
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /me/tokens:
     get:
       summary: 获取我的令牌列表

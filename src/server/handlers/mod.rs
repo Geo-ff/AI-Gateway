@@ -220,6 +220,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(admin_logs::list_operation_logs),
         )
         .route("/model-prices", get(model_prices::list_model_prices))
+        .route("/me/models", get(models::list_my_models))
         .route(
             "/me/tokens",
             get(me_tokens::list_my_tokens).post(me_tokens::create_my_token),

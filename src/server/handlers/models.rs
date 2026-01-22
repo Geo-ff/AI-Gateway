@@ -4,7 +4,7 @@ use axum::{
     response::{IntoResponse, Json, Response},
 };
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::auth::{ensure_admin, ensure_client_token, require_user};
@@ -17,6 +17,42 @@ use crate::server::model_cache::{get_cached_models_all, get_cached_models_for_pr
 use crate::server::model_helpers::fetch_provider_models;
 use crate::server::request_logging::log_simple_request;
 use crate::server::util::{bearer_token, token_for_log};
+
+#[derive(Debug, Clone)]
+struct CachedModelInfo {
+    full_id: String,
+    provider: String,
+    model_id: String,
+    object: String,
+    created: u64,
+    owned_by: String,
+    cached_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MyModelTokenOut {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MyModelOut {
+    pub id: String,
+    pub name: String,
+    pub model_id: String,
+    pub model_type: Option<String>,
+    pub provider: String,
+    pub provider_id: String,
+    pub provider_enabled: bool,
+    pub upstream_endpoint_type: String,
+    pub input_price: Option<f64>,
+    pub output_price: Option<f64>,
+    pub redirect_name: String,
+    pub status: String,
+    pub created_at: String,
+    pub is_favorite: bool,
+    pub tokens: Vec<MyModelTokenOut>,
+}
 
 pub async fn list_models(
     State(app_state): State<Arc<AppState>>,
@@ -222,6 +258,315 @@ pub async fn list_models(
     )
     .await;
     Ok(result)
+}
+
+pub async fn list_my_models(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Result<Json<Vec<MyModelOut>>, GatewayError> {
+    let start_time = Utc::now();
+    let provided_token = bearer_token(&headers);
+    let path = uri
+        .path_and_query()
+        .map(|pq| pq.as_str().to_string())
+        .unwrap_or_else(|| "/me/models".to_string());
+
+    let claims = match require_user(&headers) {
+        Ok(v) => v,
+        Err(e) => {
+            let code = e.status_code().as_u16();
+            log_simple_request(
+                &app_state,
+                start_time,
+                "GET",
+                &path,
+                "me_models_list",
+                None,
+                None,
+                provided_token.as_deref(),
+                code,
+                Some(e.to_string()),
+            )
+            .await;
+            return Err(e);
+        }
+    };
+
+    let tokens = app_state.token_store.list_tokens_by_user(&claims.sub).await?;
+    let now = Utc::now();
+    let mut usable_tokens = Vec::new();
+    for t in tokens {
+        if !t.enabled {
+            continue;
+        }
+        if let Some(exp) = t.expires_at.as_ref()
+            && now > *exp
+        {
+            continue;
+        }
+        if let Some(max_amount) = t.max_amount {
+            if let Ok(spent) = app_state
+                .log_store
+                .sum_spent_amount_by_client_token(&t.token)
+                .await
+            {
+                if spent >= max_amount {
+                    continue;
+                }
+            }
+        }
+        usable_tokens.push(t);
+    }
+
+    if usable_tokens.is_empty() {
+        log_simple_request(
+            &app_state,
+            start_time,
+            "GET",
+            &path,
+            "me_models_list",
+            None,
+            None,
+            token_for_log(provided_token.as_deref()),
+            200,
+            None,
+        )
+        .await;
+        return Ok(Json(vec![]));
+    }
+
+    // Providers (for display name, enabled, api_type)
+    let providers = app_state
+        .providers
+        .list_providers()
+        .await
+        .unwrap_or_default();
+    let providers_by_id: std::collections::HashMap<String, crate::config::settings::Provider> =
+        providers
+            .into_iter()
+            .map(|p| (p.name.clone(), p))
+            .collect();
+
+    // Cached models (base universe)
+    let cached = app_state.model_cache.get_cached_models(None).await?;
+    let mut base_models: Vec<CachedModelInfo> = cached
+        .into_iter()
+        .map(|m| CachedModelInfo {
+            full_id: format!("{}/{}", m.provider, m.id),
+            provider: m.provider,
+            model_id: m.id,
+            object: m.object,
+            created: m.created,
+            owned_by: m.owned_by,
+            cached_at: m.cached_at,
+        })
+        .collect();
+
+    // Filter out disabled providers (when provider info is available)
+    if !providers_by_id.is_empty() {
+        base_models.retain(|m| {
+            providers_by_id
+                .get(&m.provider)
+                .map(|p| p.enabled)
+                .unwrap_or(true)
+        });
+    }
+
+    // Filter out disabled models (single source: model_settings; unset => enabled)
+    {
+        use std::collections::HashSet;
+        let disabled: HashSet<String> = app_state
+            .log_store
+            .list_model_enabled(None)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_, _, enabled)| !*enabled)
+            .map(|(provider, model, _)| format!("{}/{}", provider, model))
+            .collect();
+        base_models.retain(|m| !disabled.contains(&m.full_id));
+    }
+
+    // Prices (optional; missing => null)
+    let mut price_by_key = std::collections::HashMap::<String, (f64, f64, Option<String>)>::new();
+    if let Ok(items) = app_state.log_store.list_model_prices(None).await {
+        for (provider, model, p_pm, c_pm, _currency, model_type) in items {
+            price_by_key.insert(format!("{}:{}", provider, model), (p_pm, c_pm, model_type));
+        }
+    }
+
+    // Build union of token-visible models (supports allowlist/denylist + redirects folding).
+    use std::collections::{HashMap, HashSet};
+    fn resolve_redirect_chain(
+        map: &HashMap<String, String>,
+        source_model: &str,
+        max_hops: usize,
+    ) -> String {
+        let mut current = source_model.to_string();
+        let mut seen = HashSet::<String>::new();
+        for _ in 0..max_hops {
+            if !seen.insert(current.clone()) {
+                break;
+            }
+            match map.get(&current) {
+                Some(next) if next != &current => current = next.clone(),
+                _ => break,
+            }
+        }
+        current
+    }
+
+    let mut redirects_cache = HashMap::<String, HashMap<String, String>>::new();
+    let mut union = HashMap::<String, CachedModelInfo>::new();
+    let mut tokens_by_model = HashMap::<String, HashMap<String, String>>::new();
+
+    for token in usable_tokens.into_iter() {
+        let token_out = MyModelTokenOut {
+            id: token.id.clone(),
+            name: token.name.clone(),
+        };
+        let mut models_for_token = base_models.clone();
+
+        if let Some(allow) = token.allowed_models.as_ref() {
+            let allow_set: HashSet<&str> = allow.iter().map(|s| s.as_str()).collect();
+            models_for_token.retain(|m| allow_set.contains(m.full_id.as_str()));
+        }
+        if let Some(deny) = token.model_blacklist.as_ref() {
+            let deny_set: HashSet<&str> = deny.iter().map(|s| s.as_str()).collect();
+            models_for_token.retain(|m| !deny_set.contains(m.full_id.as_str()));
+        }
+
+        let original_ids: HashSet<String> = models_for_token
+            .iter()
+            .map(|m| m.full_id.clone())
+            .collect();
+        let mut out = Vec::with_capacity(models_for_token.len());
+        let mut seen = HashSet::<String>::new();
+
+        for m in models_for_token.into_iter() {
+            let map = if redirects_cache.contains_key(&m.provider) {
+                redirects_cache.get(&m.provider).cloned().unwrap_or_default()
+            } else {
+                let pairs = app_state
+                    .providers
+                    .list_model_redirects(&m.provider)
+                    .await
+                    .map_err(GatewayError::Db)?;
+                let map: HashMap<String, String> = pairs.into_iter().collect();
+                redirects_cache.insert(m.provider.clone(), map.clone());
+                map
+            };
+
+            if map.is_empty() {
+                if seen.insert(m.full_id.clone()) {
+                    out.push(m);
+                }
+                continue;
+            }
+
+            let resolved = resolve_redirect_chain(&map, &m.model_id, 16);
+            if resolved == m.model_id {
+                if seen.insert(m.full_id.clone()) {
+                    out.push(m);
+                }
+                continue;
+            }
+
+            let target_id = format!("{}/{}", m.provider, resolved);
+            if original_ids.contains(&target_id) {
+                continue;
+            }
+            if !seen.insert(target_id.clone()) {
+                continue;
+            }
+            out.push(CachedModelInfo {
+                full_id: target_id,
+                provider: m.provider,
+                model_id: resolved,
+                object: m.object,
+                created: m.created,
+                owned_by: m.owned_by,
+                cached_at: m.cached_at,
+            });
+        }
+
+        for m in out.into_iter() {
+            let model_id = m.full_id.clone();
+            union.entry(model_id.clone()).or_insert(m);
+            tokens_by_model
+                .entry(model_id)
+                .or_default()
+                .insert(token_out.id.clone(), token_out.name.clone());
+        }
+    }
+
+    let mut out: Vec<MyModelOut> = Vec::with_capacity(union.len());
+    for m in union.into_values() {
+        let provider = providers_by_id.get(&m.provider);
+        let (input_price, output_price, model_type) = price_by_key
+            .get(&format!("{}:{}", m.provider, m.model_id))
+            .cloned()
+            .map(|(p, c, mt)| (Some(p), Some(c), mt))
+            .unwrap_or((None, None, None));
+
+        let mut tokens: Vec<MyModelTokenOut> = tokens_by_model
+            .remove(&m.full_id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(id, name)| MyModelTokenOut { id, name })
+            .collect();
+        tokens.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+
+        out.push(MyModelOut {
+            id: m.full_id.clone(),
+            name: m.model_id.clone(),
+            model_id: m.model_id,
+            model_type,
+            provider: provider
+                .and_then(|p| p.display_name.clone())
+                .unwrap_or_else(|| m.provider.clone()),
+            provider_id: m.provider.clone(),
+            provider_enabled: provider.map(|p| p.enabled).unwrap_or(true),
+            upstream_endpoint_type: provider
+                .map(|p| match p.api_type {
+                    crate::config::settings::ProviderType::OpenAI => "openai",
+                    crate::config::settings::ProviderType::Anthropic => "anthropic",
+                    crate::config::settings::ProviderType::Zhipu => "zhipu",
+                }
+                .to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            input_price,
+            output_price,
+            redirect_name: String::new(),
+            status: "enabled".to_string(),
+            created_at: m.cached_at.to_rfc3339(),
+            is_favorite: false,
+            tokens,
+        });
+    }
+
+    out.sort_by(|a, b| {
+        a.provider_id
+            .cmp(&b.provider_id)
+            .then_with(|| a.model_id.cmp(&b.model_id))
+    });
+
+    log_simple_request(
+        &app_state,
+        start_time,
+        "GET",
+        &path,
+        "me_models_list",
+        None,
+        None,
+        token_for_log(provided_token.as_deref()),
+        200,
+        None,
+    )
+    .await;
+
+    Ok(Json(out))
 }
 
 #[derive(Debug, Deserialize, Default)]
