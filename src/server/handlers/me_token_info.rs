@@ -88,6 +88,7 @@ pub async fn my_token_balance(
         .await;
         return Ok(Json(serde_json::json!({
             "token_id": t.id,
+            "user_id": t.user_id,
             "amount_spent": spent,
             "max_amount": t.max_amount,
             "remaining": remaining,
@@ -98,7 +99,6 @@ pub async fn my_token_balance(
 
     let mut total_amount_spent = 0.0;
     let mut total_remaining = 0.0;
-    let mut has_unlimited = false;
     let items: Vec<_> = tokens
         .into_iter()
         .map(|t| {
@@ -109,13 +109,11 @@ pub async fn my_token_balance(
                     total_remaining += r;
                     Some(r)
                 }
-                None => {
-                    has_unlimited = true;
-                    None
-                }
+                None => None,
             };
             serde_json::json!({
                 "token_id": t.id,
+                "user_id": t.user_id,
                 "name": t.name,
                 "amount_spent": t.amount_spent,
                 "max_amount": t.max_amount,
@@ -145,7 +143,9 @@ pub async fn my_token_balance(
     Ok(Json(serde_json::json!({
         "total_amount_spent": total_amount_spent,
         "total_remaining": total_remaining,
-        "has_unlimited": has_unlimited,
+        // /me/token/balance only lists user-bound tokens (subscription billing),
+        // so it never represents "unlimited budget token".
+        "has_unlimited": false,
         "items": items,
     })))
 }

@@ -151,39 +151,49 @@ pub(super) async fn log_stream_success(
             }
         }
 
-        if let Some(delta) = amount_spent
-            && delta > 0.0
+        // 订阅计费：绑定用户 token 只扣 user.balance（单位：tokens），不扣金额
+        if let Some(u) = usage.as_ref()
             && let Ok(Some(t)) = app_state.token_store.get_token(tok).await
             && let Some(user_id) = t.user_id.as_deref()
         {
-            match app_state.user_store.add_balance(user_id, -delta).await {
-                Ok(Some(new_balance)) => {
-                    let meta = serde_json::json!({
-                        "client_token_id": t.id,
-                        "path": "/v1/chat/completions",
-                    })
-                    .to_string();
-                    if let Err(e) = app_state
-                        .balance_store
-                        .create_transaction(
-                            user_id,
-                            BalanceTransactionKind::Spend,
-                            -delta,
-                            Some(meta),
-                        )
-                        .await
-                    {
-                        tracing::warn!("Failed to insert balance transaction: {}", e);
+            let total_tokens = u.total_tokens as i64;
+            if total_tokens > 0 {
+                let delta_tokens = -(total_tokens as f64);
+                match app_state
+                    .user_store
+                    .add_balance(user_id, delta_tokens)
+                    .await
+                {
+                    Ok(Some(new_balance)) => {
+                        let meta = serde_json::json!({
+                            "client_token_id": t.id,
+                            "path": "/v1/chat/completions",
+                            "total_tokens": total_tokens,
+                            "amount_spent": amount_spent,
+                        })
+                        .to_string();
+                        if let Err(e) = app_state
+                            .balance_store
+                            .create_transaction(
+                                user_id,
+                                BalanceTransactionKind::Spend,
+                                delta_tokens,
+                                Some(meta),
+                            )
+                            .await
+                        {
+                            tracing::warn!("Failed to insert balance transaction: {}", e);
+                        }
+                        if new_balance <= 0.0 {
+                            let _ = app_state
+                                .token_store
+                                .set_enabled_for_user(user_id, false)
+                                .await;
+                        }
                     }
-                    if new_balance <= 0.0 {
-                        let _ = app_state
-                            .token_store
-                            .set_enabled_for_user(user_id, false)
-                            .await;
-                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!("Failed to deduct user balance: {}", e),
                 }
-                Ok(None) => {}
-                Err(e) => tracing::warn!("Failed to deduct user balance: {}", e),
             }
         }
     }
@@ -262,4 +272,122 @@ pub(super) fn parse_usage_from_value(v: &serde_json::Value) -> Option<Usage> {
             None
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::balance::BalanceStore;
+    use crate::admin::{CreateTokenPayload, TokenStore};
+    use crate::config::settings::{BalanceStrategy, LoadBalancing, LoggingConfig, ServerConfig};
+    use crate::logging::DatabaseLogger;
+    use crate::server::login::LoginManager;
+    use crate::users::{CreateUserPayload, UserRole, UserStatus, UserStore};
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    fn test_settings(db_path: String) -> crate::config::Settings {
+        crate::config::Settings {
+            load_balancing: LoadBalancing {
+                strategy: BalanceStrategy::FirstAvailable,
+            },
+            server: ServerConfig::default(),
+            logging: LoggingConfig {
+                database_path: db_path,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_success_deducts_user_balance_by_tokens() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("gateway.db");
+        let logger = Arc::new(
+            DatabaseLogger::new(db_path.to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let settings = test_settings(db_path.to_string_lossy().to_string());
+
+        let app_state = Arc::new(AppState {
+            config: settings,
+            load_balancer_state: Arc::new(crate::routing::LoadBalancerState::default()),
+            log_store: logger.clone(),
+            model_cache: logger.clone(),
+            providers: logger.clone(),
+            token_store: logger.clone(),
+            favorites_store: logger.clone(),
+            login_manager: Arc::new(LoginManager::new(logger.clone())),
+            user_store: logger.clone(),
+            refresh_token_store: logger.clone(),
+            password_reset_token_store: logger.clone(),
+            balance_store: logger.clone(),
+            subscription_store: logger.clone(),
+        });
+
+        let user = logger
+            .create_user(CreateUserPayload {
+                first_name: Some("U".into()),
+                last_name: Some("1".into()),
+                username: None,
+                email: "u1@example.com".into(),
+                phone_number: None,
+                password: None,
+                status: UserStatus::Active,
+                role: UserRole::Admin,
+                is_anonymous: false,
+            })
+            .await
+            .unwrap();
+        logger.add_balance(&user.id, 10_000.0).await.unwrap();
+
+        let token = logger
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: Some(user.id.clone()),
+                name: Some("t1".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+
+        let start = Utc::now();
+        log_stream_success(
+            app_state,
+            start,
+            "m1".into(),
+            "m1".into(),
+            "m1".into(),
+            "p1".into(),
+            None,
+            Some(token.token.clone()),
+            Some(Usage {
+                prompt_tokens: 400,
+                completion_tokens: 600,
+                total_tokens: 1000,
+                prompt_tokens_details: None,
+                completion_tokens_details: None,
+            }),
+        )
+        .await;
+
+        let fetched = logger.get_user(&user.id).await.unwrap().unwrap();
+        assert!((fetched.balance - 9000.0).abs() < 1e-9);
+
+        let txs = logger.list_transactions(&user.id, 10, 0).await.unwrap();
+        assert!(!txs.is_empty());
+        assert_eq!(txs[0].kind.as_str(), "spend");
+        assert!((txs[0].amount + 1000.0).abs() < 1e-9);
+    }
 }

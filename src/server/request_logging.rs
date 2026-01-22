@@ -101,61 +101,74 @@ pub async fn log_chat_request(
 
     // 增量更新 client_tokens：金额与 tokens（仅当有 usage/金额 与 Client Token 时）
     if let Some(tok) = client_token {
+        // 1) update money spent (for statistics) when pricing is available
         if let Some(delta) = amount_spent {
             if let Err(e) = app_state.token_store.add_amount_spent(tok, delta).await {
                 tracing::warn!("Failed to update token spent: {}", e);
             }
-
-            if delta > 0.0 {
-                if let Ok(Some(t)) = app_state.token_store.get_token(tok).await {
-                    if let Some(user_id) = t.user_id.as_deref() {
-                        match app_state.user_store.add_balance(user_id, -delta).await {
-                            Ok(Some(new_balance)) => {
-                                let meta = serde_json::json!({
-                                    "client_token_id": t.id,
-                                    "path": "/v1/chat/completions",
-                                })
-                                .to_string();
-                                if let Err(e) = app_state
-                                    .balance_store
-                                    .create_transaction(
-                                        user_id,
-                                        BalanceTransactionKind::Spend,
-                                        -delta,
-                                        Some(meta),
-                                    )
-                                    .await
-                                {
-                                    tracing::warn!("Failed to insert balance transaction: {}", e);
-                                }
-                                if new_balance <= 0.0 {
-                                    let _ = app_state
-                                        .token_store
-                                        .set_enabled_for_user(user_id, false)
-                                        .await;
-                                }
-                            }
-                            Ok(None) => {}
-                            Err(e) => {
-                                tracing::warn!("Failed to deduct user balance: {}", e);
-                            }
-                        }
-                    }
-                }
-            }
         }
+
+        // 2) update token usage counters + compute tokens used for subscription billing
+        let mut tokens_used: Option<i64> = None;
         if let Ok(r) = response
             && let Some(u) = r.typed.usage.as_ref()
         {
             let prompt = u.prompt_tokens as i64;
             let completion = u.completion_tokens as i64;
             let total = u.total_tokens as i64;
+            tokens_used = Some(total);
             if let Err(e) = app_state
                 .token_store
                 .add_usage_spent(tok, prompt, completion, total)
                 .await
             {
                 tracing::warn!("Failed to update token tokens: {}", e);
+            }
+        }
+
+        // 3) subscription billing: user-bound tokens deduct from user.balance (unit: tokens)
+        if let Some(total_tokens) = tokens_used.filter(|v| *v > 0) {
+            if let Ok(Some(t)) = app_state.token_store.get_token(tok).await {
+                if let Some(user_id) = t.user_id.as_deref() {
+                    let delta_tokens = -(total_tokens as f64);
+                    match app_state
+                        .user_store
+                        .add_balance(user_id, delta_tokens)
+                        .await
+                    {
+                        Ok(Some(new_balance)) => {
+                            let meta = serde_json::json!({
+                                "client_token_id": t.id,
+                                "path": "/v1/chat/completions",
+                                "total_tokens": total_tokens,
+                                "amount_spent": amount_spent,
+                            })
+                            .to_string();
+                            if let Err(e) = app_state
+                                .balance_store
+                                .create_transaction(
+                                    user_id,
+                                    BalanceTransactionKind::Spend,
+                                    delta_tokens,
+                                    Some(meta),
+                                )
+                                .await
+                            {
+                                tracing::warn!("Failed to insert balance transaction: {}", e);
+                            }
+                            if new_balance <= 0.0 {
+                                let _ = app_state
+                                    .token_store
+                                    .set_enabled_for_user(user_id, false)
+                                    .await;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::warn!("Failed to deduct user balance: {}", e);
+                        }
+                    }
+                }
             }
         }
     }
@@ -392,6 +405,7 @@ mod tests {
             })
             .await
             .unwrap();
+        // balance unit: tokens
         logger.add_balance(&user.id, 1.0).await.unwrap().unwrap();
 
         let created = logger
@@ -454,5 +468,6 @@ mod tests {
         assert_eq!(txs.len(), 1);
         assert_eq!(txs[0].kind.as_str(), "spend");
         assert!(txs[0].amount < 0.0);
+        assert!(approx_eq(txs[0].amount, -2.0, 1e-12));
     }
 }
