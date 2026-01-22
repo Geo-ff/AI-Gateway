@@ -218,6 +218,76 @@ components:
           format: int64
           nullable: true
 
+    MyRequestLogEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          nullable: true
+        timestamp:
+          type: string
+          format: date-time
+        method:
+          type: string
+        path:
+          type: string
+        request_type:
+          type: string
+        requested_model:
+          type: string
+          nullable: true
+        effective_model:
+          type: string
+          nullable: true
+        client_token_id:
+          type: string
+          nullable: true
+        client_token_name:
+          type: string
+          nullable: true
+        amount_spent:
+          type: number
+          format: double
+          nullable: true
+        status_code:
+          type: integer
+          format: int32
+        response_time_ms:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int32
+          nullable: true
+        completion_tokens:
+          type: integer
+          format: int32
+          nullable: true
+        total_tokens:
+          type: integer
+          format: int32
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        success:
+          type: boolean
+
+    MyRequestLogsResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/MyRequestLogEntry'
+        next_cursor:
+          type: integer
+          format: int64
+          nullable: true
+
     OperationLogEntry:
       type: object
       properties:
@@ -2731,6 +2801,59 @@ paths:
                 $ref: '#/components/schemas/Error'
         '404':
           description: token 不存在或不属于当前用户
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /me/logs/requests:
+    get:
+      summary: 获取我的日志列表
+      description: 获取当前用户的消费/充值日志（请求日志），支持分页游标与基础筛选
+      operationId: listMyRequestLogs
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 200
+          description: 返回记录数量限制（1..1000）
+        - name: cursor
+          in: query
+          schema:
+            type: integer
+            format: int64
+          description: 分页游标（上一页最后一条记录的ID）
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [consumption, recharge]
+          description: 类型筛选（可选）
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [success, failed]
+          description: 状态筛选（可选）
+        - name: filter
+          in: query
+          schema:
+            type: string
+          description: 关键字筛选（可选；匹配密钥名/令牌/调用模型）
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MyRequestLogsResponse'
+        '401':
+          description: 未登录/Token 无效/过期
           content:
             application/json:
               schema:

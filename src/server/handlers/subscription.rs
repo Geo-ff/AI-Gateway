@@ -1,15 +1,56 @@
 use axum::{Json, extract::State, http::HeaderMap};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::sync::Arc;
 
 use super::auth::require_user;
 use crate::balance::BalanceTransactionKind;
 use crate::error::GatewayError;
+use crate::logging::RequestLog;
+use crate::logging::types::REQ_TYPE_RECHARGE;
 use crate::server::AppState;
 use crate::server::request_logging::log_simple_request;
 use crate::server::util::{bearer_token, token_for_log};
 use crate::subscription::SubscriptionPlan;
+
+async fn log_recharge_request(
+    app_state: &AppState,
+    start_time: DateTime<Utc>,
+    user_id: Option<&str>,
+    status_code: u16,
+    amount_spent: Option<f64>,
+    error_message: Option<String>,
+) {
+    let end_time = Utc::now();
+    let response_time_ms = (end_time - start_time).num_milliseconds();
+    let log = RequestLog {
+        id: None,
+        timestamp: start_time,
+        method: "POST".to_string(),
+        path: "/subscription/purchase".to_string(),
+        request_type: REQ_TYPE_RECHARGE.to_string(),
+        requested_model: None,
+        effective_model: None,
+        model: None,
+        provider: None,
+        api_key: None,
+        client_token: None,
+        user_id: user_id.map(|s| s.to_string()),
+        amount_spent,
+        status_code,
+        response_time_ms,
+        prompt_tokens: None,
+        completion_tokens: None,
+        total_tokens: None,
+        cached_tokens: None,
+        reasoning_tokens: None,
+        error_message,
+    };
+
+    if let Err(e) = app_state.log_store.log_request(log).await {
+        tracing::error!("Failed to log recharge request: {}", e);
+    }
+}
 
 pub async fn list_plans(
     State(app_state): State<Arc<AppState>>,
@@ -53,24 +94,12 @@ pub async fn purchase_plan(
     Json(payload): Json<PurchaseRequest>,
 ) -> Result<Json<serde_json::Value>, GatewayError> {
     let start_time = Utc::now();
-    let provided = bearer_token(&headers);
     let claims = match require_user(&headers) {
         Ok(v) => v,
         Err(e) => {
             let code = e.status_code().as_u16();
-            log_simple_request(
-                &app_state,
-                start_time,
-                "POST",
-                "/subscription/purchase",
-                "subscription_purchase",
-                None,
-                None,
-                provided.as_deref(),
-                code,
-                Some(e.to_string()),
-            )
-            .await;
+            log_recharge_request(&app_state, start_time, None, code, None, Some(e.to_string()))
+                .await;
             return Err(e);
         }
     };
@@ -84,16 +113,12 @@ pub async fn purchase_plan(
     else {
         let ge = GatewayError::NotFound("plan not found".into());
         let code = ge.status_code().as_u16();
-        log_simple_request(
+        log_recharge_request(
             &app_state,
             start_time,
-            "POST",
-            "/subscription/purchase",
-            "subscription_purchase",
-            None,
-            None,
-            provided.as_deref(),
+            Some(&claims.sub),
             code,
+            None,
             Some(ge.to_string()),
         )
         .await;
@@ -101,14 +126,41 @@ pub async fn purchase_plan(
     };
 
     if plan.credits <= 0.0 {
-        return Err(GatewayError::Config("invalid plan credits".into()));
+        let ge = GatewayError::Config("invalid plan credits".into());
+        let code = ge.status_code().as_u16();
+        log_recharge_request(
+            &app_state,
+            start_time,
+            Some(&claims.sub),
+            code,
+            plan.price_cny,
+            Some(ge.to_string()),
+        )
+        .await;
+        return Err(ge);
     }
 
-    let new_balance = app_state
+    let new_balance = match app_state
         .user_store
         .add_balance(&claims.sub, plan.credits)
         .await?
-        .ok_or_else(|| GatewayError::Unauthorized("invalid credentials".into()))?;
+    {
+        Some(v) => v,
+        None => {
+            let ge = GatewayError::Unauthorized("invalid credentials".into());
+            let code = ge.status_code().as_u16();
+            log_recharge_request(
+                &app_state,
+                start_time,
+                Some(&claims.sub),
+                code,
+                plan.price_cny,
+                Some(ge.to_string()),
+            )
+            .await;
+            return Err(ge);
+        }
+    };
 
     let meta = serde_json::json!({
         "plan_id": plan.plan_id,
@@ -117,7 +169,7 @@ pub async fn purchase_plan(
         "plan_credits": plan.credits,
     })
     .to_string();
-    let tx = app_state
+    let tx = match app_state
         .balance_store
         .create_transaction(
             &claims.sub,
@@ -125,18 +177,30 @@ pub async fn purchase_plan(
             plan.credits,
             Some(meta),
         )
-        .await?;
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            let code = e.status_code().as_u16();
+            log_recharge_request(
+                &app_state,
+                start_time,
+                Some(&claims.sub),
+                code,
+                plan.price_cny,
+                Some(e.to_string()),
+            )
+            .await;
+            return Err(e);
+        }
+    };
 
-    log_simple_request(
+    log_recharge_request(
         &app_state,
         start_time,
-        "POST",
-        "/subscription/purchase",
-        "subscription_purchase",
-        None,
-        None,
-        token_for_log(provided.as_deref()),
+        Some(&claims.sub),
         200,
+        plan.price_cny,
         None,
     )
     .await;
@@ -158,6 +222,7 @@ mod tests {
     use crate::subscription::SubscriptionPlan;
     use crate::users::{CreateUserPayload, UserRole, UserStatus, UserStore};
     use axum::body::Body;
+    use axum::extract::Query;
     use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
     use axum::http::{Request, StatusCode};
     use chrono::{Duration, Utc};
@@ -319,6 +384,51 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(!fetched.enabled);
+
+        // 充值请求写入日志：amount_spent=credits 且带 user_id（用于管理端展示使用用户）
+        let logs = logger.get_recent_logs_with_cursor(20, None).await.unwrap();
+        let recharge_log = logs
+            .iter()
+            .find(|l| l.request_type == "recharge" && l.path == "/subscription/purchase")
+            .expect("missing recharge request log");
+        assert_eq!(recharge_log.user_id.as_deref(), Some(user.id.as_str()));
+        assert_eq!(recharge_log.amount_spent, Some(9.9));
+
+        // 管理端请求日志返回 username（通过 user_id 回填）
+        let admin_claims = super::super::auth::AccessTokenClaims {
+            sub: "sa".into(),
+            email: "sa@example.com".into(),
+            role: "superadmin".into(),
+            permissions: Vec::new(),
+            jti: None,
+            exp: (now + Duration::minutes(30)).timestamp(),
+            iat: Some(now.timestamp()),
+        };
+        let admin_access_token = super::super::auth::issue_access_token(&admin_claims).unwrap();
+        let mut admin_headers = HeaderMap::new();
+        admin_headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", admin_access_token)).unwrap(),
+        );
+        let Json(admin_out) = crate::server::handlers::admin_logs::list_request_logs(
+            State(app_state.clone()),
+            admin_headers,
+            Query(crate::server::handlers::admin_logs::LogsQuery {
+                limit: Some(200),
+                cursor: None,
+                request_type: Some("recharge".into()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+        let admin_recharge = admin_out
+            .data
+            .iter()
+            .find(|l| l.request_type == "recharge" && l.path == "/subscription/purchase")
+            .expect("missing admin recharge log entry");
+        assert_eq!(admin_recharge.amount_spent, Some(9.9));
+        assert_eq!(admin_recharge.username.as_deref(), Some(user.username.as_str()));
     }
 
     #[tokio::test]
@@ -372,6 +482,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
 
         let res = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("GET")
@@ -382,5 +493,32 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+
+        // `/me/logs/requests` 路由必须存在：未登录时应返回 401 而不是 404
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/me/logs/requests")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/me/logs/requests")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 }

@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 // 建议统一的请求类型常量（可扩展）
 pub const REQ_TYPE_CHAT_ONCE: &str = "chat_once";
 pub const REQ_TYPE_CHAT_STREAM: &str = "chat_stream";
+pub const REQ_TYPE_RECHARGE: &str = "recharge";
 pub const REQ_TYPE_MODELS_LIST: &str = "models_list";
 pub const REQ_TYPE_PROVIDER_MODELS_LIST: &str = "provider_models_list";
 pub const REQ_TYPE_PROVIDER_MODELS_BASEURL_LIST: &str = "provider_models_baseurl_list";
@@ -43,6 +44,7 @@ pub struct RequestLog {
     pub provider: Option<String>,
     pub api_key: Option<String>,
     pub client_token: Option<String>,
+    pub user_id: Option<String>,
     // 本次请求消耗的金额；仅在有价格与 usage 可用时计算
     pub amount_spent: Option<f64>,
     pub status_code: u16,

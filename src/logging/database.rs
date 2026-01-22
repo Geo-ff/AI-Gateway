@@ -687,6 +687,7 @@ impl DatabaseLogger {
                 reasoning_tokens INTEGER,
                 error_message TEXT,
                 client_token TEXT,
+                user_id TEXT,
                 amount_spent REAL
             )",
             [],
@@ -927,6 +928,7 @@ impl DatabaseLogger {
 
         // Schema migrations for request_logs: client_token + amount_spent columns
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN client_token TEXT", []);
+        let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN user_id TEXT", []);
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN amount_spent REAL", []);
         // Pricing table for models
         conn.execute(
@@ -1077,8 +1079,8 @@ impl DatabaseLogger {
                 timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                 api_key, status_code, response_time_ms, prompt_tokens,
                 completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
-                client_token, amount_spent
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                client_token, user_id, amount_spent
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             rusqlite::params![
                 to_beijing_string(&log.timestamp),
                 &log.method,
@@ -1098,6 +1100,7 @@ impl DatabaseLogger {
                 log.reasoning_tokens,
                 &log.error_message,
                 &log.client_token,
+                &log.user_id,
                 &log.amount_spent,
             ],
         )?;
@@ -1123,7 +1126,7 @@ impl DatabaseLogger {
                 "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                         api_key, status_code, response_time_ms, prompt_tokens,
                         completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
-                        client_token, amount_spent
+                        client_token, user_id, amount_spent
                  FROM request_logs
                  WHERE id < ?1
                  ORDER BY id DESC
@@ -1134,7 +1137,7 @@ impl DatabaseLogger {
                 "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                         api_key, status_code, response_time_ms, prompt_tokens,
                         completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
-                        client_token, amount_spent
+                        client_token, user_id, amount_spent
                  FROM request_logs
                  ORDER BY id DESC
                  LIMIT ?1",
@@ -1168,7 +1171,7 @@ impl DatabaseLogger {
                 "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                         api_key, status_code, response_time_ms, prompt_tokens,
                         completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
-                        client_token, amount_spent
+                        client_token, user_id, amount_spent
                  FROM request_logs
                  WHERE id < ?1
                  ORDER BY id DESC
@@ -1179,7 +1182,7 @@ impl DatabaseLogger {
                 "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                         api_key, status_code, response_time_ms, prompt_tokens,
                         completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
-                        client_token, amount_spent
+                        client_token, user_id, amount_spent
                  FROM request_logs
                  ORDER BY id DESC
                  LIMIT ?1",
@@ -1212,7 +1215,7 @@ impl DatabaseLogger {
                 "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                         api_key, status_code, response_time_ms, prompt_tokens,
                         completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
-                        client_token, amount_spent
+                        client_token, user_id, amount_spent
                  FROM request_logs
                  WHERE method = ?1 AND path = ?2 AND id < ?3
                  ORDER BY id DESC
@@ -1223,7 +1226,7 @@ impl DatabaseLogger {
                 "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                         api_key, status_code, response_time_ms, prompt_tokens,
                         completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
-                        client_token, amount_spent
+                        client_token, user_id, amount_spent
                  FROM request_logs
                  WHERE method = ?1 AND path = ?2
                  ORDER BY id DESC
@@ -1272,7 +1275,7 @@ impl DatabaseLogger {
             "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
                     api_key, status_code, response_time_ms, prompt_tokens,
                     completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
-                    client_token, amount_spent
+                    client_token, user_id, amount_spent
              FROM request_logs WHERE client_token = ?1 ORDER BY id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(rusqlite::params![token, limit], |row| {
@@ -1296,7 +1299,8 @@ impl DatabaseLogger {
                 reasoning_tokens: row.get(16)?,
                 error_message: row.get(17)?,
                 client_token: row.get(18)?,
-                amount_spent: row.get(19)?,
+                user_id: row.get(19)?,
+                amount_spent: row.get(20)?,
             })
         })?;
         let mut out = Vec::new();
@@ -1434,7 +1438,8 @@ fn map_request_log_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestLog> 
         reasoning_tokens: row.get(16)?,
         error_message: row.get(17)?,
         client_token: row.get(18)?,
-        amount_spent: row.get(19)?,
+        user_id: row.get(19)?,
+        amount_spent: row.get(20)?,
     })
 }
 

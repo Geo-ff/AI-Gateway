@@ -24,6 +24,7 @@ mod cache;
 mod chat;
 mod client_tokens;
 mod me_balance;
+mod me_logs;
 mod me_token_info;
 mod me_tokens;
 mod model_prices;
@@ -234,6 +235,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/me/tokens/{id}/toggle", post(me_tokens::toggle_my_token))
         .route("/me/token/balance", get(me_token_info::my_token_balance))
         .route("/me/token/usage", get(me_token_info::my_token_usage))
+        .route("/me/logs/requests", get(me_logs::list_my_request_logs))
         .route("/me/balance", get(me_balance::get_balance))
         .route(
             "/me/balance/transactions",

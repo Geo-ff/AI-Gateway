@@ -271,18 +271,36 @@ pub async fn list_request_logs(
         map
     };
     let username_by_user_id = {
-        use std::collections::HashMap;
+        use std::collections::{HashMap, HashSet};
         let mut map: HashMap<String, String> = HashMap::new();
         if let Ok(users) = app_state.user_store.list_users().await {
             for u in users {
                 map.insert(u.id, u.username);
             }
+            map
+        } else {
+            // Fallback: only resolve usernames that actually appear in current log batch.
+            let mut needed: HashSet<String> = HashSet::new();
+            for l in filtered.iter() {
+                if let Some(uid) = l.user_id.as_ref() {
+                    needed.insert(uid.clone());
+                }
+            }
+            for uid in needed.into_iter() {
+                if let Ok(Some(u)) = app_state.user_store.get_user(&uid).await {
+                    map.insert(u.id, u.username);
+                }
+            }
+            map
         }
-        map
     };
     let data: Vec<RequestLogEntry> = filtered
         .into_iter()
         .map(|log| {
+            let username_from_user_id = log
+                .user_id
+                .as_ref()
+                .and_then(|uid| username_by_user_id.get(uid).cloned());
             // 注意：严禁返回 token/JWT 明文；这里始终对 client_token 做归一化输出
             // - Token / 明文 token -> client_token_id = atk_...；client_token_name = token.name(或 fallback)
             // - 管理员身份 / JWT -> client_token_id = null；client_token_name = 管理员(...)
@@ -301,7 +319,7 @@ pub async fn list_request_logs(
                 Some(NormalizedClientToken::AdminIdentity(kind)) => {
                     (None, Some(format!("管理员({})", kind)), None)
                 }
-                None => (None, None, None),
+                None => (None, None, username_from_user_id),
             };
 
             RequestLogEntry {

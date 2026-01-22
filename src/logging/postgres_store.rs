@@ -200,6 +200,7 @@ impl PgLogStore {
                 reasoning_tokens INTEGER,
                 error_message TEXT,
                 client_token TEXT,
+                user_id TEXT,
                 amount_spent DOUBLE PRECISION
             )"#,
                 &[],
@@ -212,6 +213,9 @@ impl PgLogStore {
                 "ALTER TABLE request_logs ADD COLUMN amount_spent DOUBLE PRECISION",
                 &[],
             )
+            .await;
+        let _ = client
+            .execute("ALTER TABLE request_logs ADD COLUMN user_id TEXT", &[])
             .await;
         let _ = client
             .execute(
@@ -691,7 +695,8 @@ impl PgLogStore {
             reasoning_tokens: pg_row_u32_opt(&r, 16),
             error_message: pg_row_opt_string(&r, 17),
             client_token: pg_row_opt_string(&r, 18),
-            amount_spent: r.try_get::<usize, Option<f64>>(19).ok().flatten(),
+            user_id: pg_row_opt_string(&r, 19),
+            amount_spent: r.try_get::<usize, Option<f64>>(20).ok().flatten(),
         }
     }
 }
@@ -702,9 +707,9 @@ impl RequestLogStore for PgLogStore {
             let client = self.pool.pick();
             let res = client
                 .execute(
-                    "INSERT INTO request_logs (timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent)
-                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)",
-                    &[&to_beijing_string(&log.timestamp), &log.method, &log.path, &log.request_type, &log.requested_model, &log.effective_model, &log.model, &log.provider, &log.api_key, &i32::from(log.status_code), &log.response_time_ms, &log.prompt_tokens.map(|v| v as i32), &log.completion_tokens.map(|v| v as i32), &log.total_tokens.map(|v| v as i32), &log.cached_tokens.map(|v| v as i32), &log.reasoning_tokens.map(|v| v as i32), &log.error_message, &log.client_token, &log.amount_spent],
+                    "INSERT INTO request_logs (timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)",
+                    &[&to_beijing_string(&log.timestamp), &log.method, &log.path, &log.request_type, &log.requested_model, &log.effective_model, &log.model, &log.provider, &log.api_key, &i32::from(log.status_code), &log.response_time_ms, &log.prompt_tokens.map(|v| v as i32), &log.completion_tokens.map(|v| v as i32), &log.total_tokens.map(|v| v as i32), &log.cached_tokens.map(|v| v as i32), &log.reasoning_tokens.map(|v| v as i32), &log.error_message, &log.client_token, &log.user_id, &log.amount_spent],
                 )
                 .await
                 .map_err(pg_err)?;
@@ -721,7 +726,7 @@ impl RequestLogStore for PgLogStore {
             let lim: i64 = limit as i64;
             let rows = client
                 .query(
-                    "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs ORDER BY id DESC LIMIT $1",
+                    "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent FROM request_logs ORDER BY id DESC LIMIT $1",
                     &[&lim],
                 )
                 .await
@@ -742,7 +747,7 @@ impl RequestLogStore for PgLogStore {
                 let cursor_i32 = cursor_id as i32;
                 client
                     .query(
-                        "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs WHERE id < $1 ORDER BY id DESC LIMIT $2",
+                        "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent FROM request_logs WHERE id < $1 ORDER BY id DESC LIMIT $2",
                         &[&cursor_i32, &lim],
                     )
                     .await
@@ -750,7 +755,7 @@ impl RequestLogStore for PgLogStore {
             } else {
                 client
                     .query(
-                        "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs ORDER BY id DESC LIMIT $1",
+                        "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent FROM request_logs ORDER BY id DESC LIMIT $1",
                         &[&lim],
                     )
                     .await
@@ -772,7 +777,7 @@ impl RequestLogStore for PgLogStore {
                 let cursor_i32 = cursor_id as i32;
                 client
                     .query(
-                        "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs WHERE id < $1 ORDER BY id DESC LIMIT $2",
+                        "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent FROM request_logs WHERE id < $1 ORDER BY id DESC LIMIT $2",
                         &[&cursor_i32, &lim],
                     )
                     .await
@@ -780,7 +785,7 @@ impl RequestLogStore for PgLogStore {
             } else {
                 client
                     .query(
-                        "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs ORDER BY id DESC LIMIT $1",
+                        "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent FROM request_logs ORDER BY id DESC LIMIT $1",
                         &[&lim],
                     )
                     .await
@@ -804,7 +809,7 @@ impl RequestLogStore for PgLogStore {
                 let cursor_i32 = cursor_id as i32;
                 client
                     .query(
-                        "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs WHERE method = $1 AND path = $2 AND id < $3 ORDER BY id DESC LIMIT $4",
+                        "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent FROM request_logs WHERE method = $1 AND path = $2 AND id < $3 ORDER BY id DESC LIMIT $4",
                         &[&method, &path, &cursor_i32, &lim],
                     )
                     .await
@@ -812,7 +817,7 @@ impl RequestLogStore for PgLogStore {
             } else {
                 client
                     .query(
-                        "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs WHERE method = $1 AND path = $2 ORDER BY id DESC LIMIT $3",
+                        "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent FROM request_logs WHERE method = $1 AND path = $2 ORDER BY id DESC LIMIT $3",
                         &[&method, &path, &lim],
                     )
                     .await
@@ -847,7 +852,7 @@ impl RequestLogStore for PgLogStore {
             let lim: i64 = limit as i64;
             let rows = client
                 .query(
-                    "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, amount_spent FROM request_logs WHERE client_token = $1 ORDER BY id DESC LIMIT $2",
+                    "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent FROM request_logs WHERE client_token = $1 ORDER BY id DESC LIMIT $2",
                     &[&token, &lim],
                 )
                 .await
