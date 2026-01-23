@@ -18,6 +18,7 @@ pub struct ModelListResponse {
 pub struct Model {
     pub id: String,
     pub object: String,
+    #[serde(default)]
     pub created: u64,
     pub owned_by: String,
 }
