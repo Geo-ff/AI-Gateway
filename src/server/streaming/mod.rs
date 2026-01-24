@@ -10,11 +10,13 @@ use std::sync::Arc;
 use crate::error::GatewayError;
 use crate::providers::openai::ChatCompletionRequest;
 use crate::server::AppState;
+use crate::server::chat_request::GatewayChatCompletionRequest;
 use crate::server::model_redirect::{
     apply_model_redirects, apply_provider_model_redirects_to_parsed_model,
 };
 use crate::server::provider_dispatch::select_provider_for_model;
 
+mod anthropic;
 mod common;
 mod openai;
 mod zhipu;
@@ -26,8 +28,10 @@ mod zhipu;
 pub async fn stream_chat_completions(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(mut request): Json<ChatCompletionRequest>,
+    Json(gateway_req): Json<GatewayChatCompletionRequest>,
 ) -> Result<Response, GatewayError> {
+    let top_k = gateway_req.top_k;
+    let mut request = gateway_req.request;
     if !request.stream.unwrap_or(false) {
         return Err(GatewayError::Config(
             "stream=false for streaming endpoint".into(),
@@ -319,19 +323,19 @@ pub async fn stream_chat_completions(
     let response = match selected.provider.api_type {
         crate::config::ProviderType::OpenAI | crate::config::ProviderType::Doubao => {
             openai::stream_openai_chat(
-            app_state.clone(),
-            start_time,
-            upstream_req.model.clone(),
-            requested_model.clone(),
-            upstream_req.model.clone(),
-            selected.provider.base_url.clone(),
-            selected.provider.name.clone(),
-            selected.api_key.clone(),
-            client_token.clone(),
-            upstream_req,
-        )
-        .await
-        .map(IntoResponse::into_response)
+                app_state.clone(),
+                start_time,
+                upstream_req.model.clone(),
+                requested_model.clone(),
+                upstream_req.model.clone(),
+                selected.provider.base_url.clone(),
+                selected.provider.name.clone(),
+                selected.api_key.clone(),
+                client_token.clone(),
+                upstream_req,
+            )
+            .await
+            .map(IntoResponse::into_response)
         }
         crate::config::ProviderType::Zhipu => zhipu::stream_zhipu_chat(
             app_state.clone(),
@@ -347,9 +351,21 @@ pub async fn stream_chat_completions(
         )
         .await
         .map(IntoResponse::into_response),
-        crate::config::ProviderType::Anthropic => Err(GatewayError::Config(
-            "Anthropic streaming not implemented".into(),
-        )),
+        crate::config::ProviderType::Anthropic => anthropic::stream_anthropic_chat(
+            app_state.clone(),
+            start_time,
+            upstream_req.model.clone(),
+            requested_model.clone(),
+            upstream_req.model.clone(),
+            selected.provider.base_url.clone(),
+            selected.provider.name.clone(),
+            selected.api_key.clone(),
+            client_token.clone(),
+            upstream_req,
+            top_k,
+        )
+        .await
+        .map(IntoResponse::into_response),
     };
 
     if let Some(tok) = client_token.as_deref()
@@ -513,9 +529,16 @@ mod tests {
         }))
         .unwrap();
 
-        let err = stream_chat_completions(State(app_state), headers, Json(req))
-            .await
-            .unwrap_err();
+        let err = stream_chat_completions(
+            State(app_state),
+            headers,
+            Json(GatewayChatCompletionRequest {
+                request: req,
+                top_k: None,
+            }),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("余额不足"));
 
         let tokens = logger.list_tokens_by_user(&user.id).await.unwrap();

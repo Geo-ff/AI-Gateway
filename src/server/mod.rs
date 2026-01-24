@@ -1,3 +1,4 @@
+pub(crate) mod chat_request;
 pub mod handlers;
 pub mod login;
 pub(crate) mod model_cache;

@@ -5,11 +5,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
-use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::error::GatewayError;
-use crate::providers::openai::ChatCompletionRequest;
+use crate::server::chat_request::GatewayChatCompletionRequest;
 use crate::server::provider_dispatch::{
     call_provider_with_parsed_model, select_provider_for_model,
 };
@@ -52,19 +51,6 @@ fn error_payload_to_chat_completion(
     })
 }
 
-/// Chat Completions 主处理入口：
-/// - 根据 `stream` 标志分流到流式或一次性请求路径
-/// - 校验并加载客户端令牌，检查额度/过期/模型白名单等限制
-/// - 根据模型选择具体 Provider，校验价格配置并调用上游
-/// - 记录详细请求日志与 usage，用于后续统计和自动禁用超限令牌
-#[derive(Debug, Clone, Deserialize)]
-pub struct GatewayChatCompletionRequest {
-    #[serde(flatten)]
-    pub request: ChatCompletionRequest,
-    /// Top-k 采样参数（尽力而为：目前仅 Anthropic 生效）
-    pub top_k: Option<u32>,
-}
-
 pub async fn chat_completions(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -73,7 +59,12 @@ pub async fn chat_completions(
     let top_k = gateway_req.top_k;
     let request = gateway_req.request;
     if request.stream.unwrap_or(false) {
-        let response = stream_chat_completions(State(app_state), headers, Json(request)).await?;
+        let response = stream_chat_completions(
+            State(app_state),
+            headers,
+            Json(GatewayChatCompletionRequest { request, top_k }),
+        )
+        .await?;
         Ok(response.into_response())
     } else {
         let mut request = request;
