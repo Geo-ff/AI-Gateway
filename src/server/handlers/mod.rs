@@ -204,6 +204,14 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(admin_metrics::models_distribution),
         )
         .route(
+            "/admin/metrics/resource-health",
+            get(admin_metrics::resource_health),
+        )
+        .route(
+            "/admin/metrics/series-model-cost",
+            get(admin_metrics::series_model_cost),
+        )
+        .route(
             "/admin/metrics/series-models",
             get(admin_metrics::series_models),
         )
