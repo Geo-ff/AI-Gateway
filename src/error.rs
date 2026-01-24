@@ -54,6 +54,7 @@ struct ErrorBody {
 impl GatewayError {
     fn user_message(&self) -> String {
         match self {
+            GatewayError::Http(err) => format_reqwest_error(err),
             GatewayError::TimeParse(s)
             | GatewayError::Config(s)
             | GatewayError::NotFound(s)
@@ -96,6 +97,39 @@ impl GatewayError {
             GatewayError::Forbidden(_) => "forbidden",
         }
     }
+}
+
+fn format_reqwest_error(err: &reqwest::Error) -> String {
+    use std::error::Error as _;
+
+    let mut msg = err.to_string();
+
+    // Append a compact source chain to avoid losing the actual root cause (DNS/TLS/proxy/etc).
+    let mut chain = Vec::new();
+    let mut cur = err.source();
+    while let Some(e) = cur {
+        let s = e.to_string();
+        if !s.trim().is_empty() {
+            chain.push(s);
+        }
+        cur = e.source();
+    }
+    if !chain.is_empty() {
+        msg.push_str("; caused by: ");
+        msg.push_str(&chain.join(" -> "));
+    }
+
+    // Actionable hint: reqwest uses HTTP(S)_PROXY by default; local proxy failures often look like
+    // "error sending request". If this URL would be bypassed by our proxy rule, call it out.
+    if let Some(url) = err.url().map(|u| u.as_str()) {
+        if crate::http_client::should_bypass_proxy_for_url(url) {
+            msg.push_str(
+                "; hint: proxy env vars detected; consider setting NO_PROXY for this host or disabling HTTP(S)_PROXY for the gateway process",
+            );
+        }
+    }
+
+    msg
 }
 
 impl IntoResponse for GatewayError {

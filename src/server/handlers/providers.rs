@@ -341,7 +341,7 @@ pub async fn create_provider(
         provider: Some(p.name.clone()),
         details: Some(serde_json::to_string(&serde_json::json!({
             "display_name": p.display_name,
-            "api_type": match p.api_type { ProviderType::OpenAI => "openai", ProviderType::Anthropic => "anthropic", ProviderType::Zhipu => "zhipu" },
+            "api_type": match p.api_type { ProviderType::OpenAI => "openai", ProviderType::Anthropic => "anthropic", ProviderType::Zhipu => "zhipu", ProviderType::Doubao => "doubao" },
             "base_url": p.base_url,
             "models_endpoint": p.models_endpoint
         })).unwrap_or_default()),
@@ -454,7 +454,7 @@ pub async fn update_provider(
         provider: Some(p.name.clone()),
         details: Some(serde_json::to_string(&serde_json::json!({
             "display_name": p.display_name,
-            "api_type": match p.api_type { ProviderType::OpenAI => "openai", ProviderType::Anthropic => "anthropic", ProviderType::Zhipu => "zhipu" },
+            "api_type": match p.api_type { ProviderType::OpenAI => "openai", ProviderType::Anthropic => "anthropic", ProviderType::Zhipu => "zhipu", ProviderType::Doubao => "doubao" },
             "base_url": p.base_url,
             "models_endpoint": p.models_endpoint
         })).unwrap_or_default()),

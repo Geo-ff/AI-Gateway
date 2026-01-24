@@ -535,6 +535,7 @@ pub async fn list_my_models(
                         crate::config::settings::ProviderType::OpenAI => "openai",
                         crate::config::settings::ProviderType::Anthropic => "anthropic",
                         crate::config::settings::ProviderType::Zhipu => "zhipu",
+                        crate::config::settings::ProviderType::Doubao => "doubao",
                     }
                     .to_string()
                 })

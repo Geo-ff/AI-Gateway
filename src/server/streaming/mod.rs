@@ -317,7 +317,8 @@ pub async fn stream_chat_completions(
     }
 
     let response = match selected.provider.api_type {
-        crate::config::ProviderType::OpenAI => openai::stream_openai_chat(
+        crate::config::ProviderType::OpenAI | crate::config::ProviderType::Doubao => {
+            openai::stream_openai_chat(
             app_state.clone(),
             start_time,
             upstream_req.model.clone(),
@@ -330,7 +331,8 @@ pub async fn stream_chat_completions(
             upstream_req,
         )
         .await
-        .map(IntoResponse::into_response),
+        .map(IntoResponse::into_response)
+        }
         crate::config::ProviderType::Zhipu => zhipu::stream_zhipu_chat(
             app_state.clone(),
             start_time,

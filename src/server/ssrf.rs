@@ -101,9 +101,10 @@ pub fn join_models_url(base_url: &Url, models_endpoint: Option<&str>) -> Result<
     }
 
     // OpenAI 兼容：既支持 base_url=.../v1（追加 /models），也支持 base_url=...（追加 /v1/models）
+    // 兼容火山引擎 Ark：base_url=.../api/v3（追加 /models）
     let path = base_url.path().trim_end_matches('/');
     let base = base_url.as_str().trim_end_matches('/');
-    let full = if path.ends_with("/v1") {
+    let full = if path.ends_with("/v1") || path.ends_with("/api/v3") {
         format!("{}/models", base)
     } else {
         format!("{}/v1/models", base)

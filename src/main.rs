@@ -4,6 +4,7 @@ mod config;
 mod crypto;
 mod db;
 mod error;
+mod http_client;
 mod logging;
 mod password_reset_tokens;
 mod providers;

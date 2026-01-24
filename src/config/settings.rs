@@ -38,6 +38,7 @@ pub enum ProviderType {
     OpenAI,
     Anthropic,
     Zhipu,
+    Doubao,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

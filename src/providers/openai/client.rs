@@ -6,14 +6,29 @@ use super::types::{
 
 pub struct OpenAIProvider;
 
+fn join_openai_compat_endpoint(base_url: &str, path: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    let normalized_path = path.trim_start_matches('/');
+    let base_path = match reqwest::Url::parse(base) {
+        Ok(u) => u.path().trim_end_matches('/').to_string(),
+        Err(_) => String::new(),
+    };
+
+    if base_path.ends_with("/v1") || base_path.ends_with("/api/v3") {
+        format!("{}/{}", base, normalized_path)
+    } else {
+        format!("{}/v1/{}", base, normalized_path)
+    }
+}
+
 impl OpenAIProvider {
     pub async fn chat_completions(
         base_url: &str,
         api_key: &str,
         request: &ChatCompletionRequest,
     ) -> Result<RawAndTypedChatCompletion, GatewayError> {
-        let client = reqwest::Client::new();
-        let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+        let url = join_openai_compat_endpoint(base_url, "chat/completions");
+        let client = crate::http_client::client_for_url(&url)?;
 
         async fn send_bytes(
             client: &reqwest::Client,
@@ -98,8 +113,8 @@ impl OpenAIProvider {
         base_url: &str,
         api_key: &str,
     ) -> Result<ModelListResponse, GatewayError> {
-        let client = reqwest::Client::new();
-        let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
+        let url = join_openai_compat_endpoint(base_url, "models");
+        let client = crate::http_client::client_for_url(&url)?;
 
         let response = client
             .get(&url)

@@ -33,6 +33,16 @@ pub struct ProviderModelTestResponse {
     pub error_message: Option<String>,
 }
 
+fn openai_compat_chat_completions_url(base_url: &reqwest::Url) -> String {
+    let base = base_url.as_str().trim_end_matches('/');
+    let path = base_url.path().trim_end_matches('/');
+    if path.ends_with("/v1") || path.ends_with("/api/v3") {
+        format!("{}/chat/completions", base)
+    } else {
+        format!("{}/v1/chat/completions", base)
+    }
+}
+
 fn classify_http_failure(
     status: reqwest::StatusCode,
     body_snippet: &str,
@@ -121,12 +131,6 @@ async fn send_test_request(
     model: &str,
     stream: bool,
 ) -> Result<(), (String, Option<String>)> {
-    let client = reqwest::Client::builder()
-        .redirect(Policy::none())
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| ("other".into(), Some(e.to_string())))?;
-
     let model = model.trim();
     if model.is_empty() {
         return Err((
@@ -136,11 +140,14 @@ async fn send_test_request(
     }
 
     match provider_type {
-        ProviderType::OpenAI => {
-            let url = format!(
-                "{}/v1/chat/completions",
-                base_url.as_str().trim_end_matches('/')
-            );
+        ProviderType::OpenAI | ProviderType::Doubao => {
+            let url = openai_compat_chat_completions_url(base_url);
+            let builder = reqwest::Client::builder()
+                .redirect(Policy::none())
+                .timeout(Duration::from_secs(30));
+            let client = crate::http_client::maybe_disable_proxy(builder, &url)
+                .build()
+                .map_err(|e| ("other".into(), Some(e.to_string())))?;
             let payload = serde_json::json!({
               "model": model,
               "messages": [{"role":"user","content":"ping"}],
@@ -178,6 +185,12 @@ async fn send_test_request(
         }
         ProviderType::Anthropic => {
             let url = format!("{}/v1/messages", base_url.as_str().trim_end_matches('/'));
+            let builder = reqwest::Client::builder()
+                .redirect(Policy::none())
+                .timeout(Duration::from_secs(30));
+            let client = crate::http_client::maybe_disable_proxy(builder, &url)
+                .build()
+                .map_err(|e| ("other".into(), Some(e.to_string())))?;
             // Anthropic Messages API minimal payload
             let payload = serde_json::json!({
               "model": model,
@@ -219,6 +232,12 @@ async fn send_test_request(
                 "{}/api/paas/v4/chat/completions",
                 base_url.as_str().trim_end_matches('/')
             );
+            let builder = reqwest::Client::builder()
+                .redirect(Policy::none())
+                .timeout(Duration::from_secs(30));
+            let client = crate::http_client::maybe_disable_proxy(builder, &url)
+                .build()
+                .map_err(|e| ("other".into(), Some(e.to_string())))?;
             let payload = serde_json::json!({
               "model": model,
               "messages": [{"role":"user","content":"ping"}],
@@ -441,7 +460,7 @@ pub async fn test_provider_model(
     // upstream error indicating status/body parsing issues, retry with `stream=true` (SSE) and
     // treat any 2xx as success.
     if outcome.is_err()
-        && matches!(api_type, ProviderType::OpenAI)
+        && matches!(api_type, ProviderType::OpenAI | ProviderType::Doubao)
         && let Err((_, Some(detail))) = &outcome
     {
         let lower = detail.to_lowercase();

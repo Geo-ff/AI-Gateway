@@ -11,6 +11,21 @@ use async_openai::types::{ChatCompletionStreamOptions, CreateChatCompletionStrea
 use serde_json::Value;
 
 use crate::error::GatewayError;
+
+fn join_openai_compat_endpoint(base_url: &str, path: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    let normalized_path = path.trim_start_matches('/');
+    let base_path = match reqwest::Url::parse(base) {
+        Ok(u) => u.path().trim_end_matches('/').to_string(),
+        Err(_) => String::new(),
+    };
+
+    if base_path.ends_with("/v1") || base_path.ends_with("/api/v3") {
+        format!("{}/{}", base, normalized_path)
+    } else {
+        format!("{}/v1/{}", base, normalized_path)
+    }
+}
 use crate::providers::openai::{ChatCompletionRequest, Usage};
 use crate::server::AppState;
 
@@ -33,8 +48,8 @@ pub async fn stream_openai_chat(
     client_token: Option<String>,
     mut upstream_req: ChatCompletionRequest,
 ) -> Result<Response, GatewayError> {
-    let client = reqwest::Client::new();
-    let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+    let url = join_openai_compat_endpoint(&base_url, "chat/completions");
+    let client = crate::http_client::client_for_url(&url)?;
 
     upstream_req.stream = Some(true);
     upstream_req.stream_options = Some(ChatCompletionStreamOptions {

@@ -17,7 +17,7 @@ pub async fn fetch_provider_models(
         Ok(response.data)
     } else {
         match provider.api_type {
-            ProviderType::OpenAI => {
+            ProviderType::OpenAI | ProviderType::Doubao => {
                 let response = OpenAIProvider::list_models(&provider.base_url, api_key).await?;
                 Ok(response.data)
             }
@@ -36,7 +36,7 @@ async fn fetch_models_from_endpoint(
     url: &str,
     api_key: &str,
 ) -> Result<ModelListResponse, GatewayError> {
-    let client = reqwest::Client::new();
+    let client = crate::http_client::client_for_url(url)?;
 
     let response = client
         .get(url)

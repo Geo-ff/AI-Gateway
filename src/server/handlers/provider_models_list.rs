@@ -61,6 +61,7 @@ fn api_type_key(t: &ProviderType) -> &'static str {
         ProviderType::OpenAI => "openai",
         ProviderType::Anthropic => "anthropic",
         ProviderType::Zhipu => "zhipu",
+        ProviderType::Doubao => "doubao",
     }
 }
 
@@ -84,7 +85,9 @@ pub async fn list_models_by_base_url(
     // SSRF：先校验 base_url；若 models_endpoint 是完整 URL，后续还会再校验一次
     let base_url = validate_outbound_base_url(&payload.base_url).await?;
 
-    if !matches!(payload.api_type, ProviderType::OpenAI) && payload.models_endpoint.is_none() {
+    if matches!(payload.api_type, ProviderType::Anthropic | ProviderType::Zhipu)
+        && payload.models_endpoint.is_none()
+    {
         return Err(GatewayError::Config(
             "该 api_type 暂不支持自动获取模型列表；请配置 models_endpoint（OpenAI 兼容响应）或手动输入模型"
                 .into(),
@@ -174,10 +177,10 @@ pub async fn list_models_by_base_url(
         models_url = validate_outbound_base_url(models_url.as_str()).await?;
     }
 
-    let client = reqwest::Client::builder()
+    let builder = reqwest::Client::builder()
         .redirect(Policy::none())
-        .timeout(Duration::from_secs(12))
-        .build()?;
+        .timeout(Duration::from_secs(12));
+    let client = crate::http_client::maybe_disable_proxy(builder, models_url.as_str()).build()?;
 
     let mut req = client
         .get(models_url.as_str())
