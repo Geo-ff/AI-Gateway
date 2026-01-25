@@ -41,6 +41,7 @@ pub struct MyModelOut {
     pub name: String,
     pub model_id: String,
     pub model_type: Option<String>,
+    pub model_types: Option<Vec<String>>,
     pub provider: String,
     pub provider_id: String,
     pub provider_enabled: bool,
@@ -505,11 +506,33 @@ pub async fn list_my_models(
     let mut out: Vec<MyModelOut> = Vec::with_capacity(union.len());
     for m in union.into_values() {
         let provider = providers_by_id.get(&m.provider);
-        let (input_price, output_price, model_type) = price_by_key
-            .get(&format!("{}:{}", m.provider, m.model_id))
-            .cloned()
-            .map(|(p, c, mt)| (Some(p), Some(c), mt))
-            .unwrap_or((None, None, None));
+        let (input_price, output_price, model_type_raw) = {
+            let direct = price_by_key.get(&format!("{}:{}", m.provider, m.model_id));
+            let mut picked = direct.cloned();
+
+            if picked.is_none() {
+                if let Some(map) = redirects_cache.get(&m.provider) {
+                    let mut sources: Vec<&String> = map.keys().collect();
+                    sources.sort();
+                    for source in sources {
+                        let resolved = resolve_redirect_chain(map, source, 16);
+                        if resolved != m.model_id {
+                            continue;
+                        }
+                        if let Some(p) = price_by_key.get(&format!("{}:{}", m.provider, source)) {
+                            picked = Some(p.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+
+            picked
+                .map(|(p, c, mt)| (Some(p), Some(c), mt))
+                .unwrap_or((None, None, None))
+        };
+        let (model_type, model_types) =
+            crate::server::model_types::model_types_for_response(model_type_raw.as_deref());
 
         let mut tokens: Vec<MyModelTokenOut> = tokens_by_model
             .remove(&m.full_id)
@@ -524,6 +547,7 @@ pub async fn list_my_models(
             name: m.model_id.clone(),
             model_id: m.model_id,
             model_type,
+            model_types,
             provider: provider
                 .and_then(|p| p.display_name.clone())
                 .unwrap_or_else(|| m.provider.clone()),

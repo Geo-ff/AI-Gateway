@@ -2456,6 +2456,11 @@ paths:
                     model_type:
                       type: string
                       nullable: true
+                    model_types:
+                      type: array
+                      nullable: true
+                      items:
+                        type: string
 
   /me/models:
     get:
@@ -2485,6 +2490,11 @@ paths:
                     model_type:
                       type: string
                       nullable: true
+                    model_types:
+                      type: array
+                      nullable: true
+                      items:
+                        type: string
                     provider:
                       type: string
                     provider_id:
@@ -5292,6 +5302,11 @@ paths:
                     model_type:
                       type: string
                       nullable: true
+                    model_types:
+                      type: array
+                      nullable: true
+                      items:
+                        type: string
         '401':
           description: 未授权
           content:
@@ -5344,6 +5359,12 @@ paths:
                   type: string
                   nullable: true
                   description: 模型类型（如 chat/image/embedding/audio 等）
+                model_types:
+                  type: array
+                  nullable: true
+                  description: 模型类型（可多选）
+                  items:
+                    type: string
               required:
                 - provider
                 - model
@@ -5418,6 +5439,11 @@ paths:
                   model_type:
                     type: string
                     nullable: true
+                  model_types:
+                    type: array
+                    nullable: true
+                    items:
+                      type: string
         '401':
           description: 未授权
           content:

@@ -5,6 +5,7 @@ pub(crate) mod model_cache;
 pub(crate) mod model_helpers;
 pub(crate) mod model_parser;
 pub(crate) mod model_redirect;
+pub(crate) mod model_types;
 pub(crate) mod provider_dispatch;
 pub(crate) mod request_logging;
 pub(crate) mod ssrf;

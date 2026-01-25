@@ -11,6 +11,7 @@ use super::auth::require_superadmin;
 use crate::error::GatewayError;
 use crate::logging::types::ProviderOpLog;
 use crate::server::AppState;
+use crate::server::model_types;
 use crate::server::request_logging::log_simple_request;
 use chrono::Utc;
 
@@ -24,21 +25,8 @@ pub struct UpsertModelPricePayload {
     pub currency: Option<String>,
     #[serde(default)]
     pub model_type: Option<String>,
-}
-
-fn validate_model_type(model_type: Option<&str>) -> Result<(), GatewayError> {
-    if let Some(v) = model_type {
-        let v = v.trim();
-        if v.is_empty() {
-            return Ok(());
-        }
-        match v {
-            "chat" | "completion" | "embedding" | "image" | "audio" | "video" => Ok(()),
-            _ => Err(GatewayError::Config("invalid model_type".into())),
-        }
-    } else {
-        Ok(())
-    }
+    #[serde(default)]
+    pub model_types: Option<Vec<String>>,
 }
 
 pub async fn upsert_model_price(
@@ -151,7 +139,11 @@ pub async fn upsert_model_price(
             .await;
         return Err(ge);
     }
-    validate_model_type(payload.model_type.as_deref())?;
+    let normalized_types = model_types::normalize_model_types(
+        payload.model_type.as_deref(),
+        payload.model_types.as_deref(),
+    )?;
+    let storage_model_type = model_types::model_types_to_storage(normalized_types.as_deref());
     app_state
         .log_store
         .upsert_model_price(
@@ -160,11 +152,7 @@ pub async fn upsert_model_price(
             payload.prompt_price_per_million,
             payload.completion_price_per_million,
             payload.currency.as_deref(),
-            payload
-                .model_type
-                .as_deref()
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty()),
+            storage_model_type.as_deref(),
         )
         .await
         .map_err(GatewayError::Db)?;
@@ -182,7 +170,8 @@ pub async fn upsert_model_price(
                     "prompt_price_per_million": payload.prompt_price_per_million,
                     "completion_price_per_million": payload.completion_price_per_million,
                     "currency": payload.currency,
-                    "model_type": payload.model_type,
+                    "model_type": storage_model_type,
+                    "model_types": normalized_types,
                 })
                 .to_string(),
             ),
@@ -249,13 +238,16 @@ pub async fn list_model_prices(
     let out: Vec<_> = items
         .into_iter()
         .map(|(provider, model, p_pm, c_pm, currency, model_type)| {
+            let (model_type_first, model_types_parsed) =
+                model_types::model_types_for_response(model_type.as_deref());
             serde_json::json!({
                 "provider": provider,
                 "model": model,
                 "prompt_price_per_million": p_pm,
                 "completion_price_per_million": c_pm,
                 "currency": currency,
-                "model_type": model_type,
+                "model_type": model_type_first,
+                "model_types": model_types_parsed,
             })
         })
         .collect();
@@ -309,14 +301,19 @@ pub async fn get_model_price(
         .await
         .map_err(GatewayError::Db)?
     {
-        Some((p_pm, c_pm, currency, model_type)) => Ok(Json(serde_json::json!({
-            "provider": provider,
-            "model": model,
-            "prompt_price_per_million": p_pm,
-            "completion_price_per_million": c_pm,
-            "currency": currency,
-            "model_type": model_type,
-        }))),
+        Some((p_pm, c_pm, currency, model_type)) => {
+            let (model_type_first, model_types_parsed) =
+                model_types::model_types_for_response(model_type.as_deref());
+            Ok(Json(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "prompt_price_per_million": p_pm,
+                "completion_price_per_million": c_pm,
+                "currency": currency,
+                "model_type": model_type_first,
+                "model_types": model_types_parsed,
+            })))
+        }
         None => {
             let ge = GatewayError::NotFound("model price not set".into());
             let code = ge.status_code().as_u16();
