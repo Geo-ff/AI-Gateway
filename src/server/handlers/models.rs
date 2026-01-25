@@ -341,11 +341,18 @@ pub async fn list_my_models(
     }
 
     // Providers (for display name, enabled, api_type)
+    // Note: if providers cannot be loaded, default to returning no models (safer than leaking
+    // disabled-provider models to user-side views).
     let providers = app_state
         .providers
         .list_providers()
         .await
         .unwrap_or_default();
+    let enabled_provider_ids: std::collections::HashSet<String> = providers
+        .iter()
+        .filter(|p| p.enabled)
+        .map(|p| p.name.clone())
+        .collect();
     let providers_by_id: std::collections::HashMap<String, crate::config::settings::Provider> =
         providers.into_iter().map(|p| (p.name.clone(), p)).collect();
 
@@ -364,15 +371,8 @@ pub async fn list_my_models(
         })
         .collect();
 
-    // Filter out disabled providers (when provider info is available)
-    if !providers_by_id.is_empty() {
-        base_models.retain(|m| {
-            providers_by_id
-                .get(&m.provider)
-                .map(|p| p.enabled)
-                .unwrap_or(true)
-        });
-    }
+    // Filter out disabled providers (and drop everything if provider list is empty)
+    base_models.retain(|m| enabled_provider_ids.contains(&m.provider));
 
     // Filter out disabled models (single source: model_settings; unset => enabled)
     {
@@ -552,7 +552,7 @@ pub async fn list_my_models(
                 .and_then(|p| p.display_name.clone())
                 .unwrap_or_else(|| m.provider.clone()),
             provider_id: m.provider.clone(),
-            provider_enabled: provider.map(|p| p.enabled).unwrap_or(true),
+            provider_enabled: provider.map(|p| p.enabled).unwrap_or(false),
             upstream_endpoint_type: provider
                 .map(|p| {
                     match p.api_type {
