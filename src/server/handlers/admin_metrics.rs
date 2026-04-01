@@ -17,6 +17,7 @@ use crate::logging::time::BEIJING_OFFSET;
 use crate::logging::types::RequestLog;
 use crate::routing::ProviderKeyEntry;
 use crate::server::AppState;
+use crate::server::model_display::{format_model_display_name, provider_display_name};
 use crate::server::request_logging::log_simple_request;
 
 const DEFAULT_WINDOW_MINUTES: i64 = 60;
@@ -250,6 +251,7 @@ fn aggregate_summary(
     start_date: Option<String>,
     end_date: Option<String>,
     available_dates: Vec<String>,
+    providers_by_id: &HashMap<String, Provider>,
 ) -> MetricsSummary {
     let total_requests = logs.len();
     let (mut success_requests, mut error_requests) = (0usize, 0usize);
@@ -286,12 +288,11 @@ fn aggregate_summary(
             .provider
             .as_deref()
             .filter(|s| !s.is_empty())
-            .unwrap_or("未知供应商");
-        *provider_counts
-            .entry(provider_name.to_string())
-            .or_insert(0) += 1;
+            .map(|provider_id| provider_display_name(providers_by_id, provider_id))
+            .unwrap_or_else(|| "未知供应商".to_string());
+        *provider_counts.entry(provider_name).or_insert(0) += 1;
 
-        let model_label = log_model_label(log);
+        let model_label = log_model_label(log, providers_by_id);
         *model_counts.entry(model_label).or_insert(0) += 1;
         if let Some(client) = &log.client_token {
             clients.entry(client.clone()).or_insert(());
@@ -437,23 +438,27 @@ fn build_series(
     }
 }
 
-fn normalize_model_label(provider: Option<&str>, model: Option<&str>) -> String {
+fn normalize_model_label(
+    provider: Option<&str>,
+    model: Option<&str>,
+    providers_by_id: &HashMap<String, Provider>,
+) -> String {
     let provider = provider.unwrap_or("");
     let model = model.unwrap_or("未知模型");
-    if model.contains('/') || provider.is_empty() {
+    if provider.is_empty() {
         model.to_string()
     } else {
-        format!("{}/{}", provider, model)
+        format_model_display_name(providers_by_id, model, Some(provider))
     }
 }
 
-fn log_model_label(log: &RequestLog) -> String {
+fn log_model_label(log: &RequestLog, providers_by_id: &HashMap<String, Provider>) -> String {
     let model = log
         .model
         .as_deref()
         .or(log.effective_model.as_deref())
         .or(log.requested_model.as_deref());
-    normalize_model_label(log.provider.as_deref(), model)
+    normalize_model_label(log.provider.as_deref(), model, providers_by_id)
 }
 
 fn spent_tokens(log: &RequestLog) -> u64 {
@@ -524,10 +529,18 @@ pub async fn models_distribution(
 
     let logs = fetch_recent_logs_covering_since(&app_state, since, MAX_SCAN_LOGS).await?;
     let filtered = filter_logs(&logs, Some(since), Some(until));
+    let providers_by_id: HashMap<String, Provider> = app_state
+        .providers
+        .list_providers()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|provider| (provider.name.clone(), provider))
+        .collect();
 
     let mut counts: HashMap<String, usize> = HashMap::new();
     for log in filtered {
-        let label = log_model_label(log);
+        let label = log_model_label(log, &providers_by_id);
         *counts.entry(label).or_insert(0) += 1;
     }
     let limit = q.limit.unwrap_or(8).max(1);
@@ -596,6 +609,7 @@ fn build_model_cost_series(
     until: DateTime<Utc>,
     interval_minutes: i64,
     limit: usize,
+    providers_by_id: &HashMap<String, Provider>,
 ) -> MetricsSeriesModelCost {
     let interval_minutes = interval_minutes.max(1);
     let interval = Duration::minutes(interval_minutes);
@@ -622,7 +636,7 @@ fn build_model_cost_series(
         if idx >= buckets.max(1) {
             continue;
         }
-        let label = log_model_label(log);
+        let label = log_model_label(log, providers_by_id);
         let tokens = spent_tokens(log);
         let entry = bucket_maps[idx]
             .entry(label.clone())
@@ -695,7 +709,22 @@ pub async fn series_model_cost(
 
     let logs = fetch_recent_logs_covering_since(&app_state, since, MAX_SCAN_LOGS).await?;
     let filtered = filter_logs(&logs, Some(since), Some(until));
-    let series = build_model_cost_series(&filtered, since, until, interval_minutes, limit);
+    let providers_by_id: HashMap<String, Provider> = app_state
+        .providers
+        .list_providers()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|provider| (provider.name.clone(), provider))
+        .collect();
+    let series = build_model_cost_series(
+        &filtered,
+        since,
+        until,
+        interval_minutes,
+        limit,
+        &providers_by_id,
+    );
 
     log_simple_request(
         &app_state,
@@ -774,6 +803,14 @@ pub async fn series_models(
 
     let logs = fetch_recent_logs_covering_since(&app_state, since, MAX_SCAN_LOGS).await?;
     let filtered = filter_logs(&logs, Some(since), Some(until));
+    let providers_by_id: HashMap<String, Provider> = app_state
+        .providers
+        .list_providers()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|provider| (provider.name.clone(), provider))
+        .collect();
 
     let interval = Duration::minutes(interval_minutes);
     let total_minutes = (until - since).num_minutes().max(interval_minutes);
@@ -786,7 +823,7 @@ pub async fn series_models(
         let mut model_counts: HashMap<String, usize> = HashMap::new();
         for log in &filtered {
             if log.timestamp >= bucket_start && log.timestamp < bucket_end {
-                let label = log_model_label(log);
+                let label = log_model_label(log, &providers_by_id);
                 *model_counts.entry(label).or_insert(0) += 1;
             }
         }
@@ -851,12 +888,21 @@ pub async fn summary(
 
     let logs = fetch_recent_logs_covering_since(&app_state, since, MAX_SCAN_LOGS).await?;
     let filtered = filter_logs(&logs, Some(since), Some(until));
+    let providers_by_id: HashMap<String, Provider> = app_state
+        .providers
+        .list_providers()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|provider| (provider.name.clone(), provider))
+        .collect();
     let summary = aggregate_summary(
         &filtered,
         window_minutes,
         start_date.clone(),
         end_date.clone(),
         available_dates.clone(),
+        &providers_by_id,
     );
 
     log_simple_request(
@@ -1027,6 +1073,7 @@ mod tests {
 
     #[test]
     fn build_model_cost_series_buckets_and_limit_work() {
+        let providers_by_id = HashMap::new();
         let base = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
         let since = base;
         let until = base + Duration::hours(2);
@@ -1074,7 +1121,7 @@ mod tests {
         ];
         let refs: Vec<&RequestLog> = logs.iter().collect();
 
-        let out = build_model_cost_series(&refs, since, until, 60, 1);
+        let out = build_model_cost_series(&refs, since, until, 60, 1, &providers_by_id);
         assert_eq!(out.points.len(), 2);
         assert_eq!(out.points[0].items.len(), 1);
         assert_eq!(out.points[1].items.len(), 0);

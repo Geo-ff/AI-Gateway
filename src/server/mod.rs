@@ -2,6 +2,7 @@ pub(crate) mod chat_request;
 pub mod handlers;
 pub mod login;
 pub(crate) mod model_cache;
+pub(crate) mod model_display;
 pub(crate) mod model_helpers;
 pub(crate) mod model_parser;
 pub(crate) mod model_redirect;

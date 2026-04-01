@@ -12,6 +12,7 @@ use super::auth::{AdminIdentity, require_superadmin};
 use crate::error::GatewayError;
 use crate::logging::types::RequestLog;
 use crate::server::AppState;
+use crate::server::model_display::format_model_display_name;
 use crate::server::request_logging::log_simple_request;
 
 const MAX_LOG_LIMIT: usize = 1000;
@@ -63,6 +64,9 @@ pub struct RequestLogEntry {
     pub request_type: String,
     pub requested_model: Option<String>,
     pub effective_model: Option<String>,
+    pub requested_model_display: Option<String>,
+    pub effective_model_display: Option<String>,
+    pub model_display: Option<String>,
     pub provider: Option<String>,
     pub api_key: Option<String>,
     pub client_token_id: Option<String>,
@@ -294,6 +298,15 @@ pub async fn list_request_logs(
             map
         }
     };
+    let providers_by_id: std::collections::HashMap<String, crate::config::settings::Provider> =
+        app_state
+            .providers
+            .list_providers()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|provider| (provider.name.clone(), provider))
+            .collect();
     let data: Vec<RequestLogEntry> = filtered
         .into_iter()
         .map(|log| {
@@ -321,6 +334,19 @@ pub async fn list_request_logs(
                 }
                 None => (None, None, username_from_user_id),
             };
+            let requested_model_raw = log.requested_model.clone().or_else(|| log.model.clone());
+            let effective_model_raw = log.effective_model.clone().or_else(|| log.model.clone());
+            let requested_model_display = requested_model_raw.as_deref().map(|model| {
+                format_model_display_name(&providers_by_id, model, log.provider.as_deref())
+            });
+            let effective_model_display = effective_model_raw.as_deref().map(|model| {
+                format_model_display_name(&providers_by_id, model, log.provider.as_deref())
+            });
+            let model_display = effective_model_display
+                .clone()
+                .or_else(|| requested_model_display.clone());
+            let requested_model = requested_model_display.clone().or(requested_model_raw);
+            let effective_model = effective_model_display.clone().or(effective_model_raw);
 
             RequestLogEntry {
                 id: log.id,
@@ -328,8 +354,11 @@ pub async fn list_request_logs(
                 method: log.method.clone(),
                 path: log.path.clone(),
                 request_type: log.request_type.clone(),
-                requested_model: log.requested_model.clone().or_else(|| log.model.clone()),
-                effective_model: log.effective_model.clone().or_else(|| log.model.clone()),
+                requested_model,
+                effective_model,
+                requested_model_display,
+                effective_model_display,
+                model_display,
                 provider: log.provider.clone(),
                 api_key: log.api_key.clone(),
                 client_token_id,
@@ -420,6 +449,15 @@ pub async fn list_chat_completion_logs(
         }
         map
     };
+    let providers_by_id: std::collections::HashMap<String, crate::config::settings::Provider> =
+        app_state
+            .providers
+            .list_providers()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|provider| (provider.name.clone(), provider))
+            .collect();
     let data: Vec<RequestLogEntry> = raw_logs
         .iter()
         .map(|log| {
@@ -440,6 +478,19 @@ pub async fn list_chat_completion_logs(
                 }
                 None => (None, None, None),
             };
+            let requested_model_raw = log.requested_model.clone().or_else(|| log.model.clone());
+            let effective_model_raw = log.effective_model.clone().or_else(|| log.model.clone());
+            let requested_model_display = requested_model_raw.as_deref().map(|model| {
+                format_model_display_name(&providers_by_id, model, log.provider.as_deref())
+            });
+            let effective_model_display = effective_model_raw.as_deref().map(|model| {
+                format_model_display_name(&providers_by_id, model, log.provider.as_deref())
+            });
+            let model_display = effective_model_display
+                .clone()
+                .or_else(|| requested_model_display.clone());
+            let requested_model = requested_model_display.clone().or(requested_model_raw);
+            let effective_model = effective_model_display.clone().or(effective_model_raw);
 
             RequestLogEntry {
                 id: log.id,
@@ -447,8 +498,11 @@ pub async fn list_chat_completion_logs(
                 method: log.method.clone(),
                 path: log.path.clone(),
                 request_type: log.request_type.clone(),
-                requested_model: log.requested_model.clone().or_else(|| log.model.clone()),
-                effective_model: log.effective_model.clone().or_else(|| log.model.clone()),
+                requested_model,
+                effective_model,
+                requested_model_display,
+                effective_model_display,
+                model_display,
                 provider: log.provider.clone(),
                 api_key: log.api_key.clone(),
                 client_token_id,

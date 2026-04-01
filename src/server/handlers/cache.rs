@@ -12,6 +12,7 @@ use crate::logging::types::{REQ_TYPE_PROVIDER_CACHE_DELETE, REQ_TYPE_PROVIDER_CA
 use crate::providers::openai::{Model, ModelListResponse};
 use crate::server::AppState;
 use crate::server::model_cache::{cache_models_for_provider, get_cached_models_for_provider};
+use crate::server::model_display::provider_display_name;
 use crate::server::model_helpers::fetch_provider_models;
 use crate::server::request_logging::log_simple_request;
 use crate::server::util::{bearer_token, token_for_log};
@@ -38,6 +39,8 @@ pub struct CacheListQuery {
 pub struct CachedModelEntry {
     id: String,
     provider: String,
+    provider_display_name: String,
+    display_name: String,
     object: String,
     created: u64,
     owned_by: String,
@@ -62,15 +65,30 @@ pub async fn list_cached_models(
         .get_cached_models(provider_filter)
         .await
         .map_err(GatewayError::Db)?;
+    let providers_by_id: std::collections::HashMap<String, crate::config::settings::Provider> =
+        app_state
+            .providers
+            .list_providers()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|provider| (provider.name.clone(), provider))
+            .collect();
     let data: Vec<CachedModelEntry> = cached
         .into_iter()
-        .map(|model| CachedModelEntry {
-            id: model.id,
-            provider: model.provider,
-            object: model.object,
-            created: model.created,
-            owned_by: model.owned_by,
-            cached_at: model.cached_at.to_rfc3339(),
+        .map(|model| {
+            let provider_display_name = provider_display_name(&providers_by_id, &model.provider);
+            let display_name = format!("{}/{}", provider_display_name, model.id);
+            CachedModelEntry {
+                id: model.id,
+                provider: model.provider,
+                provider_display_name,
+                display_name,
+                object: model.object,
+                created: model.created,
+                owned_by: model.owned_by,
+                cached_at: model.cached_at.to_rfc3339(),
+            }
         })
         .collect();
     Ok(Json(CachedModelsResponse {
@@ -251,6 +269,7 @@ pub async fn update_provider_cache(
                         object: "model".to_string(),
                         created: chrono::Utc::now().timestamp() as u64,
                         owned_by: provider_name.clone(),
+                        display_name: None,
                     })
                     .collect()
             } else {

@@ -21,6 +21,8 @@ pub struct Model {
     #[serde(default)]
     pub created: u64,
     pub owned_by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 // 非流式响应：同时保留原始 JSON（便于透传扩展字段，如 reasoning_content）与已解析的结构体供日志使用

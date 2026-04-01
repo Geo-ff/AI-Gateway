@@ -12,6 +12,7 @@ use super::auth::require_user;
 use crate::error::GatewayError;
 use crate::logging::types::RequestLog;
 use crate::server::AppState;
+use crate::server::model_display::format_model_display_name;
 
 const MAX_LOG_LIMIT: usize = 1000;
 const DEFAULT_LOG_LIMIT: usize = 200;
@@ -39,6 +40,9 @@ pub struct MyRequestLogEntry {
     pub request_type: String,
     pub requested_model: Option<String>,
     pub effective_model: Option<String>,
+    pub requested_model_display: Option<String>,
+    pub effective_model_display: Option<String>,
+    pub model_display: Option<String>,
     pub client_token_id: Option<String>,
     pub client_token_name: Option<String>,
     pub amount_spent: Option<f64>,
@@ -144,6 +148,14 @@ pub async fn list_my_request_logs(
     let token_ids: HashSet<String> = tokens.iter().map(|t| t.id.clone()).collect();
     let token_name_by_id: HashMap<String, String> =
         tokens.into_iter().map(|t| (t.id, t.name)).collect();
+    let providers_by_id: HashMap<String, crate::config::settings::Provider> = app_state
+        .providers
+        .list_providers()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|provider| (provider.name.clone(), provider))
+        .collect();
 
     let mut out: Vec<RequestLog> = Vec::with_capacity(limit);
     let mut next = query.cursor;
@@ -203,14 +215,30 @@ pub async fn list_my_request_logs(
                 .as_deref()
                 .filter(|id| token_ids.contains(*id));
             let token_name = token_id.and_then(|id| token_name_by_id.get(id).cloned());
+            let requested_model_raw = log.requested_model.clone().or_else(|| log.model.clone());
+            let effective_model_raw = log.effective_model.clone().or_else(|| log.model.clone());
+            let requested_model_display = requested_model_raw.as_deref().map(|model| {
+                format_model_display_name(&providers_by_id, model, log.provider.as_deref())
+            });
+            let effective_model_display = effective_model_raw.as_deref().map(|model| {
+                format_model_display_name(&providers_by_id, model, log.provider.as_deref())
+            });
+            let model_display = effective_model_display
+                .clone()
+                .or_else(|| requested_model_display.clone());
+            let requested_model = requested_model_display.clone().or(requested_model_raw);
+            let effective_model = effective_model_display.clone().or(effective_model_raw);
             MyRequestLogEntry {
                 id: log.id,
                 timestamp: log.timestamp.to_rfc3339(),
                 method: log.method,
                 path: log.path,
                 request_type: log.request_type,
-                requested_model: log.requested_model.clone().or_else(|| log.model.clone()),
-                effective_model: log.effective_model.clone().or_else(|| log.model.clone()),
+                requested_model,
+                effective_model,
+                requested_model_display,
+                effective_model_display,
+                model_display,
                 client_token_id: token_id.map(|s| s.to_string()),
                 client_token_name: token_name,
                 amount_spent: log.amount_spent,

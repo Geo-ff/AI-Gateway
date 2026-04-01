@@ -11,6 +11,7 @@ pub async fn get_cached_models_all(app_state: &AppState) -> rusqlite::Result<Vec
             object: m.object,
             created: m.created,
             owned_by: m.owned_by,
+            display_name: None,
         })
         .collect();
     Ok(models)
@@ -32,6 +33,7 @@ pub async fn get_cached_models_for_provider(
             object: m.object,
             created: m.created,
             owned_by: m.owned_by,
+            display_name: None,
         })
         .collect();
     Ok(models)

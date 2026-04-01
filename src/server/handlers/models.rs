@@ -14,6 +14,7 @@ use crate::providers::openai::Model;
 use crate::providers::openai::ModelListResponse;
 use crate::server::AppState;
 use crate::server::model_cache::{get_cached_models_all, get_cached_models_for_provider};
+use crate::server::model_display::{format_model_display_name, format_provider_model_display_name};
 use crate::server::model_helpers::fetch_provider_models;
 use crate::server::request_logging::log_simple_request;
 use crate::server::util::{bearer_token, token_for_log};
@@ -96,19 +97,24 @@ pub async fn list_models(
         }
     }
     let mut cached_models = get_cached_models_all(&app_state).await?;
+    let providers = app_state
+        .providers
+        .list_providers()
+        .await
+        .unwrap_or_default();
+    let enabled_providers: std::collections::HashSet<String> = providers
+        .iter()
+        .filter(|provider| provider.enabled)
+        .map(|provider| provider.name.clone())
+        .collect();
+    let providers_by_id: std::collections::HashMap<String, crate::config::settings::Provider> =
+        providers
+            .into_iter()
+            .map(|provider| (provider.name.clone(), provider))
+            .collect();
 
     // 过滤掉已禁用供应商的模型
     {
-        use std::collections::HashSet;
-        let enabled_providers: HashSet<String> = app_state
-            .providers
-            .list_providers()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|p| p.enabled)
-            .map(|p| p.name)
-            .collect();
         cached_models.retain(|m| {
             // 模型 id 格式为 "{provider}/{model_id}"
             if let Some(slash_pos) = m.id.find('/') {
@@ -231,10 +237,14 @@ pub async fn list_models(
                 object: m.object,
                 created: m.created,
                 owned_by: m.owned_by,
+                display_name: None,
             });
         }
 
         cached_models = out;
+    }
+    for model in &mut cached_models {
+        model.display_name = Some(format_model_display_name(&providers_by_id, &model.id, None));
     }
     let path = uri
         .path_and_query()
@@ -544,7 +554,7 @@ pub async fn list_my_models(
 
         out.push(MyModelOut {
             id: m.full_id.clone(),
-            name: m.model_id.clone(),
+            name: format_provider_model_display_name(&providers_by_id, &m.provider, &m.model_id),
             model_id: m.model_id,
             model_type,
             model_types,
@@ -739,10 +749,19 @@ pub async fn list_provider_models(
                         object: m.object,
                         created: m.created,
                         owned_by: m.owned_by,
+                        display_name: None,
                     });
                 }
                 cached_models = out;
             }
+        }
+        let provider_map = std::iter::once((provider.name.clone(), provider.clone())).collect();
+        for model in &mut cached_models {
+            model.display_name = Some(format_provider_model_display_name(
+                &provider_map,
+                &provider.name,
+                &model.id,
+            ));
         }
         log_simple_request(
             &app_state,
@@ -794,7 +813,7 @@ pub async fn list_provider_models(
         }
     };
 
-    let upstream_models = match fetch_provider_models(&provider, &api_key).await {
+    let mut upstream_models = match fetch_provider_models(&provider, &api_key).await {
         Ok(models) => models,
         Err(e) => {
             let code = e.status_code().as_u16();
@@ -814,6 +833,14 @@ pub async fn list_provider_models(
             return Err(e);
         }
     };
+    let provider_map = std::iter::once((provider.name.clone(), provider.clone())).collect();
+    for model in &mut upstream_models {
+        model.display_name = Some(format_provider_model_display_name(
+            &provider_map,
+            &provider.name,
+            &model.id,
+        ));
+    }
 
     log_simple_request(
         &app_state,
