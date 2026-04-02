@@ -143,6 +143,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             post(provider_models_list::list_models_by_base_url),
         )
         .route(
+            "/providers/models/test-draft",
+            post(provider_model_test::test_provider_model_draft),
+        )
+        .route(
             "/providers/{provider}/models/test",
             post(provider_model_test::test_provider_model),
         )
