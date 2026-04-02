@@ -97,6 +97,9 @@ struct AwsClaudeAdapter;
 #[derive(Debug)]
 struct VertexAIAdapter;
 
+#[derive(Debug)]
+struct BaiduErnieAdapter;
+
 static OPENAI_COMPAT_ADAPTER: ProtocolAdapter = ProtocolAdapter {
     family: ProviderProtocolFamily::OpenAI,
     auth_mode: ProviderAuthMode::Bearer,
@@ -120,6 +123,7 @@ static GOOGLE_GEMINI_ADAPTER: GoogleGeminiAdapter = GoogleGeminiAdapter;
 static COHERE_ADAPTER: CohereAdapter = CohereAdapter;
 static AWS_CLAUDE_ADAPTER: AwsClaudeAdapter = AwsClaudeAdapter;
 static VERTEX_AI_ADAPTER: VertexAIAdapter = VertexAIAdapter;
+static BAIDU_ERNIE_ADAPTER: BaiduErnieAdapter = BaiduErnieAdapter;
 
 pub fn adapter_for(provider_type: ProviderType) -> Option<&'static dyn ProviderAdapter> {
     match provider_type {
@@ -136,6 +140,8 @@ pub fn adapter_for(provider_type: ProviderType) -> Option<&'static dyn ProviderA
         | ProviderType::Doubao
         | ProviderType::Yi
         | ProviderType::MiniMax
+        | ProviderType::BaiduErnieV2
+        | ProviderType::XfSpark
         | ProviderType::TencentHunyuan
         | ProviderType::ThreeSixtyZhinao
         | ProviderType::StepFun => Some(&OPENAI_COMPAT_ADAPTER),
@@ -146,7 +152,7 @@ pub fn adapter_for(provider_type: ProviderType) -> Option<&'static dyn ProviderA
         ProviderType::Cohere => Some(&COHERE_ADAPTER),
         ProviderType::AwsClaude => Some(&AWS_CLAUDE_ADAPTER),
         ProviderType::VertexAI => Some(&VERTEX_AI_ADAPTER),
-        ProviderType::BaiduErnie | ProviderType::BaiduErnieV2 | ProviderType::XfSpark => None,
+        ProviderType::BaiduErnie => Some(&BAIDU_ERNIE_ADAPTER),
     }
 }
 
@@ -183,6 +189,15 @@ pub fn runtime_streaming_unsupported_message(provider_type: ProviderType) -> Opt
         ProviderType::VertexAI => {
             Some("Vertex AI 当前仅支持非流式真实请求，stream=true 暂未实现。".into())
         }
+        ProviderType::BaiduErnie => {
+            Some("百度文心旧版当前仅支持非流式真实请求，stream=true 暂未纳入本轮支持范围。".into())
+        }
+        ProviderType::BaiduErnieV2 => {
+            Some("百度文心 v2 当前仅保证非流式真实请求闭环，stream=true 暂未纳入本轮支持范围。".into())
+        }
+        ProviderType::XfSpark => {
+            Some("讯飞星火当前仅保证非流式真实请求闭环，stream=true 暂未纳入本轮支持范围。".into())
+        }
         ProviderType::MiniMax => {
             Some("MiniMax 当前仅保证非流式真实请求闭环，stream=true 暂未纳入本轮支持范围。".into())
         }
@@ -214,6 +229,292 @@ fn openai_compat_chat_completions_url(base_url: &Url) -> String {
     } else {
         format!("{}/v1/chat/completions", base)
     }
+}
+
+fn baidu_ernie_chat_url(base_url: &Url, model: &str, access_token: &str) -> Result<String, (String, Option<String>)> {
+    let model_path = baidu_ernie_model_path(model)?;
+    let base = base_url.as_str().trim_end_matches('/');
+    let path = base_url.path().trim_end_matches('/');
+    let prefix = if path.ends_with("/rpc/2.0/ai_custom/v1/wenxinworkshop/chat") {
+        base.to_string()
+    } else {
+        format!("{}/rpc/2.0/ai_custom/v1/wenxinworkshop/chat", base)
+    };
+    let mut url = Url::parse(&format!("{}/{}", prefix, model_path))
+        .map_err(|err| ("invalid_path".into(), Some(err.to_string())))?;
+    url.query_pairs_mut()
+        .append_pair("access_token", access_token);
+    Ok(url.to_string())
+}
+
+fn baidu_ernie_model_path(model: &str) -> Result<String, (String, Option<String>)> {
+    let trimmed = model.trim();
+    if trimmed.is_empty() {
+        return Err((
+            "model_not_found".into(),
+            Some("百度文心旧版测试时需要填写模型或 endpoint path。".into()),
+        ));
+    }
+
+    let normalized = trimmed.to_lowercase();
+    let mapped = match normalized.as_str() {
+        "ernie-bot" | "ernie_bot" | "completions" => "completions",
+        "ernie-bot-turbo" | "ernie_bot_turbo" | "eb-instant" => "eb-instant",
+        "ernie-bot-4" | "ernie_bot_4" | "ernie-bot-4.0" | "ernie-4.0" | "ernie-4.0-8k"
+        | "completions_pro" => "completions_pro",
+        _ => trimmed
+            .trim_start_matches('/')
+            .strip_prefix("chat/")
+            .or_else(|| trimmed.rsplit('/').next())
+            .unwrap_or(trimmed),
+    };
+    Ok(mapped.to_string())
+}
+
+fn baidu_error_text(bytes: &[u8]) -> String {
+    let value = serde_json::from_slice::<serde_json::Value>(bytes).ok();
+    value
+        .as_ref()
+        .and_then(|json| {
+            json.get("error_msg")
+                .and_then(|value| value.as_str())
+                .or_else(|| json.get("error_description").and_then(|value| value.as_str()))
+                .or_else(|| json.get("message").and_then(|value| value.as_str()))
+                .or_else(|| {
+                    json.get("error")
+                        .and_then(|value| value.as_str())
+                        .or_else(|| {
+                            json.get("error")
+                                .and_then(|value| value.get("message"))
+                                .and_then(|value| value.as_str())
+                        })
+                })
+        })
+        .map(str::to_string)
+        .unwrap_or_else(|| String::from_utf8_lossy(bytes).trim().to_string())
+}
+
+fn baidu_error_code(bytes: &[u8]) -> Option<i64> {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .and_then(|value| value.get("error_code").and_then(|value| value.as_i64()))
+}
+
+fn baidu_error_type(status: StatusCode, bytes: &[u8]) -> String {
+    let message = baidu_error_text(bytes);
+    let lower = message.to_lowercase();
+    let code = baidu_error_code(bytes);
+
+    if status == StatusCode::REQUEST_TIMEOUT {
+        return "timeout".into();
+    }
+    if status == StatusCode::TOO_MANY_REQUESTS || matches!(code, Some(17 | 18)) {
+        return "rate_limited".into();
+    }
+    if status == StatusCode::UNAUTHORIZED
+        || status == StatusCode::FORBIDDEN
+        || matches!(code, Some(6 | 110 | 111))
+        || lower.contains("access token")
+        || lower.contains("invalid_client")
+        || lower.contains("client id")
+        || lower.contains("secret key")
+    {
+        return "authentication_failed".into();
+    }
+    if status == StatusCode::NOT_FOUND
+        || lower.contains("request uri")
+        || lower.contains("unsupported api")
+        || lower.contains("path")
+    {
+        return "invalid_path".into();
+    }
+    if lower.contains("model") && (lower.contains("not") || lower.contains("unsupported")) {
+        return "model_not_found".into();
+    }
+    "other".into()
+}
+
+fn baidu_error_detail(status: StatusCode, bytes: &[u8]) -> Option<String> {
+    let message = baidu_error_text(bytes);
+    let detail = json!({
+        "status": status.as_u16(),
+        "error_code": baidu_error_code(bytes),
+        "message": message,
+    });
+    serde_json::to_string_pretty(&detail).ok()
+}
+
+fn baidu_error_response(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
+    (baidu_error_type(status, bytes), baidu_error_detail(status, bytes))
+}
+
+fn baidu_requires_error(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .and_then(|value| value.get("error_code").cloned())
+        .is_some()
+}
+
+async fn baidu_access_token(provider_config: &ProviderConfig) -> Result<String, (String, Option<String>)> {
+    let access_key = provider_config.baidu_access_key().ok_or_else(|| {
+        (
+            "configuration_required".into(),
+            Some("百度文心旧版需要填写 Access Key。".into()),
+        )
+    })?;
+    let secret_key = provider_config.baidu_secret_key().ok_or_else(|| {
+        (
+            "configuration_required".into(),
+            Some("百度文心旧版需要填写 Secret Key。".into()),
+        )
+    })?;
+    let mut url = Url::parse("https://aip.baidubce.com/oauth/2.0/token")
+        .map_err(|err| ("other".into(), Some(err.to_string())))?;
+    url.query_pairs_mut()
+        .append_pair("grant_type", "client_credentials")
+        .append_pair("client_id", access_key)
+        .append_pair("client_secret", secret_key);
+
+    let client = client_for_url(url.as_str(), 20).map_err(|err| ("other".into(), Some(err.to_string())))?;
+    let resp = client
+        .post(url)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|err| (classify_reqwest_error(&err), Some(err.to_string())))?;
+    let status = resp.status();
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|err| ("other".into(), Some(err.to_string())))?;
+
+    if !status.is_success() {
+        return Err(baidu_error_response(status, &bytes));
+    }
+
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|err| ("other".into(), Some(err.to_string())))?;
+    if value.get("error").is_some() || value.get("error_code").is_some() {
+        return Err(baidu_error_response(status, &bytes));
+    }
+
+    value
+        .get("access_token")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            (
+                "authentication_failed".into(),
+                Some("百度文心旧版未返回有效 access_token，请检查 Access Key / Secret Key。".into()),
+            )
+        })
+}
+
+fn build_baidu_ernie_payload(
+    request: &ChatCompletionRequest,
+    stream: bool,
+) -> Result<serde_json::Value, GatewayError> {
+    let value = request_value(request)?;
+    let messages = request_messages(&value);
+    let system = combined_system_prompt(&messages);
+    let mut payload_messages = Vec::new();
+    let mut system_applied = false;
+
+    for message in &messages {
+        let role = message
+            .get("role")
+            .and_then(|role| role.as_str())
+            .unwrap_or("user");
+        if matches!(role, "system" | "developer") {
+            continue;
+        }
+        let mut text = extract_message_text(message);
+        if text.trim().is_empty() {
+            continue;
+        }
+        if !system_applied
+            && let Some(system) = system.as_ref()
+            && role != "assistant"
+        {
+            text = format!("{system}\n\n{text}");
+            system_applied = true;
+        }
+        payload_messages.push(json!({
+            "role": if role == "assistant" { "assistant" } else { "user" },
+            "content": text,
+        }));
+    }
+
+    if payload_messages.is_empty() {
+        if let Some(system) = system.filter(|value| !value.trim().is_empty()) {
+            payload_messages.push(json!({ "role": "user", "content": system }));
+        }
+    }
+
+    if payload_messages.is_empty() {
+        return Err(GatewayError::Config(
+            "百度文心旧版请求缺少可转换的消息内容。".into(),
+        ));
+    }
+
+    let mut payload = json!({
+        "messages": payload_messages,
+        "stream": stream,
+    });
+    if let Some(object) = payload.as_object_mut() {
+        if let Some(temperature) = value.get("temperature").cloned() {
+            object.insert("temperature".into(), temperature);
+        }
+        if let Some(top_p) = value.get("top_p").cloned() {
+            object.insert("top_p".into(), top_p);
+        }
+        if let Some(max_tokens) = value
+            .get("max_completion_tokens")
+            .cloned()
+            .or_else(|| value.get("max_tokens").cloned())
+        {
+            object.insert("max_output_tokens".into(), max_tokens);
+        }
+    }
+    Ok(payload)
+}
+
+fn adapt_baidu_ernie_response(
+    model: &str,
+    bytes: &[u8],
+) -> Result<RawAndTypedChatCompletion, GatewayError> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)?;
+    let content = value
+        .get("result")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| GatewayError::Config("百度文心旧版未返回 result 字段。".into()))?;
+    let usage = value.get("usage").map(|usage| {
+        json!({
+            "prompt_tokens": usage.get("prompt_tokens").and_then(|value| value.as_u64()).unwrap_or(0),
+            "completion_tokens": usage.get("completion_tokens").and_then(|value| value.as_u64()).unwrap_or(0),
+            "total_tokens": usage.get("total_tokens").and_then(|value| value.as_u64()).unwrap_or(0),
+        })
+    });
+    let finish_reason = if value
+        .get("is_truncated")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        Some("length")
+    } else {
+        Some("stop")
+    };
+
+    build_openai_style_response(
+        value.get("id").and_then(|value| value.as_str()).map(str::to_string),
+        model,
+        content,
+        finish_reason,
+        usage,
+    )
 }
 
 fn azure_openai_chat_completions_url(
@@ -1523,6 +1824,7 @@ impl ProtocolAdapter {
             ),
             ProviderProtocolFamily::AzureOpenAI
             | ProviderProtocolFamily::AwsClaude
+            | ProviderProtocolFamily::BaiduErnie
             | ProviderProtocolFamily::GoogleGemini
             | ProviderProtocolFamily::VertexAI
             | ProviderProtocolFamily::Cohere
@@ -1547,6 +1849,7 @@ impl ProtocolAdapter {
             }),
             ProviderProtocolFamily::AzureOpenAI
             | ProviderProtocolFamily::AwsClaude
+            | ProviderProtocolFamily::BaiduErnie
             | ProviderProtocolFamily::GoogleGemini
             | ProviderProtocolFamily::VertexAI
             | ProviderProtocolFamily::Cohere
@@ -1689,6 +1992,109 @@ impl ProviderAdapter for ProtocolAdapter {
 
     fn supports_stream_retry(&self) -> bool {
         self.supports_stream_retry
+    }
+}
+
+#[async_trait]
+impl ProviderAdapter for BaiduErnieAdapter {
+    fn build_auth_headers(
+        &self,
+        _api_key: &str,
+    ) -> Result<reqwest::header::HeaderMap, (String, Option<String>)> {
+        Ok(reqwest::header::HeaderMap::new())
+    }
+
+    fn normalize_error(
+        &self,
+        status: StatusCode,
+        _content_type: Option<&str>,
+        bytes: &[u8],
+    ) -> (String, Option<String>) {
+        baidu_error_response(status, bytes)
+    }
+
+    async fn list_models(
+        &self,
+        _request: ListModelsRequest<'_>,
+    ) -> Result<Vec<String>, GatewayError> {
+        Err(GatewayError::Config(
+            "百度文心旧版当前以手动模型或 endpoint path 为主，不支持自动发现模型。".into(),
+        ))
+    }
+
+    async fn test_connection(
+        &self,
+        request: ConnectionTestRequest<'_>,
+    ) -> Result<(), (String, Option<String>)> {
+        let access_token = baidu_access_token(request.provider_config).await?;
+        let url = baidu_ernie_chat_url(request.base_url, request.model, &access_token)?;
+        let client = client_for_url(&url, 30).map_err(|err| ("other".into(), Some(err.to_string())))?;
+        let resp = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&json!({
+                "messages": [{"role": "user", "content": "ping"}],
+                "stream": request.stream,
+                "temperature": 0,
+                "max_output_tokens": 1,
+            }))
+            .send()
+            .await
+            .map_err(|err| (classify_reqwest_error(&err), Some(err.to_string())))?;
+        let status = resp.status();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|err| ("other".into(), Some(err.to_string())))?;
+
+        if !status.is_success() || baidu_requires_error(&bytes) {
+            return Err(self.normalize_error(status, None, &bytes));
+        }
+
+        Ok(())
+    }
+
+    async fn chat_completions(
+        &self,
+        request: ChatCompletionsRequest<'_>,
+    ) -> Result<RawAndTypedChatCompletion, GatewayError> {
+        let base_url = Url::parse(request.base_url)
+            .map_err(|err| GatewayError::Config(format!("百度文心旧版 base_url 无效：{err}")))?;
+        let access_token = baidu_access_token(request.provider_config)
+            .await
+            .map_err(|(_, detail)| {
+                GatewayError::Config(
+                    detail.unwrap_or_else(|| "百度文心旧版鉴权配置无效。".into()),
+                )
+            })?;
+        let url = baidu_ernie_chat_url(&base_url, &request.request.model, &access_token).map_err(
+            |(_, detail)| {
+                GatewayError::Config(
+                    detail.unwrap_or_else(|| "百度文心旧版模型或路径配置无效。".into()),
+                )
+            },
+        )?;
+        let client = client_for_url(&url, 60)?;
+        let payload = build_baidu_ernie_payload(request.request, false)?;
+        let resp = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&payload)
+            .send()
+            .await?;
+        let status = resp.status();
+        let bytes = resp.bytes().await?;
+        if !status.is_success() || baidu_requires_error(&bytes) {
+            let (error_type, detail) = baidu_error_response(status, &bytes);
+            return Err(gateway_error_from_normalized(
+                &error_type,
+                detail.unwrap_or_else(|| baidu_error_text(&bytes)),
+            ));
+        }
+
+        adapt_baidu_ernie_response(&request.request.model, &bytes)
     }
 }
 
@@ -2372,6 +2778,9 @@ mod tests {
         assert!(adapter_for(ProviderType::OpenAI).is_some());
         assert!(adapter_for(ProviderType::Doubao).is_some());
         assert!(adapter_for(ProviderType::Yi).is_some());
+        assert!(adapter_for(ProviderType::BaiduErnie).is_some());
+        assert!(adapter_for(ProviderType::BaiduErnieV2).is_some());
+        assert!(adapter_for(ProviderType::XfSpark).is_some());
         assert!(adapter_for(ProviderType::MiniMax).is_some());
         assert!(adapter_for(ProviderType::TencentHunyuan).is_some());
         assert!(adapter_for(ProviderType::ThreeSixtyZhinao).is_some());
@@ -2392,6 +2801,12 @@ mod tests {
             .build_auth_headers("sk-test")
             .unwrap();
         assert!(openai_headers.contains_key(reqwest::header::AUTHORIZATION));
+
+        let baidu_v2_headers = adapter_for(ProviderType::BaiduErnieV2)
+            .unwrap()
+            .build_auth_headers("sk-test")
+            .unwrap();
+        assert!(baidu_v2_headers.contains_key(reqwest::header::AUTHORIZATION));
 
         let anthropic_headers = adapter_for(ProviderType::Anthropic)
             .unwrap()
@@ -2437,6 +2852,43 @@ mod tests {
             },
         );
         assert_eq!(url, "https://generativelanguage.googleapis.com/v1");
+    }
+
+    #[test]
+    fn baidu_ernie_model_paths_accept_alias_and_raw_endpoint() {
+        assert_eq!(baidu_ernie_model_path("ERNIE-Bot-4").unwrap(), "completions_pro");
+        assert_eq!(baidu_ernie_model_path("eb-instant").unwrap(), "eb-instant");
+        assert_eq!(
+            baidu_ernie_model_path("chat/custom-endpoint").unwrap(),
+            "custom-endpoint"
+        );
+    }
+
+    #[test]
+    fn baidu_ernie_response_is_adapted_to_openai_shape() {
+        let adapted = adapt_baidu_ernie_response(
+            "completions_pro",
+            serde_json::to_vec(&json!({
+                "id": "as-demo",
+                "result": "hello from baidu ernie",
+                "is_truncated": false,
+                "usage": {
+                    "prompt_tokens": 9,
+                    "completion_tokens": 4,
+                    "total_tokens": 13
+                }
+            }))
+            .unwrap()
+            .as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(adapted.raw["model"], json!("completions_pro"));
+        assert_eq!(
+            adapted.raw["choices"][0]["message"]["content"],
+            json!("hello from baidu ernie")
+        );
+        assert_eq!(adapted.raw["usage"]["total_tokens"], json!(13));
     }
 
     #[test]
@@ -2663,6 +3115,9 @@ mod tests {
         assert!(runtime_streaming_unsupported_message(ProviderType::Cohere).is_some());
         assert!(runtime_streaming_unsupported_message(ProviderType::AwsClaude).is_some());
         assert!(runtime_streaming_unsupported_message(ProviderType::VertexAI).is_some());
+        assert!(runtime_streaming_unsupported_message(ProviderType::BaiduErnie).is_some());
+        assert!(runtime_streaming_unsupported_message(ProviderType::BaiduErnieV2).is_some());
+        assert!(runtime_streaming_unsupported_message(ProviderType::XfSpark).is_some());
         assert!(runtime_streaming_unsupported_message(ProviderType::MiniMax).is_some());
         assert!(runtime_streaming_unsupported_message(ProviderType::TencentHunyuan).is_some());
         assert!(runtime_streaming_unsupported_message(ProviderType::ThreeSixtyZhinao).is_some());

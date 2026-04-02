@@ -11,6 +11,7 @@ use crate::server::model_parser::ParsedModel;
 fn provider_uses_inline_credentials(provider: &crate::config::Provider) -> bool {
     match provider.api_type {
         ProviderType::AwsClaude => provider.provider_config.has_aws_claude_credentials(),
+        ProviderType::BaiduErnie => provider.provider_config.has_baidu_ernie_credentials(),
         ProviderType::VertexAI => provider.provider_config.has_vertex_ai_credentials(),
         _ => false,
     }
@@ -162,6 +163,7 @@ pub async fn call_provider_with_parsed_model(
         | ProviderType::GoogleGemini
         | ProviderType::Cohere
         | ProviderType::AwsClaude
+        | ProviderType::BaiduErnie
         | ProviderType::VertexAI => {
             runtime_chat_completions(
                 selected.provider.api_type,

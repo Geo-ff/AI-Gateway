@@ -1267,6 +1267,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mock_runtime_baidu_ernie_v2_chat() {
+        let (base_url, captured) = spawn_mock_openai_compat_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "ernie-v2-mock",
+            ProviderType::BaiduErnieV2,
+            &base_url,
+            ProviderConfig::default(),
+            "ernie-4.0-turbo-8k",
+        )
+        .await;
+
+        let payload = invoke_chat_and_parse_json(
+            app_state,
+            &token,
+            "ernie-v2-mock/ernie-4.0-turbo-8k",
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            payload["choices"][0]["message"]["content"],
+            json!("mock openai compat ok")
+        );
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("baidu ernie v2 mock call");
+        assert_eq!(call.path, "/v1/chat/completions");
+        assert_eq!(
+            call.headers.get("authorization"),
+            Some(&"Bearer mock-upstream-key".to_string())
+        );
+        assert_eq!(call.body["model"], json!("ernie-4.0-turbo-8k"));
+    }
+
+    #[tokio::test]
+    async fn mock_runtime_xf_spark_chat() {
+        let (base_url, captured) = spawn_mock_openai_compat_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "spark-mock",
+            ProviderType::XfSpark,
+            &base_url,
+            ProviderConfig::default(),
+            "generalv3.5",
+        )
+        .await;
+
+        let payload =
+            invoke_chat_and_parse_json(app_state, &token, "spark-mock/generalv3.5", false)
+                .await
+                .unwrap();
+        assert_eq!(
+            payload["choices"][0]["message"]["content"],
+            json!("mock openai compat ok")
+        );
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("xf spark mock call");
+        assert_eq!(call.path, "/v1/chat/completions");
+        assert_eq!(
+            call.headers.get("authorization"),
+            Some(&"Bearer mock-upstream-key".to_string())
+        );
+        assert_eq!(call.body["model"], json!("generalv3.5"));
+    }
+
+    #[tokio::test]
     async fn mock_runtime_new_native_providers_reject_stream() {
         let (base_url, _captured) = spawn_mock_gemini_server().await;
         let (_dir, app_state, token) = test_app_state_with_provider(
@@ -1381,6 +1447,44 @@ mod tests {
         .await
         .unwrap_err();
         assert!(stepfun_err.to_string().contains("仅保证非流式真实请求闭环"));
+
+        let (_dir, ernie_v2_app_state, ernie_v2_token) = test_app_state_with_provider(
+            "ernie-v2-stream-mock",
+            ProviderType::BaiduErnieV2,
+            &openai_compat_base_url,
+            ProviderConfig::default(),
+            "ernie-4.0-turbo-8k",
+        )
+        .await;
+
+        let ernie_v2_err = invoke_chat_and_parse_json(
+            ernie_v2_app_state,
+            &ernie_v2_token,
+            "ernie-v2-stream-mock/ernie-4.0-turbo-8k",
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(ernie_v2_err.to_string().contains("仅保证非流式真实请求闭环"));
+
+        let (_dir, spark_app_state, spark_token) = test_app_state_with_provider(
+            "spark-stream-mock",
+            ProviderType::XfSpark,
+            &openai_compat_base_url,
+            ProviderConfig::default(),
+            "generalv3.5",
+        )
+        .await;
+
+        let spark_err = invoke_chat_and_parse_json(
+            spark_app_state,
+            &spark_token,
+            "spark-stream-mock/generalv3.5",
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(spark_err.to_string().contains("仅保证非流式真实请求闭环"));
     }
 
     #[tokio::test]

@@ -59,6 +59,7 @@ fn provider_uses_inline_credentials(
 ) -> bool {
     match provider_type {
         ProviderType::AwsClaude => provider_config.has_aws_claude_credentials(),
+        ProviderType::BaiduErnie => provider_config.has_baidu_ernie_credentials(),
         ProviderType::VertexAI => provider_config.has_vertex_ai_credentials(),
         _ => false,
     }
@@ -709,6 +710,8 @@ mod tests {
     async fn manual_model_priority_provider_skips_auto_discovery() {
         let cases = [
             (ProviderType::MiniMax, "https://api.minimax.io/v1"),
+            (ProviderType::BaiduErnieV2, "https://qianfan.baidubce.com/v2"),
+            (ProviderType::XfSpark, "https://spark-api-open.xf-yun.com/v1"),
             (ProviderType::ThreeSixtyZhinao, "https://api.360.cn/v1"),
             (ProviderType::StepFun, "https://api.stepfun.com/v1"),
         ];

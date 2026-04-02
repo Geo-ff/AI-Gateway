@@ -250,6 +250,24 @@ impl ProviderConfig {
             && self.vertex_access_token().is_some()
     }
 
+    pub fn baidu_access_key(&self) -> Option<&str> {
+        self.baidu_access_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn baidu_secret_key(&self) -> Option<&str> {
+        self.baidu_secret_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn has_baidu_ernie_credentials(&self) -> bool {
+        self.baidu_access_key().is_some() && self.baidu_secret_key().is_some()
+    }
+
     pub fn to_storage_json(&self) -> Option<String> {
         if self.is_empty() {
             return None;
@@ -385,6 +403,7 @@ pub enum ProviderProtocolFamily {
     AzureOpenAI,
     Anthropic,
     AwsClaude,
+    BaiduErnie,
     GoogleGemini,
     VertexAI,
     Cohere,
@@ -461,7 +480,7 @@ impl ProviderType {
             ProviderType::Anthropic => ProviderAuthMode::XApiKey,
             ProviderType::AzureOpenAI | ProviderType::GoogleGemini => ProviderAuthMode::ApiKey,
             ProviderType::AwsClaude => ProviderAuthMode::SigV4,
-            ProviderType::VertexAI => ProviderAuthMode::OAuth,
+            ProviderType::VertexAI | ProviderType::BaiduErnie => ProviderAuthMode::OAuth,
             ProviderType::OpenAI
             | ProviderType::Cohere
             | ProviderType::Cloudflare
@@ -478,11 +497,10 @@ impl ProviderType {
             | ProviderType::Yi
             | ProviderType::MiniMax
             | ProviderType::TencentHunyuan
+            | ProviderType::BaiduErnieV2
+            | ProviderType::XfSpark
             | ProviderType::ThreeSixtyZhinao
             | ProviderType::StepFun => ProviderAuthMode::Bearer,
-            ProviderType::BaiduErnie | ProviderType::BaiduErnieV2 | ProviderType::XfSpark => {
-                ProviderAuthMode::Unsupported
-            }
         }
     }
 
@@ -546,7 +564,17 @@ impl ProviderType {
                 test_connection_family: ProviderProtocolFamily::VertexAI,
                 openai_compatible: false,
             },
+            ProviderType::BaiduErnie => ProviderCapabilities {
+                auth_mode: self.auth_mode(),
+                supports_auto_model_discovery: false,
+                supports_models_endpoint: false,
+                requires_models_endpoint: false,
+                test_connection_family: ProviderProtocolFamily::BaiduErnie,
+                openai_compatible: false,
+            },
             ProviderType::MiniMax
+            | ProviderType::BaiduErnieV2
+            | ProviderType::XfSpark
             | ProviderType::TencentHunyuan
             | ProviderType::ThreeSixtyZhinao
             | ProviderType::StepFun => ProviderCapabilities {
@@ -556,14 +584,6 @@ impl ProviderType {
                 requires_models_endpoint: false,
                 test_connection_family: ProviderProtocolFamily::OpenAI,
                 openai_compatible: true,
-            },
-            ProviderType::BaiduErnie | ProviderType::BaiduErnieV2 | ProviderType::XfSpark => ProviderCapabilities {
-                auth_mode: self.auth_mode(),
-                supports_auto_model_discovery: false,
-                supports_models_endpoint: false,
-                requires_models_endpoint: false,
-                test_connection_family: ProviderProtocolFamily::Unsupported,
-                openai_compatible: false,
             },
             ProviderType::OpenAI
             | ProviderType::Cloudflare
@@ -692,12 +712,20 @@ mod tests {
             ProviderAuthMode::OAuth
         );
         assert_eq!(
-            ProviderType::TencentHunyuan.capabilities().auth_mode,
+            ProviderType::BaiduErnie.capabilities().auth_mode,
+            ProviderAuthMode::OAuth
+        );
+        assert_eq!(
+            ProviderType::BaiduErnieV2.capabilities().auth_mode,
             ProviderAuthMode::Bearer
         );
         assert_eq!(
-            ProviderType::BaiduErnie.capabilities().auth_mode,
-            ProviderAuthMode::Unsupported
+            ProviderType::XfSpark.capabilities().auth_mode,
+            ProviderAuthMode::Bearer
+        );
+        assert_eq!(
+            ProviderType::TencentHunyuan.capabilities().auth_mode,
+            ProviderAuthMode::Bearer
         );
     }
 
@@ -759,7 +787,19 @@ mod tests {
         assert!(!ernie.openai_compatible);
         assert_eq!(
             ernie.test_connection_family,
-            ProviderProtocolFamily::Unsupported
+            ProviderProtocolFamily::BaiduErnie
+        );
+
+        let ernie_v2 = ProviderType::BaiduErnieV2.capabilities();
+        assert!(ernie_v2.openai_compatible);
+        assert!(!ernie_v2.supports_auto_model_discovery);
+
+        let xf_spark = ProviderType::XfSpark.capabilities();
+        assert!(xf_spark.openai_compatible);
+        assert!(!xf_spark.supports_auto_model_discovery);
+        assert_eq!(
+            xf_spark.test_connection_family,
+            ProviderProtocolFamily::OpenAI
         );
     }
 }
