@@ -136,7 +136,9 @@ pub fn adapter_for(provider_type: ProviderType) -> Option<&'static dyn ProviderA
         | ProviderType::Doubao
         | ProviderType::Yi
         | ProviderType::MiniMax
-        | ProviderType::TencentHunyuan => Some(&OPENAI_COMPAT_ADAPTER),
+        | ProviderType::TencentHunyuan
+        | ProviderType::ThreeSixtyZhinao
+        | ProviderType::StepFun => Some(&OPENAI_COMPAT_ADAPTER),
         ProviderType::Anthropic => Some(&ANTHROPIC_ADAPTER),
         ProviderType::Zhipu => Some(&ZHIPU_ADAPTER),
         ProviderType::AzureOpenAI => Some(&AZURE_OPENAI_ADAPTER),
@@ -144,11 +146,7 @@ pub fn adapter_for(provider_type: ProviderType) -> Option<&'static dyn ProviderA
         ProviderType::Cohere => Some(&COHERE_ADAPTER),
         ProviderType::AwsClaude => Some(&AWS_CLAUDE_ADAPTER),
         ProviderType::VertexAI => Some(&VERTEX_AI_ADAPTER),
-        ProviderType::BaiduErnie
-        | ProviderType::BaiduErnieV2
-        | ProviderType::XfSpark
-        | ProviderType::ThreeSixtyZhinao
-        | ProviderType::StepFun => None,
+        ProviderType::BaiduErnie | ProviderType::BaiduErnieV2 | ProviderType::XfSpark => None,
     }
 }
 
@@ -190,6 +188,12 @@ pub fn runtime_streaming_unsupported_message(provider_type: ProviderType) -> Opt
         }
         ProviderType::TencentHunyuan => {
             Some("腾讯混元当前仅保证非流式真实请求闭环，stream=true 暂未纳入本轮支持范围。".into())
+        }
+        ProviderType::ThreeSixtyZhinao => {
+            Some("360 智脑当前仅保证非流式真实请求闭环，stream=true 暂未纳入本轮支持范围。".into())
+        }
+        ProviderType::StepFun => {
+            Some("阶跃星辰当前仅保证非流式真实请求闭环，stream=true 暂未纳入本轮支持范围。".into())
         }
         _ => None,
     }
@@ -2370,6 +2374,8 @@ mod tests {
         assert!(adapter_for(ProviderType::Yi).is_some());
         assert!(adapter_for(ProviderType::MiniMax).is_some());
         assert!(adapter_for(ProviderType::TencentHunyuan).is_some());
+        assert!(adapter_for(ProviderType::ThreeSixtyZhinao).is_some());
+        assert!(adapter_for(ProviderType::StepFun).is_some());
         assert!(adapter_for(ProviderType::Anthropic).is_some());
         assert!(adapter_for(ProviderType::Zhipu).is_some());
         assert!(adapter_for(ProviderType::AzureOpenAI).is_some());
@@ -2659,6 +2665,8 @@ mod tests {
         assert!(runtime_streaming_unsupported_message(ProviderType::VertexAI).is_some());
         assert!(runtime_streaming_unsupported_message(ProviderType::MiniMax).is_some());
         assert!(runtime_streaming_unsupported_message(ProviderType::TencentHunyuan).is_some());
+        assert!(runtime_streaming_unsupported_message(ProviderType::ThreeSixtyZhinao).is_some());
+        assert!(runtime_streaming_unsupported_message(ProviderType::StepFun).is_some());
         assert!(runtime_streaming_unsupported_message(ProviderType::OpenAI).is_none());
         assert!(runtime_streaming_unsupported_message(ProviderType::Yi).is_none());
     }

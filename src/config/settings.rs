@@ -546,7 +546,10 @@ impl ProviderType {
                 test_connection_family: ProviderProtocolFamily::VertexAI,
                 openai_compatible: false,
             },
-            ProviderType::MiniMax | ProviderType::TencentHunyuan => ProviderCapabilities {
+            ProviderType::MiniMax
+            | ProviderType::TencentHunyuan
+            | ProviderType::ThreeSixtyZhinao
+            | ProviderType::StepFun => ProviderCapabilities {
                 auth_mode: self.auth_mode(),
                 supports_auto_model_discovery: false,
                 supports_models_endpoint: false,
@@ -554,11 +557,7 @@ impl ProviderType {
                 test_connection_family: ProviderProtocolFamily::OpenAI,
                 openai_compatible: true,
             },
-            ProviderType::BaiduErnie
-            | ProviderType::BaiduErnieV2
-            | ProviderType::XfSpark
-            | ProviderType::ThreeSixtyZhinao
-            | ProviderType::StepFun => ProviderCapabilities {
+            ProviderType::BaiduErnie | ProviderType::BaiduErnieV2 | ProviderType::XfSpark => ProviderCapabilities {
                 auth_mode: self.auth_mode(),
                 supports_auto_model_discovery: false,
                 supports_models_endpoint: false,
@@ -724,6 +723,10 @@ mod tests {
             ProviderType::from_str("360_zhinao").unwrap(),
             ProviderType::ThreeSixtyZhinao
         );
+        assert_eq!(
+            ProviderType::from_str("stepfun").unwrap(),
+            ProviderType::StepFun
+        );
     }
 
     #[test]
@@ -735,6 +738,22 @@ mod tests {
         let minimax = ProviderType::MiniMax.capabilities();
         assert!(minimax.openai_compatible);
         assert!(!minimax.supports_auto_model_discovery);
+
+        let zhinao = ProviderType::ThreeSixtyZhinao.capabilities();
+        assert!(zhinao.openai_compatible);
+        assert!(!zhinao.supports_auto_model_discovery);
+        assert_eq!(
+            zhinao.test_connection_family,
+            ProviderProtocolFamily::OpenAI
+        );
+
+        let stepfun = ProviderType::StepFun.capabilities();
+        assert!(stepfun.openai_compatible);
+        assert!(!stepfun.supports_auto_model_discovery);
+        assert_eq!(
+            stepfun.test_connection_family,
+            ProviderProtocolFamily::OpenAI
+        );
 
         let ernie = ProviderType::BaiduErnie.capabilities();
         assert!(!ernie.openai_compatible);

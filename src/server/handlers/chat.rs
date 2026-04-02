@@ -835,6 +835,53 @@ mod tests {
         (format!("http://{addr}"), captured)
     }
 
+    async fn spawn_mock_openai_compat_server() -> (String, SharedCapturedRequests) {
+        async fn handler(
+            State(captured): State<SharedCapturedRequests>,
+            headers: HeaderMap,
+            Json(body): Json<Value>,
+        ) -> (StatusCode, Json<Value>) {
+            capture_request(
+                captured,
+                "/v1/chat/completions".into(),
+                HashMap::new(),
+                &headers,
+                body,
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "id": "openai-compat-mock-1",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "mock-model",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "mock openai compat ok"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 6,
+                        "completion_tokens": 4,
+                        "total_tokens": 10
+                    }
+                })),
+            )
+        }
+
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/v1/chat/completions", post(handler))
+            .with_state(captured.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}/v1"), captured)
+    }
+
     async fn test_app_state_with_provider(
         provider_name: &str,
         provider_type: ProviderType,
@@ -1158,6 +1205,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mock_runtime_360_zhinao_chat() {
+        let (base_url, captured) = spawn_mock_openai_compat_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "zhinao-mock",
+            ProviderType::ThreeSixtyZhinao,
+            &base_url,
+            ProviderConfig::default(),
+            "360gpt-pro",
+        )
+        .await;
+
+        let payload =
+            invoke_chat_and_parse_json(app_state, &token, "zhinao-mock/360gpt-pro", false)
+                .await
+                .unwrap();
+        assert_eq!(
+            payload["choices"][0]["message"]["content"],
+            json!("mock openai compat ok")
+        );
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("360 zhinao mock call");
+        assert_eq!(call.path, "/v1/chat/completions");
+        assert_eq!(
+            call.headers.get("authorization"),
+            Some(&"Bearer mock-upstream-key".to_string())
+        );
+        assert_eq!(call.body["model"], json!("360gpt-pro"));
+    }
+
+    #[tokio::test]
+    async fn mock_runtime_stepfun_chat() {
+        let (base_url, captured) = spawn_mock_openai_compat_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "stepfun-mock",
+            ProviderType::StepFun,
+            &base_url,
+            ProviderConfig::default(),
+            "step-1-8k",
+        )
+        .await;
+
+        let payload =
+            invoke_chat_and_parse_json(app_state, &token, "stepfun-mock/step-1-8k", false)
+                .await
+                .unwrap();
+        assert_eq!(
+            payload["choices"][0]["message"]["content"],
+            json!("mock openai compat ok")
+        );
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("stepfun mock call");
+        assert_eq!(call.path, "/v1/chat/completions");
+        assert_eq!(
+            call.headers.get("authorization"),
+            Some(&"Bearer mock-upstream-key".to_string())
+        );
+        assert_eq!(call.body["model"], json!("step-1-8k"));
+    }
+
+    #[tokio::test]
     async fn mock_runtime_new_native_providers_reject_stream() {
         let (base_url, _captured) = spawn_mock_gemini_server().await;
         let (_dir, app_state, token) = test_app_state_with_provider(
@@ -1233,6 +1342,45 @@ mod tests {
         .await
         .unwrap_err();
         assert!(vertex_err.to_string().contains("仅支持非流式真实请求"));
+
+        let (openai_compat_base_url, _captured) = spawn_mock_openai_compat_server().await;
+        let (_dir, zhinao_app_state, zhinao_token) = test_app_state_with_provider(
+            "zhinao-stream-mock",
+            ProviderType::ThreeSixtyZhinao,
+            &openai_compat_base_url,
+            ProviderConfig::default(),
+            "360gpt-pro",
+        )
+        .await;
+
+        let zhinao_err = invoke_chat_and_parse_json(
+            zhinao_app_state,
+            &zhinao_token,
+            "zhinao-stream-mock/360gpt-pro",
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(zhinao_err.to_string().contains("仅保证非流式真实请求闭环"));
+
+        let (_dir, stepfun_app_state, stepfun_token) = test_app_state_with_provider(
+            "stepfun-stream-mock",
+            ProviderType::StepFun,
+            &openai_compat_base_url,
+            ProviderConfig::default(),
+            "step-1-8k",
+        )
+        .await;
+
+        let stepfun_err = invoke_chat_and_parse_json(
+            stepfun_app_state,
+            &stepfun_token,
+            "stepfun-stream-mock/step-1-8k",
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(stepfun_err.to_string().contains("仅保证非流式真实请求闭环"));
     }
 
     #[tokio::test]

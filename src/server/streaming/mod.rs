@@ -453,6 +453,13 @@ mod tests {
                 .is_some()
         );
         assert!(
+            runtime_streaming_unsupported_message(crate::config::ProviderType::ThreeSixtyZhinao)
+                .is_some()
+        );
+        assert!(
+            runtime_streaming_unsupported_message(crate::config::ProviderType::StepFun).is_some()
+        );
+        assert!(
             runtime_streaming_unsupported_message(crate::config::ProviderType::OpenAI).is_none()
         );
         assert!(runtime_streaming_unsupported_message(crate::config::ProviderType::Yi).is_none());

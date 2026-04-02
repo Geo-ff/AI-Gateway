@@ -707,19 +707,27 @@ mod tests {
 
     #[tokio::test]
     async fn manual_model_priority_provider_skips_auto_discovery() {
-        let base_url = reqwest::Url::parse("https://api.minimax.io/v1").unwrap();
-        let err = resolve_test_model(
-            ProviderType::MiniMax,
-            &base_url,
-            None,
-            "sk-test",
-            &ProviderConfig::default(),
-            None,
-        )
-        .await
-        .unwrap_err();
+        let cases = [
+            (ProviderType::MiniMax, "https://api.minimax.io/v1"),
+            (ProviderType::ThreeSixtyZhinao, "https://api.360.cn/v1"),
+            (ProviderType::StepFun, "https://api.stepfun.com/v1"),
+        ];
 
-        assert_eq!(err.0, "configuration_required");
-        assert!(err.1.unwrap_or_default().contains("手动填写模型"));
+        for (provider_type, base_url) in cases {
+            let base_url = reqwest::Url::parse(base_url).unwrap();
+            let err = resolve_test_model(
+                provider_type,
+                &base_url,
+                None,
+                "sk-test",
+                &ProviderConfig::default(),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+            assert_eq!(err.0, "configuration_required");
+            assert!(err.1.unwrap_or_default().contains("手动填写模型"));
+        }
     }
 }
