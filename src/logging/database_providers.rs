@@ -1,6 +1,6 @@
 use rusqlite::{OptionalExtension, Result};
 
-use crate::config::settings::{KeyLogStrategy, Provider, ProviderType};
+use crate::config::settings::{KeyLogStrategy, Provider, ProviderConfig, ProviderType};
 use crate::logging::time::{parse_datetime_string, to_iso8601_utc_string};
 use crate::routing::KeyRotationStrategy;
 
@@ -21,8 +21,8 @@ impl DatabaseLogger {
             .map(to_iso8601_utc_string)
             .unwrap_or_else(|| to_iso8601_utc_string(&now));
         let res = conn.execute(
-            "INSERT OR IGNORE INTO providers (name, display_name, collection, api_type, base_url, models_endpoint, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT OR IGNORE INTO providers (name, display_name, collection, api_type, base_url, models_endpoint, provider_config, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             (
                 &provider.name,
                 &provider.display_name,
@@ -30,6 +30,7 @@ impl DatabaseLogger {
                 provider_type_to_str(&provider.api_type),
                 &provider.base_url,
                 &provider.models_endpoint,
+                &provider.provider_config.to_storage_json(),
                 &created_at_s,
                 &updated_at_s,
             ),
@@ -51,13 +52,14 @@ impl DatabaseLogger {
             .map(to_iso8601_utc_string)
             .unwrap_or_else(|| to_iso8601_utc_string(&now));
         conn.execute(
-            "INSERT INTO providers (name, display_name, collection, api_type, base_url, models_endpoint, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "INSERT INTO providers (name, display_name, collection, api_type, base_url, models_endpoint, provider_config, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(name) DO UPDATE SET api_type = excluded.api_type,
                                          display_name = excluded.display_name,
                                          collection = excluded.collection,
                                          base_url = excluded.base_url,
                                          models_endpoint = excluded.models_endpoint,
+                                         provider_config = excluded.provider_config,
                                          updated_at = excluded.updated_at",
             (
                 &provider.name,
@@ -66,6 +68,7 @@ impl DatabaseLogger {
                 provider_type_to_str(&provider.api_type),
                 &provider.base_url,
                 &provider.models_endpoint,
+                &provider.provider_config.to_storage_json(),
                 &created_at_s,
                 &updated_at_s,
             ),
@@ -92,7 +95,7 @@ impl DatabaseLogger {
             (name, &now_utc),
         );
         let mut stmt = conn.prepare(
-            "SELECT name, display_name, collection, api_type, base_url, models_endpoint, enabled, created_at, updated_at FROM providers WHERE name = ?1 LIMIT 1",
+            "SELECT name, display_name, collection, api_type, base_url, models_endpoint, provider_config, enabled, created_at, updated_at FROM providers WHERE name = ?1 LIMIT 1",
         )?;
         let provider = stmt
             .query_row([name], |row| {
@@ -102,9 +105,10 @@ impl DatabaseLogger {
                 let api_type: String = row.get(3)?;
                 let base_url: String = row.get(4)?;
                 let models_endpoint: Option<String> = row.get(5)?;
-                let enabled: i64 = row.get(6)?;
-                let created_at_raw: Option<String> = row.get(7)?;
-                let updated_at_raw: Option<String> = row.get(8)?;
+                let provider_config_raw: Option<String> = row.get(6)?;
+                let enabled: i64 = row.get(7)?;
+                let created_at_raw: Option<String> = row.get(8)?;
+                let updated_at_raw: Option<String> = row.get(9)?;
                 let (api_type, api_type_raw) = ProviderType::from_storage_with_raw(&api_type);
                 Ok(Provider {
                     name,
@@ -115,6 +119,7 @@ impl DatabaseLogger {
                     base_url,
                     api_keys: Vec::new(),
                     models_endpoint,
+                    provider_config: ProviderConfig::from_storage_json(provider_config_raw),
                     enabled: enabled != 0,
                     created_at: created_at_raw.and_then(|s| parse_datetime_string(&s).ok()),
                     updated_at: updated_at_raw.and_then(|s| parse_datetime_string(&s).ok()),
@@ -136,7 +141,7 @@ impl DatabaseLogger {
             [&now_utc],
         );
         let mut stmt = conn.prepare(
-            "SELECT name, display_name, collection, api_type, base_url, models_endpoint, enabled, created_at, updated_at FROM providers ORDER BY name",
+            "SELECT name, display_name, collection, api_type, base_url, models_endpoint, provider_config, enabled, created_at, updated_at FROM providers ORDER BY name",
         )?;
         let rows = stmt.query_map([], |row| {
             let name: String = row.get(0)?;
@@ -145,9 +150,10 @@ impl DatabaseLogger {
             let api_type: String = row.get(3)?;
             let base_url: String = row.get(4)?;
             let models_endpoint: Option<String> = row.get(5)?;
-            let enabled: i64 = row.get(6)?;
-            let created_at_raw: Option<String> = row.get(7)?;
-            let updated_at_raw: Option<String> = row.get(8)?;
+            let provider_config_raw: Option<String> = row.get(6)?;
+            let enabled: i64 = row.get(7)?;
+            let created_at_raw: Option<String> = row.get(8)?;
+            let updated_at_raw: Option<String> = row.get(9)?;
             let (api_type, api_type_raw) = ProviderType::from_storage_with_raw(&api_type);
             Ok(Provider {
                 name,
@@ -158,6 +164,7 @@ impl DatabaseLogger {
                 base_url,
                 api_keys: Vec::new(),
                 models_endpoint,
+                provider_config: ProviderConfig::from_storage_json(provider_config_raw),
                 enabled: enabled != 0,
                 created_at: created_at_raw.and_then(|s| parse_datetime_string(&s).ok()),
                 updated_at: updated_at_raw.and_then(|s| parse_datetime_string(&s).ok()),
@@ -279,6 +286,7 @@ mod tests {
             base_url: "http://example.com".into(),
             api_keys: vec![],
             models_endpoint: None,
+            provider_config: ProviderConfig::default(),
             enabled: true,
             created_at: Some(now),
             updated_at: Some(now),

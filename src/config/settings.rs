@@ -14,6 +14,83 @@ pub struct Settings {
     pub logging: LoggingConfig,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub azure_deployment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub azure_api_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub google_api_version: Option<String>,
+}
+
+impl ProviderConfig {
+    pub fn is_empty(&self) -> bool {
+        self.azure_deployment
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+            && self
+                .azure_api_version
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self
+                .google_api_version
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+    }
+
+    pub fn azure_deployment(&self) -> Option<&str> {
+        self.azure_deployment
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn azure_api_version(&self) -> Option<&str> {
+        self.azure_api_version
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn google_api_version(&self) -> Option<&str> {
+        self.google_api_version
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn to_storage_json(&self) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+        serde_json::to_string(self).ok()
+    }
+
+    pub fn from_storage_json(raw: Option<String>) -> Self {
+        let Some(raw) = raw
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        else {
+            return Self::default();
+        };
+
+        match serde_json::from_str::<Self>(&raw) {
+            Ok(config) => config,
+            Err(err) => {
+                tracing::warn!(provider_config = raw, error = %err, "Failed to parse provider_config from storage");
+                Self::default()
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
     pub name: String,
@@ -27,6 +104,8 @@ pub struct Provider {
     pub base_url: String,
     pub api_keys: Vec<String>,
     pub models_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "ProviderConfig::is_empty")]
+    pub provider_config: ProviderConfig,
     #[serde(default = "default_provider_enabled")]
     pub enabled: bool,
     #[serde(default)]
@@ -72,7 +151,10 @@ pub enum ProviderAuthMode {
 #[serde(rename_all = "snake_case")]
 pub enum ProviderProtocolFamily {
     OpenAI,
+    AzureOpenAI,
     Anthropic,
+    GoogleGemini,
+    Cohere,
     Zhipu,
     Unsupported,
 }
@@ -155,33 +237,18 @@ impl ProviderType {
         }
     }
 
-    pub fn protocol_family(self) -> ProviderProtocolFamily {
-        match self {
-            ProviderType::Anthropic => ProviderProtocolFamily::Anthropic,
-            ProviderType::Zhipu => ProviderProtocolFamily::Zhipu,
-            ProviderType::AwsClaude
-            | ProviderType::AzureOpenAI
-            | ProviderType::GoogleGemini
-            | ProviderType::VertexAI
-            | ProviderType::Cohere => ProviderProtocolFamily::Unsupported,
-            ProviderType::OpenAI
-            | ProviderType::Cloudflare
-            | ProviderType::Perplexity
-            | ProviderType::Mistral
-            | ProviderType::DeepSeek
-            | ProviderType::SiliconCloud
-            | ProviderType::Moonshot
-            | ProviderType::AlibabaQwen
-            | ProviderType::Custom
-            | ProviderType::XAI
-            | ProviderType::Doubao => ProviderProtocolFamily::OpenAI,
-        }
-    }
-
     // Keep these capability semantics aligned with `captok/src/features/channels/data/provider-registry.ts`.
     // When adding a provider here, update the frontend registry in the same change.
     pub fn capabilities(self) -> ProviderCapabilities {
         match self {
+            ProviderType::AzureOpenAI => ProviderCapabilities {
+                auth_mode: self.auth_mode(),
+                supports_auto_model_discovery: false,
+                supports_models_endpoint: false,
+                requires_models_endpoint: false,
+                test_connection_family: ProviderProtocolFamily::AzureOpenAI,
+                openai_compatible: false,
+            },
             ProviderType::Anthropic => ProviderCapabilities {
                 auth_mode: self.auth_mode(),
                 supports_auto_model_discovery: false,
@@ -206,10 +273,23 @@ impl ProviderType {
                 test_connection_family: ProviderProtocolFamily::Unsupported,
                 openai_compatible: false,
             },
-            ProviderType::AzureOpenAI
-            | ProviderType::GoogleGemini
-            | ProviderType::VertexAI
-            | ProviderType::Cohere => ProviderCapabilities {
+            ProviderType::GoogleGemini => ProviderCapabilities {
+                auth_mode: self.auth_mode(),
+                supports_auto_model_discovery: true,
+                supports_models_endpoint: false,
+                requires_models_endpoint: false,
+                test_connection_family: ProviderProtocolFamily::GoogleGemini,
+                openai_compatible: false,
+            },
+            ProviderType::Cohere => ProviderCapabilities {
+                auth_mode: self.auth_mode(),
+                supports_auto_model_discovery: true,
+                supports_models_endpoint: false,
+                requires_models_endpoint: false,
+                test_connection_family: ProviderProtocolFamily::Cohere,
+                openai_compatible: false,
+            },
+            ProviderType::VertexAI => ProviderCapabilities {
                 auth_mode: self.auth_mode(),
                 supports_auto_model_discovery: false,
                 supports_models_endpoint: false,

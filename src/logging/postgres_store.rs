@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use chrono::{DateTime, Duration, Utc};
 use tokio_postgres::{Client, NoTls, Row};
 
-use crate::config::settings::{KeyLogStrategy, Provider, ProviderType};
+use crate::config::settings::{KeyLogStrategy, Provider, ProviderConfig, ProviderType};
 use crate::error::GatewayError;
 use crate::logging::time::{parse_datetime_string, to_beijing_string, to_iso8601_utc_string};
 use crate::logging::types::ProviderOpLog;
@@ -305,6 +305,7 @@ impl PgLogStore {
                 api_type TEXT NOT NULL,
                 base_url TEXT NOT NULL,
                 models_endpoint TEXT,
+                provider_config TEXT,
                 enabled BOOLEAN NOT NULL DEFAULT TRUE,
                 key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential',
                 created_at TEXT,
@@ -341,6 +342,9 @@ impl PgLogStore {
             .await;
         let _ = client
             .execute("ALTER TABLE providers ADD COLUMN updated_at TEXT", &[])
+            .await;
+        let _ = client
+            .execute("ALTER TABLE providers ADD COLUMN provider_config TEXT", &[])
             .await;
         // Backfill timestamps for existing rows (best-effort).
         let now_utc = to_iso8601_utc_string(&Utc::now());
@@ -1475,8 +1479,8 @@ impl ProviderStore for PgLogStore {
                 .unwrap_or_else(|| to_iso8601_utc_string(&now));
             let res = client
                 .execute(
-                    "INSERT INTO providers (name, display_name, collection, api_type, base_url, models_endpoint, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-                    &[&provider.name, &provider.display_name, &provider.collection, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint, &created_at_s, &updated_at_s],
+                    "INSERT INTO providers (name, display_name, collection, api_type, base_url, models_endpoint, provider_config, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+                    &[&provider.name, &provider.display_name, &provider.collection, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint, &provider.provider_config.to_storage_json(), &created_at_s, &updated_at_s],
                 )
                 .await
                 .map_err(pg_err)?;
@@ -1503,8 +1507,8 @@ impl ProviderStore for PgLogStore {
                 .unwrap_or_else(|| to_iso8601_utc_string(&now));
             let updated = client
                 .execute(
-                    "UPDATE providers SET display_name=$2, collection=$3, api_type=$4, base_url=$5, models_endpoint=$6, updated_at=$7 WHERE name=$1",
-                    &[&provider.name, &provider.display_name, &provider.collection, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint, &updated_at_s],
+                    "UPDATE providers SET display_name=$2, collection=$3, api_type=$4, base_url=$5, models_endpoint=$6, provider_config=$7, updated_at=$8 WHERE name=$1",
+                    &[&provider.name, &provider.display_name, &provider.collection, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint, &provider.provider_config.to_storage_json(), &updated_at_s],
                 )
                 .await
                 .map_err(pg_err)?;
@@ -1512,8 +1516,8 @@ impl ProviderStore for PgLogStore {
                 let client = self.pool.pick();
                 client
                     .execute(
-                        "INSERT INTO providers (name, display_name, collection, api_type, base_url, models_endpoint, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-                        &[&provider.name, &provider.display_name, &provider.collection, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint, &created_at_s, &updated_at_s],
+                        "INSERT INTO providers (name, display_name, collection, api_type, base_url, models_endpoint, provider_config, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+                        &[&provider.name, &provider.display_name, &provider.collection, &provider_type_to_str(&provider.api_type), &provider.base_url, &provider.models_endpoint, &provider.provider_config.to_storage_json(), &created_at_s, &updated_at_s],
                     )
                     .await
                     .map_err(pg_err)?;
@@ -1552,7 +1556,7 @@ impl ProviderStore for PgLogStore {
                 )
                 .await;
             let row = client
-                .query_opt("SELECT name, display_name, collection, api_type, base_url, models_endpoint, enabled, created_at, updated_at FROM providers WHERE name = $1", &[&name])
+                .query_opt("SELECT name, display_name, collection, api_type, base_url, models_endpoint, provider_config, enabled, created_at, updated_at FROM providers WHERE name = $1", &[&name])
                 .await
                 .map_err(pg_err)?;
             Ok(row.map(|r| {
@@ -1567,12 +1571,13 @@ impl ProviderStore for PgLogStore {
                     base_url: pg_row_string(&r, 4),
                     api_keys: Vec::new(),
                     models_endpoint: pg_row_opt_string(&r, 5),
-                    enabled: pg_row_bool_or(&r, 6, true),
-                    created_at: r.try_get::<usize, DateTime<Utc>>(7).ok().or_else(|| {
-                        pg_row_opt_string(&r, 7).and_then(|s| parse_datetime_string(&s).ok())
-                    }),
-                    updated_at: r.try_get::<usize, DateTime<Utc>>(8).ok().or_else(|| {
+                    provider_config: ProviderConfig::from_storage_json(pg_row_opt_string(&r, 6)),
+                    enabled: pg_row_bool_or(&r, 7, true),
+                    created_at: r.try_get::<usize, DateTime<Utc>>(8).ok().or_else(|| {
                         pg_row_opt_string(&r, 8).and_then(|s| parse_datetime_string(&s).ok())
+                    }),
+                    updated_at: r.try_get::<usize, DateTime<Utc>>(9).ok().or_else(|| {
+                        pg_row_opt_string(&r, 9).and_then(|s| parse_datetime_string(&s).ok())
                     }),
                 }
             }))
@@ -1595,18 +1600,18 @@ impl ProviderStore for PgLogStore {
                 .await;
             let rows = client
                 .query(
-                    "SELECT name, display_name, collection, api_type, base_url, models_endpoint, enabled, created_at, updated_at FROM providers ORDER BY name",
+                    "SELECT name, display_name, collection, api_type, base_url, models_endpoint, provider_config, enabled, created_at, updated_at FROM providers ORDER BY name",
                     &[],
                 )
                 .await
                 .map_err(pg_err)?;
             let mut out = Vec::new();
             for r in rows {
-                let created_at = r.try_get::<usize, DateTime<Utc>>(7).ok().or_else(|| {
-                    pg_row_opt_string(&r, 7).and_then(|s| parse_datetime_string(&s).ok())
-                });
-                let updated_at = r.try_get::<usize, DateTime<Utc>>(8).ok().or_else(|| {
+                let created_at = r.try_get::<usize, DateTime<Utc>>(8).ok().or_else(|| {
                     pg_row_opt_string(&r, 8).and_then(|s| parse_datetime_string(&s).ok())
+                });
+                let updated_at = r.try_get::<usize, DateTime<Utc>>(9).ok().or_else(|| {
+                    pg_row_opt_string(&r, 9).and_then(|s| parse_datetime_string(&s).ok())
                 });
                 let api_type_raw = pg_row_string(&r, 3);
                 let (api_type, api_type_raw) = ProviderType::from_storage_with_raw(&api_type_raw);
@@ -1619,7 +1624,8 @@ impl ProviderStore for PgLogStore {
                     base_url: pg_row_string(&r, 4),
                     api_keys: Vec::new(),
                     models_endpoint: pg_row_opt_string(&r, 5),
-                    enabled: pg_row_bool_or(&r, 6, true),
+                    provider_config: ProviderConfig::from_storage_json(pg_row_opt_string(&r, 6)),
+                    enabled: pg_row_bool_or(&r, 7, true),
                     created_at,
                     updated_at,
                 });

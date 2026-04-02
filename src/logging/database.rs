@@ -753,6 +753,7 @@ impl DatabaseLogger {
                 api_type TEXT NOT NULL,
                 base_url TEXT NOT NULL,
                 models_endpoint TEXT,
+                provider_config TEXT,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 key_rotation_strategy TEXT NOT NULL DEFAULT 'weighted_sequential',
                 created_at TEXT,
@@ -789,6 +790,7 @@ impl DatabaseLogger {
         );
         let _ = conn.execute("ALTER TABLE providers ADD COLUMN created_at TEXT", []);
         let _ = conn.execute("ALTER TABLE providers ADD COLUMN updated_at TEXT", []);
+        let _ = conn.execute("ALTER TABLE providers ADD COLUMN provider_config TEXT", []);
         // Backfill timestamps for existing rows (best-effort).
         let now_utc = to_iso8601_utc_string(&Utc::now());
         let _ = conn.execute(

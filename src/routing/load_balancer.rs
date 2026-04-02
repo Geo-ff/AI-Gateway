@@ -244,6 +244,7 @@ impl LoadBalancer {
 mod tests {
     use super::*;
     use crate::config::settings::DEFAULT_PROVIDER_COLLECTION;
+    use crate::config::settings::ProviderConfig;
     use crate::config::{BalanceStrategy, ProviderType};
     use rand::SeedableRng;
 
@@ -257,6 +258,7 @@ mod tests {
             base_url: "http://example.invalid".to_string(),
             api_keys: keys.iter().map(|s| s.to_string()).collect(),
             models_endpoint: None,
+            provider_config: ProviderConfig::default(),
             enabled: true,
             created_at: None,
             updated_at: None,

@@ -442,6 +442,7 @@ mod tests {
                 base_url: "http://localhost".into(),
                 api_keys: Vec::new(),
                 models_endpoint: None,
+                provider_config: crate::config::settings::ProviderConfig::default(),
                 enabled: true,
                 created_at: None,
                 updated_at: None,

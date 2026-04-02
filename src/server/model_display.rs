@@ -57,7 +57,7 @@ pub fn format_model_display_name(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::settings::{Provider, ProviderType};
+    use crate::config::settings::{Provider, ProviderConfig, ProviderType};
 
     fn provider(name: &str, display_name: Option<&str>) -> Provider {
         Provider {
@@ -69,6 +69,7 @@ mod tests {
             base_url: "https://example.com".to_string(),
             api_keys: Vec::new(),
             models_endpoint: None,
+            provider_config: ProviderConfig::default(),
             enabled: true,
             created_at: None,
             updated_at: None,

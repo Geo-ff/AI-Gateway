@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use super::auth::require_superadmin;
-use crate::config::settings::ProviderType;
+use crate::config::settings::{ProviderConfig, ProviderType};
 use crate::error::GatewayError;
 use crate::logging::types::REQ_TYPE_PROVIDER_MODEL_TEST;
 use crate::providers::adapters::{
@@ -32,6 +32,8 @@ pub struct DraftProviderModelTestPayload {
     pub api_key: Option<String>,
     #[serde(default)]
     pub models_endpoint: Option<String>,
+    #[serde(default)]
+    pub provider_config: ProviderConfig,
     #[serde(default)]
     pub model: Option<String>,
 }
@@ -129,6 +131,7 @@ async fn resolve_test_model(
     base_url: &reqwest::Url,
     models_endpoint: Option<&str>,
     api_key: &str,
+    _provider_config: &ProviderConfig,
     model: Option<&str>,
 ) -> Result<String, (String, Option<String>)> {
     if let Some(model) = trim_to_option(model) {
@@ -188,6 +191,7 @@ async fn send_test_request(
     provider_type: ProviderType,
     base_url: &reqwest::Url,
     api_key: &str,
+    provider_config: &ProviderConfig,
     model: &str,
     stream: bool,
 ) -> Result<(), (String, Option<String>)> {
@@ -203,6 +207,7 @@ async fn send_test_request(
             api_key,
             model,
             stream,
+            provider_config,
         })
         .await
 }
@@ -211,10 +216,19 @@ async fn execute_connection_test(
     provider_type: ProviderType,
     base_url: &reqwest::Url,
     api_key: &str,
+    provider_config: &ProviderConfig,
     model: &str,
 ) -> ProviderModelTestResponse {
     let t0 = Instant::now();
-    let mut outcome = send_test_request(provider_type, base_url, api_key, model, false).await;
+    let mut outcome = send_test_request(
+        provider_type,
+        base_url,
+        api_key,
+        provider_config,
+        model,
+        false,
+    )
+    .await;
 
     if outcome.is_err()
         && adapter_for(provider_type)
@@ -224,7 +238,15 @@ async fn execute_connection_test(
     {
         let lower = detail.to_lowercase();
         if lower.contains("bad_response_body") || lower.contains("bad_response_status_code") {
-            outcome = send_test_request(provider_type, base_url, api_key, model, true).await;
+            outcome = send_test_request(
+                provider_type,
+                base_url,
+                api_key,
+                provider_config,
+                model,
+                true,
+            )
+            .await;
         }
     }
 
@@ -438,7 +460,14 @@ pub async fn test_provider_model(
         .await;
         return Ok(resp);
     }
-    let resp = execute_connection_test(api_type, &base_url, &api_key, &upstream_model).await;
+    let resp = execute_connection_test(
+        api_type,
+        &base_url,
+        &api_key,
+        &provider.provider_config,
+        &upstream_model,
+    )
+    .await;
 
     log_simple_request(
         &app_state,
@@ -556,6 +585,7 @@ pub async fn test_provider_model_draft(
         &base_url,
         payload.models_endpoint.as_deref(),
         &api_key,
+        &payload.provider_config,
         payload.model.as_deref(),
     )
     .await
@@ -585,7 +615,14 @@ pub async fn test_provider_model_draft(
         }
     };
 
-    let resp = execute_connection_test(api_type, &base_url, &api_key, &resolved_model).await;
+    let resp = execute_connection_test(
+        api_type,
+        &base_url,
+        &api_key,
+        &payload.provider_config,
+        &resolved_model,
+    )
+    .await;
 
     log_simple_request(
         &app_state,

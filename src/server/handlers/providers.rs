@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::auth::require_superadmin;
-use crate::config::settings::{DEFAULT_PROVIDER_COLLECTION, Provider, ProviderType};
+use crate::config::settings::{
+    DEFAULT_PROVIDER_COLLECTION, Provider, ProviderConfig, ProviderType,
+};
 use crate::error::GatewayError;
 use crate::logging::types::{
     ProviderOpLog, REQ_TYPE_PROVIDER_CREATE, REQ_TYPE_PROVIDER_DELETE,
@@ -38,6 +40,8 @@ pub struct ProviderCreatePayload {
     pub api_type: ProviderType,
     pub base_url: String,
     pub models_endpoint: Option<String>,
+    #[serde(default)]
+    pub provider_config: ProviderConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,6 +51,8 @@ pub struct ProviderUpdatePayload {
     pub api_type: ProviderType,
     pub base_url: String,
     pub models_endpoint: Option<String>,
+    #[serde(default)]
+    pub provider_config: ProviderConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +71,8 @@ pub struct ProviderOut {
     pub base_url: String,
     pub api_keys: Vec<String>,
     pub models_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "ProviderConfig::is_empty")]
+    pub provider_config: ProviderConfig,
     pub enabled: bool,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
@@ -83,6 +91,7 @@ impl ProviderOut {
             base_url: p.base_url,
             api_keys: p.api_keys.into_iter().map(|k| mask_key(&k)).collect(),
             models_endpoint: p.models_endpoint,
+            provider_config: p.provider_config,
             enabled: p.enabled,
             created_at: p
                 .created_at
@@ -293,6 +302,7 @@ pub async fn create_provider(
         base_url: payload.base_url,
         api_keys: Vec::new(),
         models_endpoint: payload.models_endpoint,
+        provider_config: payload.provider_config,
         enabled: true,
         created_at: Some(start_time),
         updated_at: Some(start_time),
@@ -439,6 +449,7 @@ pub async fn update_provider(
         base_url: payload.base_url,
         api_keys: Vec::new(),
         models_endpoint: payload.models_endpoint,
+        provider_config: payload.provider_config,
         enabled,
         created_at,
         updated_at: Some(start_time),
@@ -907,6 +918,7 @@ mod tests {
                 api_type: ProviderType::OpenAI,
                 base_url: "http://example.com".into(),
                 models_endpoint: None,
+                provider_config: ProviderConfig::default(),
             }),
         )
         .await
@@ -932,6 +944,7 @@ mod tests {
                 api_type: ProviderType::OpenAI,
                 base_url: "http://example.com".into(),
                 models_endpoint: None,
+                provider_config: ProviderConfig::default(),
             }),
         )
         .await
