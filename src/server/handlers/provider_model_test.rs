@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use super::auth::require_superadmin;
-use crate::config::settings::{ProviderConfig, ProviderType};
+use crate::config::settings::{ProviderConfig, ProviderType, deserialize_default_on_null};
 use crate::error::GatewayError;
 use crate::logging::types::REQ_TYPE_PROVIDER_MODEL_TEST;
 use crate::providers::adapters::{
@@ -32,7 +32,7 @@ pub struct DraftProviderModelTestPayload {
     pub api_key: Option<String>,
     #[serde(default)]
     pub models_endpoint: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_default_on_null")]
     pub provider_config: ProviderConfig,
     #[serde(default)]
     pub model: Option<String>,
@@ -643,7 +643,8 @@ pub async fn test_provider_model_draft(
 
 #[cfg(test)]
 mod tests {
-    use super::map_model_discovery_error;
+    use super::{DraftProviderModelTestPayload, map_model_discovery_error};
+    use crate::config::settings::ProviderConfig;
     use crate::error::GatewayError;
 
     #[test]
@@ -668,5 +669,26 @@ mod tests {
             "models_endpoint 不能为空字符串".into(),
         ));
         assert_eq!(error_type, "configuration_required");
+    }
+
+    #[test]
+    fn draft_payload_provider_config_accepts_missing_and_null() {
+        let missing: DraftProviderModelTestPayload = serde_json::from_value(serde_json::json!({
+            "api_type": "openai",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-test"
+        }))
+        .unwrap();
+        assert_eq!(missing.provider_config, ProviderConfig::default());
+
+        let explicit_null: DraftProviderModelTestPayload =
+            serde_json::from_value(serde_json::json!({
+                "api_type": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "api_key": "sk-test",
+                "provider_config": null
+            }))
+            .unwrap();
+        assert_eq!(explicit_null.provider_config, ProviderConfig::default());
     }
 }

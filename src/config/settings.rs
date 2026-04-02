@@ -7,6 +7,14 @@ use std::str::FromStr;
 
 pub const DEFAULT_PROVIDER_COLLECTION: &str = "默认合集";
 
+pub fn deserialize_default_on_null<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub load_balancing: LoadBalancing,
@@ -104,7 +112,11 @@ pub struct Provider {
     pub base_url: String,
     pub api_keys: Vec<String>,
     pub models_endpoint: Option<String>,
-    #[serde(default, skip_serializing_if = "ProviderConfig::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_default_on_null",
+        skip_serializing_if = "ProviderConfig::is_empty"
+    )]
     pub provider_config: ProviderConfig,
     #[serde(default = "default_provider_enabled")]
     pub enabled: bool,
@@ -112,6 +124,41 @@ pub struct Provider {
     pub created_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[cfg(test)]
+mod provider_config_tests {
+    use super::{Provider, ProviderConfig, ProviderType};
+
+    #[test]
+    fn provider_config_deserializes_missing_as_default() {
+        let provider: Provider = serde_json::from_value(serde_json::json!({
+            "name": "demo",
+            "collection": "默认合集",
+            "api_type": "openai",
+            "base_url": "https://api.openai.com/v1",
+            "api_keys": []
+        }))
+        .unwrap();
+
+        assert_eq!(provider.provider_config, ProviderConfig::default());
+        assert_eq!(provider.api_type, ProviderType::OpenAI);
+    }
+
+    #[test]
+    fn provider_config_deserializes_null_as_default() {
+        let provider: Provider = serde_json::from_value(serde_json::json!({
+            "name": "demo",
+            "collection": "默认合集",
+            "api_type": "openai",
+            "base_url": "https://api.openai.com/v1",
+            "api_keys": [],
+            "provider_config": null
+        }))
+        .unwrap();
+
+        assert_eq!(provider.provider_config, ProviderConfig::default());
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

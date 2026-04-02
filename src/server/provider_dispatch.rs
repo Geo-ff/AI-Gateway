@@ -1,5 +1,6 @@
 use crate::config::ProviderType;
 use crate::error::GatewayError;
+use crate::providers::adapters::{ChatCompletionsRequest, runtime_chat_completions};
 use crate::providers::anthropic::AnthropicProvider;
 use crate::providers::openai::{ChatCompletionRequest, OpenAIProvider, RawAndTypedChatCompletion};
 use crate::providers::zhipu;
@@ -141,6 +142,18 @@ pub async fn call_provider_with_parsed_model(
             call_anthropic_provider(selected, &modified_request, top_k).await
         }
         ProviderType::Zhipu => call_zhipu_provider(selected, &modified_request).await,
+        ProviderType::AzureOpenAI | ProviderType::GoogleGemini | ProviderType::Cohere => {
+            runtime_chat_completions(
+                selected.provider.api_type,
+                ChatCompletionsRequest {
+                    base_url: &selected.provider.base_url,
+                    api_key: &selected.api_key,
+                    provider_config: &selected.provider.provider_config,
+                    request: &modified_request,
+                },
+            )
+            .await
+        }
         provider_type if provider_type.capabilities().openai_compatible => {
             call_openai_provider(selected, &modified_request).await
         }

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use super::auth::require_superadmin;
 use crate::config::settings::{
     DEFAULT_PROVIDER_COLLECTION, Provider, ProviderConfig, ProviderType,
+    deserialize_default_on_null,
 };
 use crate::error::GatewayError;
 use crate::logging::types::{
@@ -40,7 +41,7 @@ pub struct ProviderCreatePayload {
     pub api_type: ProviderType,
     pub base_url: String,
     pub models_endpoint: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_default_on_null")]
     pub provider_config: ProviderConfig,
 }
 
@@ -51,7 +52,7 @@ pub struct ProviderUpdatePayload {
     pub api_type: ProviderType,
     pub base_url: String,
     pub models_endpoint: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_default_on_null")]
     pub provider_config: ProviderConfig,
 }
 
@@ -956,6 +957,50 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(fetched.created_at.as_deref(), Some(created_at.as_str()));
+    }
+
+    #[test]
+    fn create_payload_provider_config_accepts_missing_and_null() {
+        let missing: ProviderCreatePayload = serde_json::from_value(serde_json::json!({
+            "name": "p1",
+            "api_type": "openai",
+            "base_url": "https://api.openai.com/v1",
+            "models_endpoint": null
+        }))
+        .unwrap();
+        assert_eq!(missing.provider_config, ProviderConfig::default());
+
+        let explicit_null: ProviderCreatePayload = serde_json::from_value(serde_json::json!({
+            "name": "p1",
+            "api_type": "openai",
+            "base_url": "https://api.openai.com/v1",
+            "models_endpoint": null,
+            "provider_config": null
+        }))
+        .unwrap();
+        assert_eq!(explicit_null.provider_config, ProviderConfig::default());
+    }
+
+    #[test]
+    fn update_payload_provider_config_accepts_missing_and_null() {
+        let missing: ProviderUpdatePayload = serde_json::from_value(serde_json::json!({
+            "display_name": "OpenAI",
+            "api_type": "openai",
+            "base_url": "https://api.openai.com/v1",
+            "models_endpoint": null
+        }))
+        .unwrap();
+        assert_eq!(missing.provider_config, ProviderConfig::default());
+
+        let explicit_null: ProviderUpdatePayload = serde_json::from_value(serde_json::json!({
+            "display_name": "OpenAI",
+            "api_type": "openai",
+            "base_url": "https://api.openai.com/v1",
+            "models_endpoint": null,
+            "provider_config": null
+        }))
+        .unwrap();
+        assert_eq!(explicit_null.provider_config, ProviderConfig::default());
     }
 }
 

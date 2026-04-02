@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 // Reuse API key hint from shared server utilities
 use crate::error::GatewayError;
+use crate::providers::adapters::runtime_streaming_unsupported_message;
 use crate::server::AppState;
 use crate::server::chat_request::GatewayChatCompletionRequest;
 use crate::server::model_redirect::{
@@ -366,11 +367,12 @@ pub async fn stream_chat_completions(
             .map(IntoResponse::into_response)
         }
         provider_type => Err(GatewayError::Config(
-            format!(
-                "provider type '{}' is registered but streaming dispatch is not implemented yet",
-                provider_type.as_str()
-            )
-            .into(),
+            runtime_streaming_unsupported_message(provider_type).unwrap_or_else(|| {
+                format!(
+                    "provider type '{}' is registered but streaming dispatch is not implemented yet",
+                    provider_type.as_str()
+                )
+            }),
         )),
     };
 
@@ -418,6 +420,24 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    #[test]
+    fn explicit_non_stream_only_providers_have_clear_streaming_message() {
+        assert!(
+            runtime_streaming_unsupported_message(crate::config::ProviderType::AzureOpenAI)
+                .is_some()
+        );
+        assert!(
+            runtime_streaming_unsupported_message(crate::config::ProviderType::GoogleGemini)
+                .is_some()
+        );
+        assert!(
+            runtime_streaming_unsupported_message(crate::config::ProviderType::Cohere).is_some()
+        );
+        assert!(
+            runtime_streaming_unsupported_message(crate::config::ProviderType::OpenAI).is_none()
+        );
     }
 
     #[tokio::test]

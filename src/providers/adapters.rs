@@ -9,7 +9,9 @@ use crate::config::settings::{
     ProviderAuthMode, ProviderConfig, ProviderProtocolFamily, ProviderType,
 };
 use crate::error::GatewayError;
-use crate::providers::openai::ModelListResponse;
+use crate::providers::openai::{
+    ChatCompletionRequest, ChatCompletionResponse, ModelListResponse, RawAndTypedChatCompletion,
+};
 
 pub struct ListModelsRequest<'a> {
     pub models_url: &'a Url,
@@ -22,6 +24,13 @@ pub struct ConnectionTestRequest<'a> {
     pub model: &'a str,
     pub stream: bool,
     pub provider_config: &'a ProviderConfig,
+}
+
+pub struct ChatCompletionsRequest<'a> {
+    pub base_url: &'a str,
+    pub api_key: &'a str,
+    pub provider_config: &'a ProviderConfig,
+    pub request: &'a ChatCompletionRequest,
 }
 
 #[async_trait]
@@ -47,6 +56,16 @@ pub trait ProviderAdapter: Send + Sync {
         &self,
         request: ConnectionTestRequest<'_>,
     ) -> Result<(), (String, Option<String>)>;
+
+    async fn chat_completions(
+        &self,
+        request: ChatCompletionsRequest<'_>,
+    ) -> Result<RawAndTypedChatCompletion, GatewayError> {
+        let _ = request;
+        Err(GatewayError::Config(
+            "当前 provider adapter 未实现真实聊天请求链路。".into(),
+        ))
+    }
 
     fn supports_stream_retry(&self) -> bool {
         false
@@ -118,6 +137,30 @@ pub fn unsupported_provider_message(provider_type: ProviderType) -> String {
         "provider type '{}' 仅完成类型注册骨架，当前版本暂未实现对应适配逻辑",
         provider_type.as_str()
     )
+}
+
+pub async fn runtime_chat_completions(
+    provider_type: ProviderType,
+    request: ChatCompletionsRequest<'_>,
+) -> Result<RawAndTypedChatCompletion, GatewayError> {
+    let adapter = adapter_for(provider_type)
+        .ok_or_else(|| GatewayError::Config(unsupported_provider_message(provider_type)))?;
+    adapter.chat_completions(request).await
+}
+
+pub fn runtime_streaming_unsupported_message(provider_type: ProviderType) -> Option<String> {
+    match provider_type {
+        ProviderType::AzureOpenAI => {
+            Some("Azure OpenAI 当前仅支持非流式真实请求，stream=true 暂未实现。".into())
+        }
+        ProviderType::GoogleGemini => {
+            Some("Google Gemini 当前仅支持非流式真实请求，stream=true 暂未实现。".into())
+        }
+        ProviderType::Cohere => {
+            Some("Cohere 当前仅支持非流式真实请求，stream=true 暂未实现。".into())
+        }
+        _ => None,
+    }
 }
 
 fn client_for_url(url: &str, timeout_secs: u64) -> Result<reqwest::Client, GatewayError> {
@@ -203,6 +246,10 @@ fn gemini_model_name(model: &str) -> Result<String, (String, Option<String>)> {
 fn classify_http_failure(status: StatusCode, body_snippet: &str) -> (String, Option<String>) {
     let snippet = body_snippet.trim();
     let lower = snippet.to_lowercase();
+
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        return ("rate_limited".into(), Some(snippet.to_string()));
+    }
 
     if status == StatusCode::NOT_FOUND {
         if lower.contains("model") && (lower.contains("not found") || lower.contains("not_found")) {
@@ -335,8 +382,509 @@ fn extract_error_message(bytes: &[u8]) -> Option<String> {
 fn gateway_error_from_normalized(error_type: &str, fallback_message: String) -> GatewayError {
     match error_type {
         "authentication_failed" => GatewayError::Unauthorized(fallback_message),
+        "rate_limited" => GatewayError::RateLimited(fallback_message),
         _ => GatewayError::Config(fallback_message),
     }
+}
+
+fn request_value(request: &ChatCompletionRequest) -> Result<serde_json::Value, GatewayError> {
+    serde_json::to_value(request).map_err(GatewayError::from)
+}
+
+fn request_messages(value: &serde_json::Value) -> Vec<serde_json::Value> {
+    value
+        .get("messages")
+        .and_then(|messages| messages.as_array())
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn extract_text_fragments(content: &serde_json::Value) -> Vec<String> {
+    match content {
+        serde_json::Value::Null => Vec::new(),
+        serde_json::Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                Vec::new()
+            } else {
+                vec![trimmed.to_string()]
+            }
+        }
+        serde_json::Value::Array(parts) => parts.iter().flat_map(extract_text_fragments).collect(),
+        serde_json::Value::Object(object) => {
+            if let Some(text) = object.get("text").and_then(|value| value.as_str()) {
+                let trimmed = text.trim();
+                return if trimmed.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![trimmed.to_string()]
+                };
+            }
+
+            if let Some(refusal) = object.get("refusal").and_then(|value| value.as_str()) {
+                let trimmed = refusal.trim();
+                return if trimmed.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![trimmed.to_string()]
+                };
+            }
+
+            if let Some(url) = object
+                .get("image_url")
+                .and_then(|value| value.get("url"))
+                .and_then(|value| value.as_str())
+            {
+                let trimmed = url.trim();
+                return if trimmed.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![format!("[image] {trimmed}")]
+                };
+            }
+
+            if object.get("input_audio").is_some() {
+                return vec!["[audio input omitted]".into()];
+            }
+
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn extract_message_text(message: &serde_json::Value) -> String {
+    let mut segments = Vec::new();
+
+    if let Some(content) = message.get("content") {
+        segments.extend(extract_text_fragments(content));
+    }
+
+    if let Some(tool_calls) = message.get("tool_calls").and_then(|value| value.as_array()) {
+        for tool_call in tool_calls {
+            let name = tool_call
+                .get("function")
+                .and_then(|value| value.get("name"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("tool");
+            let arguments = tool_call
+                .get("function")
+                .and_then(|value| value.get("arguments"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("{}");
+            segments.push(format!("[tool_call:{name}] {arguments}"));
+        }
+    }
+
+    if message.get("role").and_then(|value| value.as_str()) == Some("tool") {
+        let tool_id = message
+            .get("tool_call_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown_tool");
+        let joined = segments.join("\n");
+        return if joined.trim().is_empty() {
+            format!("Tool result ({tool_id})")
+        } else {
+            format!("Tool result ({tool_id}):\n{joined}")
+        };
+    }
+
+    segments.join("\n")
+}
+
+fn combined_system_prompt(messages: &[serde_json::Value]) -> Option<String> {
+    let mut segments = Vec::new();
+
+    for message in messages {
+        let role = message
+            .get("role")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if matches!(role, "system" | "developer") {
+            let text = extract_message_text(message);
+            if !text.trim().is_empty() {
+                segments.push(text);
+            }
+        }
+    }
+
+    if segments.is_empty() {
+        None
+    } else {
+        Some(segments.join("\n\n"))
+    }
+}
+
+fn string_stop_sequences(value: &serde_json::Value) -> Vec<String> {
+    match value.get("stop") {
+        Some(serde_json::Value::String(stop)) => vec![stop.to_string()],
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| item.as_str().map(str::to_string))
+            .filter(|item| !item.trim().is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn build_openai_style_response(
+    id: Option<String>,
+    model: &str,
+    content: String,
+    finish_reason: Option<&str>,
+    usage: Option<serde_json::Value>,
+) -> Result<RawAndTypedChatCompletion, GatewayError> {
+    let mut raw = json!({
+        "id": id.unwrap_or_else(|| format!("chatcmpl-{}", chrono::Utc::now().timestamp_millis())),
+        "object": "chat.completion",
+        "created": chrono::Utc::now().timestamp().max(0) as u64,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": content,
+            },
+            "finish_reason": finish_reason.unwrap_or("stop"),
+        }],
+    });
+
+    if let Some(usage) = usage
+        && let Some(object) = raw.as_object_mut()
+    {
+        object.insert("usage".into(), usage);
+    }
+
+    let typed: ChatCompletionResponse = serde_json::from_value(raw.clone())?;
+    Ok(RawAndTypedChatCompletion { typed, raw })
+}
+
+fn parse_openai_compatible_response(
+    bytes: &[u8],
+) -> Result<RawAndTypedChatCompletion, GatewayError> {
+    let raw: serde_json::Value = serde_json::from_slice(bytes)?;
+    let typed: ChatCompletionResponse = serde_json::from_value(raw.clone())?;
+    Ok(RawAndTypedChatCompletion { typed, raw })
+}
+
+fn gemini_finish_reason(reason: Option<&str>) -> &'static str {
+    match reason.unwrap_or_default() {
+        "MAX_TOKENS" => "length",
+        "SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" => "content_filter",
+        _ => "stop",
+    }
+}
+
+fn cohere_finish_reason(reason: Option<&str>) -> &'static str {
+    match reason.unwrap_or_default() {
+        "MAX_TOKENS" => "length",
+        _ => "stop",
+    }
+}
+
+fn build_gemini_payload(
+    request: &ChatCompletionRequest,
+) -> Result<serde_json::Value, GatewayError> {
+    let value = request_value(request)?;
+    let messages = request_messages(&value);
+    let mut contents = Vec::new();
+
+    for message in &messages {
+        let role = message
+            .get("role")
+            .and_then(|role| role.as_str())
+            .unwrap_or("user");
+
+        if matches!(role, "system" | "developer") {
+            continue;
+        }
+
+        let text = extract_message_text(message);
+        if text.trim().is_empty() {
+            continue;
+        }
+
+        let gemini_role = if role == "assistant" { "model" } else { "user" };
+        contents.push(json!({
+            "role": gemini_role,
+            "parts": [{ "text": text }],
+        }));
+    }
+
+    if contents.is_empty() {
+        return Err(GatewayError::Config(
+            "Google Gemini 请求缺少可转换的消息内容。".into(),
+        ));
+    }
+
+    let mut payload = json!({ "contents": contents });
+    if let Some(system) = combined_system_prompt(&messages)
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert(
+            "systemInstruction".into(),
+            json!({ "parts": [{ "text": system }] }),
+        );
+    }
+
+    let mut generation_config = serde_json::Map::new();
+    if let Some(value) = value.get("temperature").cloned() {
+        generation_config.insert("temperature".into(), value);
+    }
+    if let Some(value) = value.get("top_p").cloned() {
+        generation_config.insert("topP".into(), value);
+    }
+    if let Some(value) = value
+        .get("max_completion_tokens")
+        .cloned()
+        .or_else(|| value.get("max_tokens").cloned())
+    {
+        generation_config.insert("maxOutputTokens".into(), value);
+    }
+    let stop_sequences = string_stop_sequences(&value);
+    if !stop_sequences.is_empty() {
+        generation_config.insert("stopSequences".into(), json!(stop_sequences));
+    }
+
+    if !generation_config.is_empty()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert(
+            "generationConfig".into(),
+            serde_json::Value::Object(generation_config),
+        );
+    }
+
+    Ok(payload)
+}
+
+fn adapt_gemini_response(
+    model: &str,
+    bytes: &[u8],
+) -> Result<RawAndTypedChatCompletion, GatewayError> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)?;
+    let candidate = value
+        .get("candidates")
+        .and_then(|candidates| candidates.as_array())
+        .and_then(|candidates| candidates.first())
+        .cloned();
+
+    let Some(candidate) = candidate else {
+        let block_reason = value
+            .get("promptFeedback")
+            .and_then(|feedback| feedback.get("blockReason"))
+            .and_then(|reason| reason.as_str())
+            .unwrap_or("unknown");
+        return Err(GatewayError::Config(format!(
+            "Google Gemini 未返回可用候选内容（block reason: {block_reason}）。"
+        )));
+    };
+
+    let content = candidate
+        .get("content")
+        .and_then(|content| content.get("parts"))
+        .and_then(|parts| parts.as_array())
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| {
+                    part.get("text")
+                        .and_then(|text| text.as_str())
+                        .map(str::to_string)
+                        .or_else(|| {
+                            part.get("functionCall").map(|call| {
+                                let name = call
+                                    .get("name")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("tool");
+                                let args = call.get("args").cloned().unwrap_or_else(|| json!({}));
+                                format!("[function_call:{name}] {args}")
+                            })
+                        })
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+
+    let usage = value.get("usageMetadata").map(|usage| {
+        json!({
+            "prompt_tokens": usage
+                .get("promptTokenCount")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0),
+            "completion_tokens": usage
+                .get("candidatesTokenCount")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0),
+            "total_tokens": usage
+                .get("totalTokenCount")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0),
+        })
+    });
+
+    build_openai_style_response(
+        value
+            .get("responseId")
+            .and_then(|response_id| response_id.as_str())
+            .map(str::to_string),
+        model,
+        content,
+        candidate
+            .get("finishReason")
+            .and_then(|reason| reason.as_str())
+            .map(|reason| gemini_finish_reason(Some(reason))),
+        usage,
+    )
+}
+
+fn build_cohere_payload(
+    request: &ChatCompletionRequest,
+) -> Result<serde_json::Value, GatewayError> {
+    let value = request_value(request)?;
+    let messages = request_messages(&value);
+    let model = value
+        .get("model")
+        .and_then(|model| model.as_str())
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .ok_or_else(|| GatewayError::Config("Cohere 请求缺少模型名称。".into()))?;
+
+    let mut payload_messages = Vec::new();
+    for message in &messages {
+        let role = message
+            .get("role")
+            .and_then(|role| role.as_str())
+            .unwrap_or("user");
+        if matches!(role, "system" | "developer") {
+            continue;
+        }
+
+        let text = extract_message_text(message);
+        if text.trim().is_empty() {
+            continue;
+        }
+
+        payload_messages.push(json!({
+            "role": if role == "assistant" { "assistant" } else if role == "tool" { "tool" } else { "user" },
+            "content": text,
+        }));
+    }
+
+    if payload_messages.is_empty() {
+        return Err(GatewayError::Config(
+            "Cohere 请求缺少可转换的消息内容。".into(),
+        ));
+    }
+
+    let mut payload = json!({
+        "model": model,
+        "messages": payload_messages,
+    });
+    if let Some(system) = combined_system_prompt(&messages)
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("preamble".into(), json!(system));
+    }
+    if let Some(value) = value.get("temperature").cloned()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("temperature".into(), value);
+    }
+    if let Some(value) = value.get("top_p").cloned()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("p".into(), value);
+    }
+    if let Some(value) = value
+        .get("max_completion_tokens")
+        .cloned()
+        .or_else(|| value.get("max_tokens").cloned())
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("max_tokens".into(), value);
+    }
+    let stop_sequences = string_stop_sequences(&value);
+    if !stop_sequences.is_empty()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("stop_sequences".into(), json!(stop_sequences));
+    }
+
+    Ok(payload)
+}
+
+fn adapt_cohere_response(
+    model: &str,
+    bytes: &[u8],
+) -> Result<RawAndTypedChatCompletion, GatewayError> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)?;
+    let content = value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_array())
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| {
+                    part.get("text")
+                        .and_then(|text| text.as_str())
+                        .map(str::to_string)
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|content| !content.trim().is_empty())
+        .or_else(|| {
+            value
+                .get("text")
+                .and_then(|text| text.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+
+    let usage = value.get("usage").map(|usage| {
+        let tokens = usage.get("tokens");
+        let billed_units = usage.get("billed_units");
+        let prompt_tokens = tokens
+            .and_then(|tokens| tokens.get("input_tokens"))
+            .and_then(|value| value.as_u64())
+            .or_else(|| {
+                billed_units
+                    .and_then(|units| units.get("input_tokens"))
+                    .and_then(|value| value.as_u64())
+            })
+            .unwrap_or(0);
+        let completion_tokens = tokens
+            .and_then(|tokens| tokens.get("output_tokens"))
+            .and_then(|value| value.as_u64())
+            .or_else(|| {
+                billed_units
+                    .and_then(|units| units.get("output_tokens"))
+                    .and_then(|value| value.as_u64())
+            })
+            .unwrap_or(0);
+        json!({
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        })
+    });
+
+    build_openai_style_response(
+        value
+            .get("id")
+            .and_then(|id| id.as_str())
+            .map(str::to_string),
+        model,
+        content,
+        value
+            .get("finish_reason")
+            .and_then(|reason| reason.as_str())
+            .map(|reason| cohere_finish_reason(Some(reason))),
+        usage,
+    )
 }
 
 fn azure_error_message(status: StatusCode, bytes: &[u8]) -> String {
@@ -734,6 +1282,55 @@ impl ProviderAdapter for AzureOpenAIAdapter {
 
         Ok(())
     }
+
+    async fn chat_completions(
+        &self,
+        request: ChatCompletionsRequest<'_>,
+    ) -> Result<RawAndTypedChatCompletion, GatewayError> {
+        let base_url = Url::parse(request.base_url)
+            .map_err(|err| GatewayError::Config(format!("Azure OpenAI base_url 无效：{err}")))?;
+        let url = azure_openai_chat_completions_url(&base_url, request.provider_config).map_err(
+            |(_, detail)| {
+                GatewayError::Config(detail.unwrap_or_else(|| "Azure OpenAI 配置不完整。".into()))
+            },
+        )?;
+        let client = client_for_url(&url, 60)?;
+        let mut payload = request_value(request.request)?;
+        if let Some(object) = payload.as_object_mut() {
+            object.remove("model");
+        }
+
+        let mut req = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&payload);
+        for (name, value) in self
+            .build_auth_headers(request.api_key)
+            .map_err(|(_, detail)| {
+                GatewayError::Config(
+                    detail.unwrap_or_else(|| "Azure OpenAI API Key 配置无效。".into()),
+                )
+            })?
+        {
+            if let Some(name) = name {
+                req = req.header(name, value);
+            }
+        }
+
+        let resp = req.send().await?;
+        let status = resp.status();
+        let bytes = resp.bytes().await?;
+        if !status.is_success() {
+            let (error_type, detail) = classify_azure_error(status, &bytes);
+            return Err(gateway_error_from_normalized(
+                &error_type,
+                detail.unwrap_or_else(|| azure_error_message(status, &bytes)),
+            ));
+        }
+
+        parse_openai_compatible_response(&bytes)
+    }
 }
 
 #[async_trait]
@@ -837,6 +1434,47 @@ impl ProviderAdapter for GoogleGeminiAdapter {
         }
 
         Ok(())
+    }
+
+    async fn chat_completions(
+        &self,
+        request: ChatCompletionsRequest<'_>,
+    ) -> Result<RawAndTypedChatCompletion, GatewayError> {
+        let base_url = Url::parse(request.base_url)
+            .map_err(|err| GatewayError::Config(format!("Google Gemini base_url 无效：{err}")))?;
+        let model = gemini_model_name(&request.request.model).map_err(|(_, detail)| {
+            GatewayError::Config(
+                detail.unwrap_or_else(|| "Google Gemini 需要填写模型名称。".into()),
+            )
+        })?;
+        let base = gemini_base_url(&base_url, request.provider_config);
+        let url = Url::parse(&format!("{}/{}:generateContent", base, model))
+            .map_err(|err| GatewayError::Config(format!("Google Gemini 请求地址无效：{err}")))?;
+        let url = append_query_api_key(&url, request.api_key).map_err(|(_, detail)| {
+            GatewayError::Config(
+                detail.unwrap_or_else(|| "Google Gemini API Key 配置无效。".into()),
+            )
+        })?;
+        let client = client_for_url(&url, 60)?;
+        let payload = build_gemini_payload(request.request)?;
+        let resp = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&payload)
+            .send()
+            .await?;
+        let status = resp.status();
+        let bytes = resp.bytes().await?;
+        if !status.is_success() {
+            let (error_type, detail) = classify_gemini_error(status, &bytes);
+            return Err(gateway_error_from_normalized(
+                &error_type,
+                detail.unwrap_or_else(|| gemini_error_message(status, &bytes)),
+            ));
+        }
+
+        adapt_gemini_response(&request.request.model, &bytes)
     }
 }
 
@@ -958,11 +1596,50 @@ impl ProviderAdapter for CohereAdapter {
 
         Ok(())
     }
+
+    async fn chat_completions(
+        &self,
+        request: ChatCompletionsRequest<'_>,
+    ) -> Result<RawAndTypedChatCompletion, GatewayError> {
+        let base_url = request.base_url.trim_end_matches('/');
+        let url = format!("{}/v2/chat", base_url);
+        let client = client_for_url(&url, 60)?;
+        let payload = build_cohere_payload(request.request)?;
+        let mut req = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&payload);
+        for (name, value) in self
+            .build_auth_headers(request.api_key)
+            .map_err(|(_, detail)| {
+                GatewayError::Config(detail.unwrap_or_else(|| "Cohere API Key 配置无效。".into()))
+            })?
+        {
+            if let Some(name) = name {
+                req = req.header(name, value);
+            }
+        }
+
+        let resp = req.send().await?;
+        let status = resp.status();
+        let bytes = resp.bytes().await?;
+        if !status.is_success() {
+            let (error_type, detail) = classify_cohere_error(status, &bytes);
+            return Err(gateway_error_from_normalized(
+                &error_type,
+                detail.unwrap_or_else(|| cohere_error_message(status, &bytes)),
+            ));
+        }
+
+        adapt_cohere_response(&request.request.model, &bytes)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn supported_provider_types_resolve_to_adapters() {
@@ -1038,5 +1715,121 @@ mod tests {
             gemini_model_name("models/gemini-2.0-flash").unwrap(),
             "models/gemini-2.0-flash"
         );
+    }
+
+    #[test]
+    fn gemini_payload_uses_system_instruction_and_contents() {
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "gemini-2.0-flash",
+            "messages": [
+                {"role": "system", "content": "You are helpful"},
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi"}
+            ],
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "max_tokens": 64
+        }))
+        .unwrap();
+
+        let payload = build_gemini_payload(&request).unwrap();
+        assert_eq!(
+            payload["systemInstruction"]["parts"][0]["text"],
+            json!("You are helpful")
+        );
+        assert_eq!(payload["contents"][0]["role"], json!("user"));
+        assert_eq!(payload["contents"][1]["role"], json!("model"));
+        assert_eq!(payload["generationConfig"]["maxOutputTokens"], json!(64));
+    }
+
+    #[test]
+    fn gemini_response_is_adapted_to_openai_shape() {
+        let adapted = adapt_gemini_response(
+            "gemini-2.0-flash",
+            serde_json::to_vec(&json!({
+                "responseId": "gemini-resp-1",
+                "candidates": [{
+                    "finishReason": "STOP",
+                    "content": {
+                        "parts": [{"text": "hello from gemini"}]
+                    }
+                }],
+                "usageMetadata": {
+                    "promptTokenCount": 12,
+                    "candidatesTokenCount": 7,
+                    "totalTokenCount": 19
+                }
+            }))
+            .unwrap()
+            .as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(adapted.raw["model"], json!("gemini-2.0-flash"));
+        assert_eq!(
+            adapted.raw["choices"][0]["message"]["content"],
+            json!("hello from gemini")
+        );
+        assert_eq!(adapted.raw["usage"]["total_tokens"], json!(19));
+    }
+
+    #[test]
+    fn cohere_payload_uses_native_message_shape() {
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "command-r-plus",
+            "messages": [
+                {"role": "system", "content": "Be concise"},
+                {"role": "user", "content": "Hello Cohere"}
+            ],
+            "temperature": 0,
+            "max_tokens": 32
+        }))
+        .unwrap();
+
+        let payload = build_cohere_payload(&request).unwrap();
+        assert_eq!(payload["model"], json!("command-r-plus"));
+        assert_eq!(payload["preamble"], json!("Be concise"));
+        assert_eq!(payload["messages"][0]["role"], json!("user"));
+        assert_eq!(payload["messages"][0]["content"], json!("Hello Cohere"));
+    }
+
+    #[test]
+    fn cohere_response_is_adapted_to_openai_shape() {
+        let adapted = adapt_cohere_response(
+            "command-r-plus",
+            serde_json::to_vec(&json!({
+                "id": "cohere-chat-1",
+                "finish_reason": "COMPLETE",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "hello from cohere"}]
+                },
+                "usage": {
+                    "tokens": {
+                        "input_tokens": 9,
+                        "output_tokens": 4
+                    }
+                }
+            }))
+            .unwrap()
+            .as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(adapted.raw["id"], json!("cohere-chat-1"));
+        assert_eq!(
+            adapted.raw["choices"][0]["message"]["content"],
+            json!("hello from cohere")
+        );
+        assert_eq!(adapted.raw["usage"]["prompt_tokens"], json!(9));
+        assert_eq!(adapted.raw["usage"]["completion_tokens"], json!(4));
+    }
+
+    #[test]
+    fn runtime_streaming_boundary_is_explicit_for_new_native_providers() {
+        assert!(runtime_streaming_unsupported_message(ProviderType::AzureOpenAI).is_some());
+        assert!(runtime_streaming_unsupported_message(ProviderType::GoogleGemini).is_some());
+        assert!(runtime_streaming_unsupported_message(ProviderType::Cohere).is_some());
+        assert!(runtime_streaming_unsupported_message(ProviderType::OpenAI).is_none());
     }
 }

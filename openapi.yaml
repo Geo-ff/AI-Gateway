@@ -1284,6 +1284,26 @@ components:
           description: IP 黑名单（null 表示清空）
 
     # 提供商
+    ProviderConfig:
+      type: object
+      description: |
+        提供商补充配置。
+        - 可省略
+        - 兼容传入 `null`，服务端会回落为默认空配置
+      properties:
+        azure_deployment:
+          type: string
+          nullable: true
+          description: Azure OpenAI deployment 名称
+        azure_api_version:
+          type: string
+          nullable: true
+          description: Azure OpenAI API 版本
+        google_api_version:
+          type: string
+          nullable: true
+          description: Google Gemini API 版本
+
     Provider:
       type: object
       properties:
@@ -1306,6 +1326,10 @@ components:
           type: string
           nullable: true
           description: 模型列表端点
+        provider_config:
+          allOf:
+            - $ref: '#/components/schemas/ProviderConfig'
+          description: 供应商附加配置；为空时通常省略返回
         enabled:
           type: boolean
           description: 是否启用（禁用后调度不会选择该提供商）
@@ -3401,6 +3425,11 @@ paths:
                   type: string
                   nullable: true
                   description: 模型列表端点
+                provider_config:
+                  allOf:
+                    - $ref: '#/components/schemas/ProviderConfig'
+                  nullable: true
+                  description: 可选；缺失或传入 null 时，服务端将回落为默认空配置
               required:
                 - name
                 - api_type
@@ -3554,6 +3583,11 @@ paths:
                 models_endpoint:
                   type: string
                   nullable: true
+                provider_config:
+                  allOf:
+                    - $ref: '#/components/schemas/ProviderConfig'
+                  nullable: true
+                  description: 可选；缺失或传入 null 时，服务端将回落为默认空配置
               required:
                 - api_type
                 - base_url
