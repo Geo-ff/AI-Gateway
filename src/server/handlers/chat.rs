@@ -491,16 +491,27 @@ pub async fn chat_completions(
 mod tests {
     use super::{error_payload_to_chat_completion, is_openai_error_payload};
     use crate::admin::{CreateTokenPayload, TokenStore};
-    use crate::config::settings::{BalanceStrategy, LoadBalancing, LoggingConfig, ServerConfig};
+    use crate::config::settings::{
+        BalanceStrategy, LoadBalancing, LoggingConfig, Provider, ProviderConfig, ProviderType,
+        ServerConfig,
+    };
     use crate::logging::DatabaseLogger;
     use crate::server::AppState;
     use crate::server::login::LoginManager;
     use crate::users::{CreateUserPayload, UserRole, UserStatus, UserStore};
-    use axum::Json;
+    use axum::body::to_bytes;
     use axum::extract::State;
+    use axum::extract::{Path, Query};
+    use axum::http::StatusCode;
     use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use serde_json::{Value, json};
+    use std::collections::HashMap;
     use std::sync::Arc;
     use tempfile::tempdir;
+    use tokio::net::TcpListener;
+    use tokio::sync::Mutex;
 
     #[test]
     fn openai_error_payload_detection() {
@@ -555,6 +566,673 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    #[derive(Debug, Clone)]
+    struct CapturedUpstreamRequest {
+        path: String,
+        query: HashMap<String, String>,
+        headers: HashMap<String, String>,
+        body: Value,
+    }
+
+    type SharedCapturedRequests = Arc<Mutex<Vec<CapturedUpstreamRequest>>>;
+
+    async fn capture_request(
+        captured: SharedCapturedRequests,
+        path: String,
+        query: HashMap<String, String>,
+        headers: &HeaderMap,
+        body: Value,
+    ) {
+        let mut normalized_headers = HashMap::new();
+        for (name, value) in headers {
+            if let Ok(value) = value.to_str() {
+                normalized_headers.insert(name.as_str().to_string(), value.to_string());
+            }
+        }
+        captured.lock().await.push(CapturedUpstreamRequest {
+            path,
+            query,
+            headers: normalized_headers,
+            body,
+        });
+    }
+
+    async fn spawn_mock_azure_server() -> (String, SharedCapturedRequests) {
+        async fn handler(
+            State(captured): State<SharedCapturedRequests>,
+            Path(deployment): Path<String>,
+            Query(query): Query<HashMap<String, String>>,
+            headers: HeaderMap,
+            Json(body): Json<Value>,
+        ) -> (StatusCode, Json<Value>) {
+            capture_request(
+                captured,
+                format!("/openai/deployments/{deployment}/chat/completions"),
+                query,
+                &headers,
+                body,
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "id": "azure-mock-1",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": deployment,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "mock azure ok"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 5,
+                        "completion_tokens": 3,
+                        "total_tokens": 8
+                    }
+                })),
+            )
+        }
+
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route(
+                "/openai/deployments/{deployment}/chat/completions",
+                post(handler),
+            )
+            .with_state(captured.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), captured)
+    }
+
+    async fn spawn_mock_gemini_server() -> (String, SharedCapturedRequests) {
+        async fn handler(
+            State(captured): State<SharedCapturedRequests>,
+            Path(model_action): Path<String>,
+            Query(query): Query<HashMap<String, String>>,
+            headers: HeaderMap,
+            Json(body): Json<Value>,
+        ) -> (StatusCode, Json<Value>) {
+            capture_request(
+                captured,
+                format!("/v1beta/models/{model_action}"),
+                query,
+                &headers,
+                body,
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "responseId": "gemini-mock-1",
+                    "candidates": [{
+                        "finishReason": "STOP",
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": "mock gemini ok"}]
+                        }
+                    }],
+                    "usageMetadata": {
+                        "promptTokenCount": 7,
+                        "candidatesTokenCount": 4,
+                        "totalTokenCount": 11
+                    }
+                })),
+            )
+        }
+
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/v1beta/models/{model_action}", post(handler))
+            .with_state(captured.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), captured)
+    }
+
+    async fn spawn_mock_cohere_server() -> (String, SharedCapturedRequests) {
+        async fn handler(
+            State(captured): State<SharedCapturedRequests>,
+            headers: HeaderMap,
+            Json(body): Json<Value>,
+        ) -> (StatusCode, Json<Value>) {
+            capture_request(captured, "/v2/chat".into(), HashMap::new(), &headers, body).await;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "id": "cohere-mock-1",
+                    "finish_reason": "COMPLETE",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "mock cohere ok"}]
+                    },
+                    "usage": {
+                        "tokens": {
+                            "input_tokens": 9,
+                            "output_tokens": 6
+                        }
+                    }
+                })),
+            )
+        }
+
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/v2/chat", post(handler))
+            .with_state(captured.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), captured)
+    }
+
+    async fn spawn_mock_aws_claude_server() -> (String, SharedCapturedRequests) {
+        async fn handler(
+            State(captured): State<SharedCapturedRequests>,
+            Path(model): Path<String>,
+            headers: HeaderMap,
+            Json(body): Json<Value>,
+        ) -> (StatusCode, Json<Value>) {
+            capture_request(
+                captured,
+                format!("/model/{model}/converse"),
+                HashMap::new(),
+                &headers,
+                body,
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "output": {
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"text": "mock aws claude ok"}]
+                        }
+                    },
+                    "stopReason": "end_turn",
+                    "usage": {
+                        "inputTokens": 8,
+                        "outputTokens": 5,
+                        "totalTokens": 13
+                    }
+                })),
+            )
+        }
+
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/model/{model}/converse", post(handler))
+            .with_state(captured.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), captured)
+    }
+
+    async fn spawn_mock_vertex_server() -> (String, SharedCapturedRequests) {
+        async fn handler(
+            State(captured): State<SharedCapturedRequests>,
+            Path((project, location, model_action)): Path<(String, String, String)>,
+            headers: HeaderMap,
+            Json(body): Json<Value>,
+        ) -> (StatusCode, Json<Value>) {
+            capture_request(
+                captured,
+                format!(
+                    "/v1/projects/{project}/locations/{location}/publishers/google/models/{model_action}"
+                ),
+                HashMap::new(),
+                &headers,
+                body,
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "responseId": "vertex-mock-1",
+                    "candidates": [{
+                        "finishReason": "STOP",
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": "mock vertex ok"}]
+                        }
+                    }],
+                    "usageMetadata": {
+                        "promptTokenCount": 10,
+                        "candidatesTokenCount": 6,
+                        "totalTokenCount": 16
+                    }
+                })),
+            )
+        }
+
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route(
+                "/v1/projects/{project}/locations/{location}/publishers/google/models/{model_action}",
+                post(handler),
+            )
+            .with_state(captured.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), captured)
+    }
+
+    async fn test_app_state_with_provider(
+        provider_name: &str,
+        provider_type: ProviderType,
+        base_url: &str,
+        provider_config: ProviderConfig,
+        upstream_model: &str,
+    ) -> (tempfile::TempDir, Arc<AppState>, String) {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("gateway.db");
+        let logger = Arc::new(
+            DatabaseLogger::new(db_path.to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let settings = test_settings(db_path.to_string_lossy().to_string());
+
+        logger
+            .insert_provider(&Provider {
+                name: provider_name.into(),
+                display_name: None,
+                collection: crate::config::settings::DEFAULT_PROVIDER_COLLECTION.into(),
+                api_type: provider_type,
+                api_type_raw: None,
+                base_url: base_url.into(),
+                api_keys: Vec::new(),
+                models_endpoint: None,
+                provider_config,
+                enabled: true,
+                created_at: None,
+                updated_at: None,
+            })
+            .await
+            .unwrap();
+        logger
+            .add_provider_key(
+                provider_name,
+                "mock-upstream-key",
+                &settings.logging.key_log_strategy,
+            )
+            .await
+            .unwrap();
+        logger
+            .upsert_model_price(provider_name, upstream_model, 1.0, 1.0, Some("USD"), None)
+            .await
+            .unwrap();
+
+        let token = logger
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: None,
+                name: Some(format!("{provider_name}-token")),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+
+        let app_state = Arc::new(AppState {
+            config: settings,
+            load_balancer_state: Arc::new(crate::routing::LoadBalancerState::default()),
+            log_store: logger.clone(),
+            model_cache: logger.clone(),
+            providers: logger.clone(),
+            token_store: logger.clone(),
+            favorites_store: logger.clone(),
+            login_manager: Arc::new(LoginManager::new(logger.clone())),
+            user_store: logger.clone(),
+            refresh_token_store: logger.clone(),
+            password_reset_token_store: logger.clone(),
+            balance_store: logger.clone(),
+            subscription_store: logger.clone(),
+        });
+
+        (dir, app_state, token.token)
+    }
+
+    async fn invoke_chat_and_parse_json(
+        app_state: Arc<AppState>,
+        client_token: &str,
+        model: &str,
+        stream: bool,
+    ) -> Result<Value, crate::error::GatewayError> {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {client_token}")).unwrap(),
+        );
+        let request: crate::providers::openai::ChatCompletionRequest =
+            serde_json::from_value(json!({
+                "model": model,
+                "messages": [{"role":"system","content":"You are a test assistant"},{"role":"user","content":"hello"}],
+                "stream": stream,
+                "max_tokens": 16,
+                "temperature": 0
+            }))
+            .unwrap();
+
+        let response = super::chat_completions(
+            State(app_state),
+            headers,
+            Json(super::GatewayChatCompletionRequest {
+                request,
+                top_k: None,
+            }),
+        )
+        .await?;
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        Ok(serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn mock_runtime_azure_openai_chat() {
+        let (base_url, captured) = spawn_mock_azure_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "azure-mock",
+            ProviderType::AzureOpenAI,
+            &base_url,
+            ProviderConfig {
+                azure_deployment: Some("gpt-4o-deploy".into()),
+                azure_api_version: Some("2024-06-01".into()),
+                google_api_version: None,
+                ..ProviderConfig::default()
+            },
+            "gpt-4o",
+        )
+        .await;
+
+        let payload = invoke_chat_and_parse_json(app_state, &token, "azure-mock/gpt-4o", false)
+            .await
+            .unwrap();
+        assert_eq!(
+            payload["choices"][0]["message"]["content"],
+            json!("mock azure ok")
+        );
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("azure mock call");
+        assert_eq!(
+            call.path,
+            "/openai/deployments/gpt-4o-deploy/chat/completions"
+        );
+        assert_eq!(
+            call.query.get("api-version"),
+            Some(&"2024-06-01".to_string())
+        );
+        assert_eq!(
+            call.headers.get("api-key"),
+            Some(&"mock-upstream-key".to_string())
+        );
+        assert!(call.body.get("model").is_none());
+    }
+
+    #[tokio::test]
+    async fn mock_runtime_google_gemini_chat() {
+        let (base_url, captured) = spawn_mock_gemini_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "gemini-mock",
+            ProviderType::GoogleGemini,
+            &base_url,
+            ProviderConfig {
+                azure_deployment: None,
+                azure_api_version: None,
+                google_api_version: Some("v1beta".into()),
+                ..ProviderConfig::default()
+            },
+            "gemini-2.0-flash",
+        )
+        .await;
+
+        let payload =
+            invoke_chat_and_parse_json(app_state, &token, "gemini-mock/gemini-2.0-flash", false)
+                .await
+                .unwrap();
+        assert_eq!(
+            payload["choices"][0]["message"]["content"],
+            json!("mock gemini ok")
+        );
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("gemini mock call");
+        assert_eq!(call.path, "/v1beta/models/gemini-2.0-flash:generateContent");
+        assert_eq!(
+            call.query.get("key"),
+            Some(&"mock-upstream-key".to_string())
+        );
+        assert_eq!(
+            call.body["systemInstruction"]["parts"][0]["text"],
+            json!("You are a test assistant")
+        );
+        assert_eq!(call.body["contents"][0]["role"], json!("user"));
+    }
+
+    #[tokio::test]
+    async fn mock_runtime_cohere_chat() {
+        let (base_url, captured) = spawn_mock_cohere_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "cohere-mock",
+            ProviderType::Cohere,
+            &base_url,
+            ProviderConfig::default(),
+            "command-r-plus",
+        )
+        .await;
+
+        let payload =
+            invoke_chat_and_parse_json(app_state, &token, "cohere-mock/command-r-plus", false)
+                .await
+                .unwrap();
+        assert_eq!(
+            payload["choices"][0]["message"]["content"],
+            json!("mock cohere ok")
+        );
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("cohere mock call");
+        assert_eq!(call.path, "/v2/chat");
+        assert_eq!(
+            call.headers.get("authorization"),
+            Some(&"Bearer mock-upstream-key".to_string())
+        );
+        assert_eq!(call.body["model"], json!("command-r-plus"));
+        assert_eq!(call.body["preamble"], json!("You are a test assistant"));
+    }
+
+    #[tokio::test]
+    async fn mock_runtime_aws_claude_chat() {
+        let (base_url, captured) = spawn_mock_aws_claude_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "aws-claude-mock",
+            ProviderType::AwsClaude,
+            &base_url,
+            ProviderConfig {
+                aws_region: Some("us-west-2".into()),
+                aws_access_key_id: Some("AKIA_TEST".into()),
+                aws_secret_access_key: Some("secret-test".into()),
+                ..ProviderConfig::default()
+            },
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        )
+        .await;
+
+        let payload = invoke_chat_and_parse_json(
+            app_state,
+            &token,
+            "aws-claude-mock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            payload["choices"][0]["message"]["content"],
+            json!("mock aws claude ok")
+        );
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("aws claude mock call");
+        assert_eq!(
+            call.path,
+            "/model/anthropic.claude-3-5-sonnet-20241022-v2:0/converse"
+        );
+        assert!(call.headers.contains_key("authorization"));
+        assert!(call.headers.contains_key("x-amz-date"));
+        assert!(call.headers.contains_key("x-amz-content-sha256"));
+        assert_eq!(
+            call.body["system"][0]["text"],
+            json!("You are a test assistant")
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_runtime_vertex_ai_chat() {
+        let (base_url, captured) = spawn_mock_vertex_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "vertex-mock",
+            ProviderType::VertexAI,
+            &base_url,
+            ProviderConfig {
+                vertex_project_id: Some("demo-project".into()),
+                vertex_location: Some("us-central1".into()),
+                vertex_access_token: Some("ya29.vertex-test".into()),
+                ..ProviderConfig::default()
+            },
+            "gemini-2.0-flash-001",
+        )
+        .await;
+
+        let payload = invoke_chat_and_parse_json(
+            app_state,
+            &token,
+            "vertex-mock/gemini-2.0-flash-001",
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            payload["choices"][0]["message"]["content"],
+            json!("mock vertex ok")
+        );
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("vertex mock call");
+        assert_eq!(
+            call.path,
+            "/v1/projects/demo-project/locations/us-central1/publishers/google/models/gemini-2.0-flash-001:generateContent"
+        );
+        assert_eq!(
+            call.headers.get("authorization"),
+            Some(&"Bearer ya29.vertex-test".to_string())
+        );
+        assert_eq!(call.body["contents"][0]["role"], json!("user"));
+    }
+
+    #[tokio::test]
+    async fn mock_runtime_new_native_providers_reject_stream() {
+        let (base_url, _captured) = spawn_mock_gemini_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "gemini-stream-mock",
+            ProviderType::GoogleGemini,
+            &base_url,
+            ProviderConfig {
+                azure_deployment: None,
+                azure_api_version: None,
+                google_api_version: Some("v1beta".into()),
+                ..ProviderConfig::default()
+            },
+            "gemini-2.0-flash",
+        )
+        .await;
+
+        let err = invoke_chat_and_parse_json(
+            app_state,
+            &token,
+            "gemini-stream-mock/gemini-2.0-flash",
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("仅支持非流式真实请求"));
+
+        let (aws_base_url, _captured) = spawn_mock_aws_claude_server().await;
+        let (_dir, aws_app_state, aws_token) = test_app_state_with_provider(
+            "aws-stream-mock",
+            ProviderType::AwsClaude,
+            &aws_base_url,
+            ProviderConfig {
+                aws_region: Some("us-west-2".into()),
+                aws_access_key_id: Some("AKIA_TEST".into()),
+                aws_secret_access_key: Some("secret-test".into()),
+                ..ProviderConfig::default()
+            },
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        )
+        .await;
+
+        let aws_err = invoke_chat_and_parse_json(
+            aws_app_state,
+            &aws_token,
+            "aws-stream-mock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(aws_err.to_string().contains("仅支持非流式真实请求"));
+
+        let (vertex_base_url, _captured) = spawn_mock_vertex_server().await;
+        let (_dir, vertex_app_state, vertex_token) = test_app_state_with_provider(
+            "vertex-stream-mock",
+            ProviderType::VertexAI,
+            &vertex_base_url,
+            ProviderConfig {
+                vertex_project_id: Some("demo-project".into()),
+                vertex_location: Some("us-central1".into()),
+                vertex_access_token: Some("ya29.vertex-test".into()),
+                ..ProviderConfig::default()
+            },
+            "gemini-2.0-flash-001",
+        )
+        .await;
+
+        let vertex_err = invoke_chat_and_parse_json(
+            vertex_app_state,
+            &vertex_token,
+            "vertex-stream-mock/gemini-2.0-flash-001",
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(vertex_err.to_string().contains("仅支持非流式真实请求"));
     }
 
     #[tokio::test]

@@ -30,6 +30,22 @@ pub struct ProviderConfig {
     pub azure_api_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub google_api_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_region: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_access_key_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_secret_access_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_session_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertex_project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertex_location: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertex_access_token: Option<String>,
 }
 
 impl ProviderConfig {
@@ -47,6 +63,54 @@ impl ProviderConfig {
                 .is_none()
             && self
                 .google_api_version
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self
+                .aws_region
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self
+                .aws_access_key_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self
+                .aws_secret_access_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self
+                .aws_session_token
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self
+                .aws_service
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self
+                .vertex_project_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self
+                .vertex_location
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self
+                .vertex_access_token
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -72,6 +136,78 @@ impl ProviderConfig {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
+    }
+
+    pub fn aws_region(&self) -> Option<&str> {
+        self.aws_region
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn aws_access_key_id(&self) -> Option<&str> {
+        self.aws_access_key_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn aws_secret_access_key(&self) -> Option<&str> {
+        self.aws_secret_access_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn aws_session_token(&self) -> Option<&str> {
+        self.aws_session_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn aws_service(&self) -> Option<&str> {
+        self.aws_service
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn vertex_project_id(&self) -> Option<&str> {
+        self.vertex_project_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn vertex_location(&self) -> Option<&str> {
+        self.vertex_location
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn vertex_access_token(&self) -> Option<&str> {
+        self.vertex_access_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn aws_service_or_default(&self) -> &str {
+        self.aws_service().unwrap_or("bedrock-runtime")
+    }
+
+    pub fn has_aws_claude_credentials(&self) -> bool {
+        self.aws_region().is_some()
+            && self.aws_access_key_id().is_some()
+            && self.aws_secret_access_key().is_some()
+    }
+
+    pub fn has_vertex_ai_credentials(&self) -> bool {
+        self.vertex_project_id().is_some()
+            && self.vertex_location().is_some()
+            && self.vertex_access_token().is_some()
     }
 
     pub fn to_storage_json(&self) -> Option<String> {
@@ -200,7 +336,9 @@ pub enum ProviderProtocolFamily {
     OpenAI,
     AzureOpenAI,
     Anthropic,
+    AwsClaude,
     GoogleGemini,
+    VertexAI,
     Cohere,
     Zhipu,
     Unsupported,
@@ -317,7 +455,7 @@ impl ProviderType {
                 supports_auto_model_discovery: false,
                 supports_models_endpoint: false,
                 requires_models_endpoint: false,
-                test_connection_family: ProviderProtocolFamily::Unsupported,
+                test_connection_family: ProviderProtocolFamily::AwsClaude,
                 openai_compatible: false,
             },
             ProviderType::GoogleGemini => ProviderCapabilities {
@@ -341,7 +479,7 @@ impl ProviderType {
                 supports_auto_model_discovery: false,
                 supports_models_endpoint: false,
                 requires_models_endpoint: false,
-                test_connection_family: ProviderProtocolFamily::Unsupported,
+                test_connection_family: ProviderProtocolFamily::VertexAI,
                 openai_compatible: false,
             },
             ProviderType::OpenAI

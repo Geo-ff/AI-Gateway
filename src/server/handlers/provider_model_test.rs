@@ -53,6 +53,17 @@ fn trim_to_option(raw: Option<&str>) -> Option<&str> {
     raw.map(str::trim).filter(|value| !value.is_empty())
 }
 
+fn provider_uses_inline_credentials(
+    provider_type: ProviderType,
+    provider_config: &ProviderConfig,
+) -> bool {
+    match provider_type {
+        ProviderType::AwsClaude => provider_config.has_aws_claude_credentials(),
+        ProviderType::VertexAI => provider_config.has_vertex_ai_credentials(),
+        _ => false,
+    }
+}
+
 fn failure_response(
     error_type: impl Into<String>,
     error_message: impl Into<String>,
@@ -414,7 +425,9 @@ pub async fn test_provider_model(
         .next()
         .unwrap_or_default();
 
-    if api_key.trim().is_empty() {
+    if api_key.trim().is_empty()
+        && !provider_uses_inline_credentials(provider.api_type, &provider.provider_config)
+    {
         let resp = Json(ProviderModelTestResponse {
             success: false,
             latency: None,
@@ -538,7 +551,7 @@ pub async fn test_provider_model_draft(
     }
 
     let api_key = payload.api_key.unwrap_or_default().trim().to_string();
-    if api_key.is_empty() {
+    if api_key.is_empty() && !provider_uses_inline_credentials(api_type, &payload.provider_config) {
         let resp = Json(failure_response(
             "configuration_required",
             "api_key 不能为空",

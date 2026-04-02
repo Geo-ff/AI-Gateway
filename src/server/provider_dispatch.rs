@@ -8,6 +8,14 @@ use crate::routing::{LoadBalancer, SelectedProvider, load_balancer::BalanceError
 use crate::server::AppState;
 use crate::server::model_parser::ParsedModel;
 
+fn provider_uses_inline_credentials(provider: &crate::config::Provider) -> bool {
+    match provider.api_type {
+        ProviderType::AwsClaude => provider.provider_config.has_aws_claude_credentials(),
+        ProviderType::VertexAI => provider.provider_config.has_vertex_ai_credentials(),
+        _ => false,
+    }
+}
+
 // 基于请求的模型名称选择合适的供应商
 pub async fn select_provider_for_model(
     app_state: &AppState,
@@ -40,14 +48,19 @@ pub async fn select_provider_for_model(
                 .get_provider_key_rotation_strategy(provider_name)
                 .await
                 .unwrap_or_default();
-            let api_key = app_state.load_balancer_state.select_provider_key(
-                provider_name,
-                strategy,
-                &keys,
-            )?;
-            if api_key.is_empty() {
-                return Err(GatewayError::from(BalanceError::NoApiKeysAvailable));
-            }
+            let api_key = if provider_uses_inline_credentials(&provider) {
+                String::new()
+            } else {
+                let api_key = app_state.load_balancer_state.select_provider_key(
+                    provider_name,
+                    strategy,
+                    &keys,
+                )?;
+                if api_key.is_empty() {
+                    return Err(GatewayError::from(BalanceError::NoApiKeysAvailable));
+                }
+                api_key
+            };
             return Ok((SelectedProvider { provider, api_key }, parsed_model));
         } else {
             // 指定供应商不存在
@@ -95,7 +108,7 @@ pub async fn select_provider(app_state: &AppState) -> Result<SelectedProvider, B
         let has_active = keys
             .iter()
             .any(|k| k.active && !k.value.is_empty() && k.weight >= 1);
-        if has_active {
+        if has_active || provider_uses_inline_credentials(&p) {
             keys_by_provider.insert(p.name.clone(), keys);
             candidates.push(p);
         }
@@ -118,10 +131,13 @@ pub async fn select_provider(app_state: &AppState) -> Result<SelectedProvider, B
         .get_provider_key_rotation_strategy(&provider.name)
         .await
         .unwrap_or_default();
-    let api_key =
+    let api_key = if provider_uses_inline_credentials(&provider) {
+        String::new()
+    } else {
         app_state
             .load_balancer_state
-            .select_provider_key(&provider.name, strategy, &keys)?;
+            .select_provider_key(&provider.name, strategy, &keys)?
+    };
 
     Ok(SelectedProvider { provider, api_key })
 }
@@ -142,7 +158,11 @@ pub async fn call_provider_with_parsed_model(
             call_anthropic_provider(selected, &modified_request, top_k).await
         }
         ProviderType::Zhipu => call_zhipu_provider(selected, &modified_request).await,
-        ProviderType::AzureOpenAI | ProviderType::GoogleGemini | ProviderType::Cohere => {
+        ProviderType::AzureOpenAI
+        | ProviderType::GoogleGemini
+        | ProviderType::Cohere
+        | ProviderType::AwsClaude
+        | ProviderType::VertexAI => {
             runtime_chat_completions(
                 selected.provider.api_type,
                 ChatCompletionsRequest {

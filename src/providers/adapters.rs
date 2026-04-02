@@ -1,8 +1,11 @@
 use async_trait::async_trait;
+use chrono::Utc;
+use hmac::{Hmac, Mac};
 use reqwest::redirect::Policy;
 use reqwest::{StatusCode, Url};
 use serde::Deserialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 use crate::config::settings::{
@@ -88,6 +91,12 @@ struct GoogleGeminiAdapter;
 #[derive(Debug)]
 struct CohereAdapter;
 
+#[derive(Debug)]
+struct AwsClaudeAdapter;
+
+#[derive(Debug)]
+struct VertexAIAdapter;
+
 static OPENAI_COMPAT_ADAPTER: ProtocolAdapter = ProtocolAdapter {
     family: ProviderProtocolFamily::OpenAI,
     auth_mode: ProviderAuthMode::Bearer,
@@ -109,6 +118,8 @@ static ZHIPU_ADAPTER: ProtocolAdapter = ProtocolAdapter {
 static AZURE_OPENAI_ADAPTER: AzureOpenAIAdapter = AzureOpenAIAdapter;
 static GOOGLE_GEMINI_ADAPTER: GoogleGeminiAdapter = GoogleGeminiAdapter;
 static COHERE_ADAPTER: CohereAdapter = CohereAdapter;
+static AWS_CLAUDE_ADAPTER: AwsClaudeAdapter = AwsClaudeAdapter;
+static VERTEX_AI_ADAPTER: VertexAIAdapter = VertexAIAdapter;
 
 pub fn adapter_for(provider_type: ProviderType) -> Option<&'static dyn ProviderAdapter> {
     match provider_type {
@@ -128,7 +139,8 @@ pub fn adapter_for(provider_type: ProviderType) -> Option<&'static dyn ProviderA
         ProviderType::AzureOpenAI => Some(&AZURE_OPENAI_ADAPTER),
         ProviderType::GoogleGemini => Some(&GOOGLE_GEMINI_ADAPTER),
         ProviderType::Cohere => Some(&COHERE_ADAPTER),
-        ProviderType::AwsClaude | ProviderType::VertexAI => None,
+        ProviderType::AwsClaude => Some(&AWS_CLAUDE_ADAPTER),
+        ProviderType::VertexAI => Some(&VERTEX_AI_ADAPTER),
     }
 }
 
@@ -158,6 +170,12 @@ pub fn runtime_streaming_unsupported_message(provider_type: ProviderType) -> Opt
         }
         ProviderType::Cohere => {
             Some("Cohere 当前仅支持非流式真实请求，stream=true 暂未实现。".into())
+        }
+        ProviderType::AwsClaude => {
+            Some("AWS Claude 当前仅支持非流式真实请求，stream=true 暂未实现。".into())
+        }
+        ProviderType::VertexAI => {
+            Some("Vertex AI 当前仅支持非流式真实请求，stream=true 暂未实现。".into())
         }
         _ => None,
     }
@@ -580,6 +598,447 @@ fn cohere_finish_reason(reason: Option<&str>) -> &'static str {
         "MAX_TOKENS" => "length",
         _ => "stop",
     }
+}
+
+fn aws_claude_finish_reason(reason: Option<&str>) -> &'static str {
+    match reason.unwrap_or_default() {
+        "max_tokens" => "length",
+        "content_filtered" => "content_filter",
+        _ => "stop",
+    }
+}
+
+fn trim_error_message(bytes: &[u8]) -> String {
+    extract_error_message(bytes)
+        .unwrap_or_else(|| String::from_utf8_lossy(bytes).trim().to_string())
+}
+
+fn aws_payload_hash(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn aws_hmac_sha256(key: &[u8], data: &str) -> Vec<u8> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("hmac key");
+    mac.update(data.as_bytes());
+    mac.finalize().into_bytes().to_vec()
+}
+
+fn aws_host_header_value(url: &Url) -> Result<String, (String, Option<String>)> {
+    let host = url.host_str().ok_or_else(|| {
+        (
+            "invalid_path".into(),
+            Some("AWS Claude 请求地址缺少 host。".into()),
+        )
+    })?;
+    Ok(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    })
+}
+
+fn aws_canonical_query(url: &Url) -> String {
+    fn escape(value: &str) -> String {
+        value
+            .bytes()
+            .flat_map(|byte| match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    vec![(byte as char).to_string()]
+                }
+                _ => vec![format!("%{:02X}", byte)],
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    let mut pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    pairs.sort();
+    pairs
+        .into_iter()
+        .map(|(key, value)| format!("{}={}", escape(&key), escape(&value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn aws_signed_headers_and_canonical_headers(
+    host: &str,
+    amz_date: &str,
+    payload_hash: &str,
+    session_token: Option<&str>,
+) -> (String, String) {
+    let mut canonical_headers = vec![
+        "content-type:application/json".to_string(),
+        format!("host:{host}"),
+        format!("x-amz-content-sha256:{payload_hash}"),
+        format!("x-amz-date:{amz_date}"),
+    ];
+    let mut signed_headers = vec![
+        "content-type".to_string(),
+        "host".to_string(),
+        "x-amz-content-sha256".to_string(),
+        "x-amz-date".to_string(),
+    ];
+    if let Some(session_token) = session_token {
+        canonical_headers.push(format!("x-amz-security-token:{session_token}"));
+        signed_headers.push("x-amz-security-token".to_string());
+    }
+    canonical_headers.sort();
+    signed_headers.sort();
+    (
+        signed_headers.join(";"),
+        format!("{}\n", canonical_headers.join("\n")),
+    )
+}
+
+fn aws_sigv4_headers(
+    method: &str,
+    url: &Url,
+    payload_bytes: &[u8],
+    provider_config: &ProviderConfig,
+) -> Result<reqwest::header::HeaderMap, (String, Option<String>)> {
+    use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HOST, HeaderMap, HeaderValue};
+
+    let region = provider_config.aws_region().ok_or_else(|| {
+        (
+            "configuration_required".into(),
+            Some("AWS Claude 需要填写 AWS Region。".into()),
+        )
+    })?;
+    let access_key_id = provider_config.aws_access_key_id().ok_or_else(|| {
+        (
+            "configuration_required".into(),
+            Some("AWS Claude 需要填写 AWS Access Key ID。".into()),
+        )
+    })?;
+    let secret_access_key = provider_config.aws_secret_access_key().ok_or_else(|| {
+        (
+            "configuration_required".into(),
+            Some("AWS Claude 需要填写 AWS Secret Access Key。".into()),
+        )
+    })?;
+    let service = provider_config.aws_service_or_default();
+    let host = aws_host_header_value(url)?;
+    let payload_hash = aws_payload_hash(payload_bytes);
+    let now = Utc::now();
+    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+    let date_stamp = now.format("%Y%m%d").to_string();
+    let canonical_uri = if url.path().is_empty() {
+        "/"
+    } else {
+        url.path()
+    };
+    let canonical_query = aws_canonical_query(url);
+    let (signed_headers, canonical_headers) = aws_signed_headers_and_canonical_headers(
+        &host,
+        &amz_date,
+        &payload_hash,
+        provider_config.aws_session_token(),
+    );
+    let canonical_request = format!(
+        "{method}\n{canonical_uri}\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+    );
+    let credential_scope = format!("{date_stamp}/{region}/{service}/aws4_request");
+    let string_to_sign = format!(
+        "AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{}",
+        hex::encode(Sha256::digest(canonical_request.as_bytes()))
+    );
+    let signing_key = {
+        let k_date = aws_hmac_sha256(format!("AWS4{secret_access_key}").as_bytes(), &date_stamp);
+        let k_region = aws_hmac_sha256(&k_date, region);
+        let k_service = aws_hmac_sha256(&k_region, service);
+        aws_hmac_sha256(&k_service, "aws4_request")
+    };
+    let signature = hex::encode(aws_hmac_sha256(&signing_key, &string_to_sign));
+    let authorization = format!(
+        "AWS4-HMAC-SHA256 Credential={access_key_id}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}"
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(
+        HOST,
+        HeaderValue::from_str(&host).map_err(|e| ("other".into(), Some(e.to_string())))?,
+    );
+    headers.insert(
+        "x-amz-content-sha256",
+        HeaderValue::from_str(&payload_hash).map_err(|e| ("other".into(), Some(e.to_string())))?,
+    );
+    headers.insert(
+        "x-amz-date",
+        HeaderValue::from_str(&amz_date).map_err(|e| ("other".into(), Some(e.to_string())))?,
+    );
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&authorization).map_err(|e| ("other".into(), Some(e.to_string())))?,
+    );
+    if let Some(session_token) = provider_config.aws_session_token() {
+        headers.insert(
+            "x-amz-security-token",
+            HeaderValue::from_str(session_token)
+                .map_err(|e| ("other".into(), Some(e.to_string())))?,
+        );
+    }
+    Ok(headers)
+}
+
+fn build_aws_claude_payload(
+    request: &ChatCompletionRequest,
+) -> Result<serde_json::Value, GatewayError> {
+    let value = request_value(request)?;
+    let messages = request_messages(&value);
+    let mut payload_messages = Vec::new();
+
+    for message in &messages {
+        let role = message
+            .get("role")
+            .and_then(|role| role.as_str())
+            .unwrap_or("user");
+        if matches!(role, "system" | "developer") {
+            continue;
+        }
+        let text = extract_message_text(message);
+        if text.trim().is_empty() {
+            continue;
+        }
+        payload_messages.push(json!({
+            "role": if role == "assistant" { "assistant" } else { "user" },
+            "content": [{ "text": text }],
+        }));
+    }
+
+    if payload_messages.is_empty() {
+        return Err(GatewayError::Config(
+            "AWS Claude 请求缺少可转换的消息内容。".into(),
+        ));
+    }
+
+    let mut payload = json!({ "messages": payload_messages });
+    if let Some(system) = combined_system_prompt(&messages)
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("system".into(), json!([{ "text": system }]));
+    }
+
+    let mut inference_config = serde_json::Map::new();
+    if let Some(value) = value.get("temperature").cloned() {
+        inference_config.insert("temperature".into(), value);
+    }
+    if let Some(value) = value.get("top_p").cloned() {
+        inference_config.insert("topP".into(), value);
+    }
+    if let Some(value) = value
+        .get("max_completion_tokens")
+        .cloned()
+        .or_else(|| value.get("max_tokens").cloned())
+    {
+        inference_config.insert("maxTokens".into(), value);
+    }
+    let stop_sequences = string_stop_sequences(&value);
+    if !stop_sequences.is_empty() {
+        inference_config.insert("stopSequences".into(), json!(stop_sequences));
+    }
+    if !inference_config.is_empty()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert(
+            "inferenceConfig".into(),
+            serde_json::Value::Object(inference_config),
+        );
+    }
+
+    Ok(payload)
+}
+
+fn adapt_aws_claude_response(
+    model: &str,
+    bytes: &[u8],
+) -> Result<RawAndTypedChatCompletion, GatewayError> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)?;
+    let content = value
+        .get("output")
+        .and_then(|output| output.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_array())
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(|text| text.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+
+    let usage = value.get("usage").map(|usage| {
+        json!({
+            "prompt_tokens": usage.get("inputTokens").and_then(|value| value.as_u64()).unwrap_or(0),
+            "completion_tokens": usage.get("outputTokens").and_then(|value| value.as_u64()).unwrap_or(0),
+            "total_tokens": usage.get("totalTokens").and_then(|value| value.as_u64()).unwrap_or(0),
+        })
+    });
+
+    build_openai_style_response(
+        value
+            .get("metrics")
+            .and_then(|metrics| metrics.get("invocationArn"))
+            .and_then(|id| id.as_str())
+            .map(str::to_string),
+        model,
+        content,
+        value
+            .get("stopReason")
+            .and_then(|reason| reason.as_str())
+            .map(|reason| aws_claude_finish_reason(Some(reason))),
+        usage,
+    )
+}
+
+fn aws_claude_error_message(status: StatusCode, bytes: &[u8]) -> String {
+    let upstream = trim_error_message(bytes);
+    let lower = upstream.to_lowercase();
+
+    if status == StatusCode::UNAUTHORIZED
+        || status == StatusCode::FORBIDDEN
+        || lower.contains("security token")
+        || lower.contains("access key")
+        || lower.contains("signature")
+        || lower.contains("access denied")
+    {
+        return "AWS Claude 鉴权失败，请检查 Region、Access Key、Secret Key 与 Session Token。"
+            .into();
+    }
+    if lower.contains("model") && (lower.contains("not found") || lower.contains("unknown")) {
+        return "AWS Claude 模型不存在，请检查 Bedrock 模型 ID。".into();
+    }
+    if status == StatusCode::NOT_FOUND {
+        return "AWS Claude 接口路径无效，请检查 Bedrock Runtime 地址。".into();
+    }
+    if upstream.is_empty() {
+        format!("AWS Claude 返回错误（{}）。", status.as_u16())
+    } else {
+        format!("AWS Claude 返回错误（{}）：{}", status.as_u16(), upstream)
+    }
+}
+
+fn classify_aws_claude_error(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
+    let message = aws_claude_error_message(status, bytes);
+    let lower = message.to_lowercase();
+
+    if lower.contains("鉴权失败") {
+        return ("authentication_failed".into(), Some(message));
+    }
+    if lower.contains("模型不存在") {
+        return ("model_not_found".into(), Some(message));
+    }
+    if lower.contains("接口路径无效") {
+        return ("invalid_path".into(), Some(message));
+    }
+    classify_http_failure(status, &message)
+}
+
+fn vertex_model_name(model: &str) -> Result<String, (String, Option<String>)> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err((
+            "model_not_found".into(),
+            Some("Vertex AI 测试时需要填写模型名称。".into()),
+        ));
+    }
+
+    Ok(model
+        .trim_start_matches("publishers/google/models/")
+        .trim_start_matches("models/")
+        .to_string())
+}
+
+fn vertex_base_url(base_url: &Url) -> String {
+    let base = base_url.as_str().trim_end_matches('/');
+    let path = base_url.path().trim_end_matches('/');
+    if path.ends_with("/v1") {
+        base.to_string()
+    } else {
+        format!("{}/v1", base)
+    }
+}
+
+fn vertex_generate_content_url(
+    base_url: &Url,
+    provider_config: &ProviderConfig,
+    model: &str,
+) -> Result<String, (String, Option<String>)> {
+    let project_id = provider_config.vertex_project_id().ok_or_else(|| {
+        (
+            "configuration_required".into(),
+            Some("Vertex AI 需要填写 GCP Project ID。".into()),
+        )
+    })?;
+    let location = provider_config.vertex_location().ok_or_else(|| {
+        (
+            "configuration_required".into(),
+            Some("Vertex AI 需要填写 Location。".into()),
+        )
+    })?;
+    let model = vertex_model_name(model)?;
+    Ok(format!(
+        "{}/projects/{}/locations/{}/publishers/google/models/{}:generateContent",
+        vertex_base_url(base_url),
+        project_id,
+        location,
+        model
+    ))
+}
+
+fn vertex_access_token(provider_config: &ProviderConfig) -> Result<&str, (String, Option<String>)> {
+    provider_config.vertex_access_token().ok_or_else(|| {
+        (
+            "configuration_required".into(),
+            Some("Vertex AI 需要填写 Access Token。".into()),
+        )
+    })
+}
+
+fn vertex_error_message(status: StatusCode, bytes: &[u8]) -> String {
+    let upstream = trim_error_message(bytes);
+    let lower = upstream.to_lowercase();
+
+    if status == StatusCode::UNAUTHORIZED
+        || status == StatusCode::FORBIDDEN
+        || lower.contains("invalid authentication")
+        || lower.contains("permission denied")
+        || lower.contains("access token")
+    {
+        return "Vertex AI 鉴权失败，请检查 Access Token 与 IAM 权限。".into();
+    }
+    if lower.contains("publisher model") && lower.contains("not found")
+        || lower.contains("model") && lower.contains("not found")
+    {
+        return "Vertex AI 模型不存在，请检查模型名称、Project 与 Location。".into();
+    }
+    if status == StatusCode::NOT_FOUND {
+        return "Vertex AI 接口路径无效，请检查 Project、Location 或上游地址。".into();
+    }
+    if upstream.is_empty() {
+        format!("Vertex AI 返回错误（{}）。", status.as_u16())
+    } else {
+        format!("Vertex AI 返回错误（{}）：{}", status.as_u16(), upstream)
+    }
+}
+
+fn classify_vertex_error(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
+    let message = vertex_error_message(status, bytes);
+    let lower = message.to_lowercase();
+
+    if lower.contains("鉴权失败") {
+        return ("authentication_failed".into(), Some(message));
+    }
+    if lower.contains("模型不存在") {
+        return ("model_not_found".into(), Some(message));
+    }
+    if lower.contains("接口路径无效") {
+        return ("invalid_path".into(), Some(message));
+    }
+    classify_http_failure(status, &message)
 }
 
 fn build_gemini_payload(
@@ -1045,7 +1504,9 @@ impl ProtocolAdapter {
                 base_url.as_str().trim_end_matches('/'),
             ),
             ProviderProtocolFamily::AzureOpenAI
+            | ProviderProtocolFamily::AwsClaude
             | ProviderProtocolFamily::GoogleGemini
+            | ProviderProtocolFamily::VertexAI
             | ProviderProtocolFamily::Cohere
             | ProviderProtocolFamily::Unsupported => base_url.as_str().to_string(),
         }
@@ -1067,7 +1528,9 @@ impl ProtocolAdapter {
                 "temperature": 0
             }),
             ProviderProtocolFamily::AzureOpenAI
+            | ProviderProtocolFamily::AwsClaude
             | ProviderProtocolFamily::GoogleGemini
+            | ProviderProtocolFamily::VertexAI
             | ProviderProtocolFamily::Cohere
             | ProviderProtocolFamily::Unsupported => json!({}),
         }
@@ -1479,6 +1942,251 @@ impl ProviderAdapter for GoogleGeminiAdapter {
 }
 
 #[async_trait]
+impl ProviderAdapter for AwsClaudeAdapter {
+    fn build_auth_headers(
+        &self,
+        _api_key: &str,
+    ) -> Result<reqwest::header::HeaderMap, (String, Option<String>)> {
+        Ok(reqwest::header::HeaderMap::new())
+    }
+
+    fn normalize_error(
+        &self,
+        status: StatusCode,
+        _content_type: Option<&str>,
+        bytes: &[u8],
+    ) -> (String, Option<String>) {
+        classify_aws_claude_error(status, bytes)
+    }
+
+    async fn list_models(
+        &self,
+        _request: ListModelsRequest<'_>,
+    ) -> Result<Vec<String>, GatewayError> {
+        Err(GatewayError::Config(
+            "AWS Claude 当前以手动模型优先，不支持自动发现模型。".into(),
+        ))
+    }
+
+    async fn test_connection(
+        &self,
+        request: ConnectionTestRequest<'_>,
+    ) -> Result<(), (String, Option<String>)> {
+        let model = request.model.trim();
+        if model.is_empty() {
+            return Err((
+                "model_not_found".into(),
+                Some("AWS Claude 测试时需要填写模型名称。".into()),
+            ));
+        }
+
+        let url = Url::parse(&format!(
+            "{}/model/{}/converse",
+            request.base_url.as_str().trim_end_matches('/'),
+            model
+        ))
+        .map_err(|e| ("invalid_path".into(), Some(e.to_string())))?;
+        let client =
+            client_for_url(url.as_str(), 30).map_err(|e| ("other".into(), Some(e.to_string())))?;
+        let payload = json!({
+            "messages": [{"role": "user", "content": [{"text": "ping"}]}],
+            "inferenceConfig": {"maxTokens": 1, "temperature": 0}
+        });
+        let payload_bytes =
+            serde_json::to_vec(&payload).map_err(|e| ("other".into(), Some(e.to_string())))?;
+        let mut req = client
+            .post(url.as_str())
+            .header("Accept", "application/json")
+            .body(payload_bytes.clone());
+        for (name, value) in
+            aws_sigv4_headers("POST", &url, &payload_bytes, request.provider_config)?
+        {
+            if let Some(name) = name {
+                req = req.header(name, value);
+            }
+        }
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| (classify_reqwest_error(&e), Some(e.to_string())))?;
+        let status = resp.status();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| ("other".into(), Some(e.to_string())))?;
+        if !status.is_success() {
+            return Err(self.normalize_error(status, None, &bytes));
+        }
+        Ok(())
+    }
+
+    async fn chat_completions(
+        &self,
+        request: ChatCompletionsRequest<'_>,
+    ) -> Result<RawAndTypedChatCompletion, GatewayError> {
+        let base_url = Url::parse(request.base_url)
+            .map_err(|err| GatewayError::Config(format!("AWS Claude base_url 无效：{err}")))?;
+        let model = request.request.model.trim();
+        if model.is_empty() {
+            return Err(GatewayError::Config("AWS Claude 需要填写模型名称。".into()));
+        }
+
+        let url = Url::parse(&format!(
+            "{}/model/{}/converse",
+            base_url.as_str().trim_end_matches('/'),
+            model
+        ))
+        .map_err(|err| GatewayError::Config(format!("AWS Claude 请求地址无效：{err}")))?;
+        let client = client_for_url(url.as_str(), 60)?;
+        let payload = build_aws_claude_payload(request.request)?;
+        let payload_bytes = serde_json::to_vec(&payload)?;
+        let mut req = client
+            .post(url.as_str())
+            .header("Accept", "application/json")
+            .body(payload_bytes.clone());
+        for (name, value) in
+            aws_sigv4_headers("POST", &url, &payload_bytes, request.provider_config).map_err(
+                |(_, detail)| {
+                    GatewayError::Config(
+                        detail.unwrap_or_else(|| "AWS Claude SigV4 配置无效。".into()),
+                    )
+                },
+            )?
+        {
+            if let Some(name) = name {
+                req = req.header(name, value);
+            }
+        }
+
+        let resp = req.send().await?;
+        let status = resp.status();
+        let bytes = resp.bytes().await?;
+        if !status.is_success() {
+            let (error_type, detail) = classify_aws_claude_error(status, &bytes);
+            return Err(gateway_error_from_normalized(
+                &error_type,
+                detail.unwrap_or_else(|| aws_claude_error_message(status, &bytes)),
+            ));
+        }
+
+        adapt_aws_claude_response(&request.request.model, &bytes)
+    }
+}
+
+#[async_trait]
+impl ProviderAdapter for VertexAIAdapter {
+    fn build_auth_headers(
+        &self,
+        _api_key: &str,
+    ) -> Result<reqwest::header::HeaderMap, (String, Option<String>)> {
+        Ok(reqwest::header::HeaderMap::new())
+    }
+
+    fn normalize_error(
+        &self,
+        status: StatusCode,
+        _content_type: Option<&str>,
+        bytes: &[u8],
+    ) -> (String, Option<String>) {
+        classify_vertex_error(status, bytes)
+    }
+
+    async fn list_models(
+        &self,
+        _request: ListModelsRequest<'_>,
+    ) -> Result<Vec<String>, GatewayError> {
+        Err(GatewayError::Config(
+            "Vertex AI 当前以手动模型优先，不支持自动发现模型。".into(),
+        ))
+    }
+
+    async fn test_connection(
+        &self,
+        request: ConnectionTestRequest<'_>,
+    ) -> Result<(), (String, Option<String>)> {
+        use reqwest::header::{AUTHORIZATION, HeaderValue};
+
+        let url =
+            vertex_generate_content_url(request.base_url, request.provider_config, request.model)?;
+        let access_token = vertex_access_token(request.provider_config)?;
+        let client = client_for_url(&url, 30).map_err(|e| ("other".into(), Some(e.to_string())))?;
+        let resp = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .header(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {access_token}"))
+                    .map_err(|e| ("other".into(), Some(e.to_string())))?,
+            )
+            .json(&json!({
+                "contents": [{"role": "user", "parts": [{"text": "ping"}]}],
+                "generationConfig": {"maxOutputTokens": 1, "temperature": 0}
+            }))
+            .send()
+            .await
+            .map_err(|e| (classify_reqwest_error(&e), Some(e.to_string())))?;
+        let status = resp.status();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| ("other".into(), Some(e.to_string())))?;
+        if !status.is_success() {
+            return Err(self.normalize_error(status, None, &bytes));
+        }
+        Ok(())
+    }
+
+    async fn chat_completions(
+        &self,
+        request: ChatCompletionsRequest<'_>,
+    ) -> Result<RawAndTypedChatCompletion, GatewayError> {
+        use reqwest::header::{AUTHORIZATION, HeaderValue};
+
+        let base_url = Url::parse(request.base_url)
+            .map_err(|err| GatewayError::Config(format!("Vertex AI base_url 无效：{err}")))?;
+        let url =
+            vertex_generate_content_url(&base_url, request.provider_config, &request.request.model)
+                .map_err(|(_, detail)| {
+                    GatewayError::Config(detail.unwrap_or_else(|| "Vertex AI 配置不完整。".into()))
+                })?;
+        let access_token =
+            vertex_access_token(request.provider_config).map_err(|(_, detail)| {
+                GatewayError::Config(
+                    detail.unwrap_or_else(|| "Vertex AI Access Token 配置无效。".into()),
+                )
+            })?;
+        let client = client_for_url(&url, 60)?;
+        let payload = build_gemini_payload(request.request)?;
+        let resp = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .header(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {access_token}")).map_err(|err| {
+                    GatewayError::Config(format!("Vertex AI Access Token 无效：{err}"))
+                })?,
+            )
+            .json(&payload)
+            .send()
+            .await?;
+        let status = resp.status();
+        let bytes = resp.bytes().await?;
+        if !status.is_success() {
+            let (error_type, detail) = classify_vertex_error(status, &bytes);
+            return Err(gateway_error_from_normalized(
+                &error_type,
+                detail.unwrap_or_else(|| vertex_error_message(status, &bytes)),
+            ));
+        }
+
+        adapt_gemini_response(&request.request.model, &bytes)
+    }
+}
+
+#[async_trait]
 impl ProviderAdapter for CohereAdapter {
     fn build_auth_headers(
         &self,
@@ -1650,7 +2358,8 @@ mod tests {
         assert!(adapter_for(ProviderType::AzureOpenAI).is_some());
         assert!(adapter_for(ProviderType::GoogleGemini).is_some());
         assert!(adapter_for(ProviderType::Cohere).is_some());
-        assert!(adapter_for(ProviderType::AwsClaude).is_none());
+        assert!(adapter_for(ProviderType::AwsClaude).is_some());
+        assert!(adapter_for(ProviderType::VertexAI).is_some());
     }
 
     #[test]
@@ -1683,6 +2392,7 @@ mod tests {
                 azure_deployment: Some("gpt-4o-prod".into()),
                 azure_api_version: Some("2024-06-01".into()),
                 google_api_version: None,
+                ..ProviderConfig::default()
             },
         )
         .unwrap();
@@ -1700,9 +2410,107 @@ mod tests {
                 azure_deployment: None,
                 azure_api_version: None,
                 google_api_version: Some("v1".into()),
+                ..ProviderConfig::default()
             },
         );
         assert_eq!(url, "https://generativelanguage.googleapis.com/v1");
+    }
+
+    #[test]
+    fn aws_sigv4_headers_include_expected_fields() {
+        let url = Url::parse(
+            "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3-5-sonnet-20241022-v2:0/converse",
+        )
+        .unwrap();
+        let headers = aws_sigv4_headers(
+            "POST",
+            &url,
+            br#"{"messages":[{"role":"user","content":[{"text":"ping"}]}]}"#,
+            &ProviderConfig {
+                aws_region: Some("us-west-2".into()),
+                aws_access_key_id: Some("AKIA_TEST".into()),
+                aws_secret_access_key: Some("secret-test".into()),
+                ..ProviderConfig::default()
+            },
+        )
+        .unwrap();
+
+        assert!(headers.contains_key(reqwest::header::AUTHORIZATION));
+        assert!(headers.contains_key("x-amz-date"));
+        assert!(headers.contains_key("x-amz-content-sha256"));
+        assert!(headers.contains_key(reqwest::header::HOST));
+    }
+
+    #[test]
+    fn aws_claude_payload_uses_converse_shape() {
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "messages": [
+                {"role": "system", "content": "Be precise"},
+                {"role": "user", "content": "Hello AWS Claude"}
+            ],
+            "temperature": 0,
+            "max_tokens": 32
+        }))
+        .unwrap();
+
+        let payload = build_aws_claude_payload(&request).unwrap();
+        assert_eq!(payload["system"][0]["text"], json!("Be precise"));
+        assert_eq!(payload["messages"][0]["role"], json!("user"));
+        assert_eq!(
+            payload["messages"][0]["content"][0]["text"],
+            json!("Hello AWS Claude")
+        );
+        assert_eq!(payload["inferenceConfig"]["maxTokens"], json!(32));
+    }
+
+    #[test]
+    fn aws_claude_response_is_adapted_to_openai_shape() {
+        let adapted = adapt_aws_claude_response(
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            serde_json::to_vec(&json!({
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"text": "hello from bedrock"}]
+                    }
+                },
+                "stopReason": "end_turn",
+                "usage": {
+                    "inputTokens": 11,
+                    "outputTokens": 5,
+                    "totalTokens": 16
+                }
+            }))
+            .unwrap()
+            .as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            adapted.raw["choices"][0]["message"]["content"],
+            json!("hello from bedrock")
+        );
+        assert_eq!(adapted.raw["usage"]["total_tokens"], json!(16));
+    }
+
+    #[test]
+    fn vertex_generate_content_url_uses_project_and_location() {
+        let url = vertex_generate_content_url(
+            &Url::parse("https://us-central1-aiplatform.googleapis.com").unwrap(),
+            &ProviderConfig {
+                vertex_project_id: Some("demo-project".into()),
+                vertex_location: Some("us-central1".into()),
+                vertex_access_token: Some("ya29.test".into()),
+                ..ProviderConfig::default()
+            },
+            "gemini-2.0-flash-001",
+        )
+        .unwrap();
+        assert_eq!(
+            url,
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/demo-project/locations/us-central1/publishers/google/models/gemini-2.0-flash-001:generateContent"
+        );
     }
 
     #[test]
@@ -1830,6 +2638,8 @@ mod tests {
         assert!(runtime_streaming_unsupported_message(ProviderType::AzureOpenAI).is_some());
         assert!(runtime_streaming_unsupported_message(ProviderType::GoogleGemini).is_some());
         assert!(runtime_streaming_unsupported_message(ProviderType::Cohere).is_some());
+        assert!(runtime_streaming_unsupported_message(ProviderType::AwsClaude).is_some());
+        assert!(runtime_streaming_unsupported_message(ProviderType::VertexAI).is_some());
         assert!(runtime_streaming_unsupported_message(ProviderType::OpenAI).is_none());
     }
 }

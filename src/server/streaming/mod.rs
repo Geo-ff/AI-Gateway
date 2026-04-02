@@ -436,6 +436,12 @@ mod tests {
             runtime_streaming_unsupported_message(crate::config::ProviderType::Cohere).is_some()
         );
         assert!(
+            runtime_streaming_unsupported_message(crate::config::ProviderType::AwsClaude).is_some()
+        );
+        assert!(
+            runtime_streaming_unsupported_message(crate::config::ProviderType::VertexAI).is_some()
+        );
+        assert!(
             runtime_streaming_unsupported_message(crate::config::ProviderType::OpenAI).is_none()
         );
     }
