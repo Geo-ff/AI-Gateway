@@ -656,8 +656,8 @@ pub async fn test_provider_model_draft(
 
 #[cfg(test)]
 mod tests {
-    use super::{DraftProviderModelTestPayload, map_model_discovery_error};
-    use crate::config::settings::ProviderConfig;
+    use super::{DraftProviderModelTestPayload, map_model_discovery_error, resolve_test_model};
+    use crate::config::settings::{ProviderConfig, ProviderType};
     use crate::error::GatewayError;
 
     #[test]
@@ -703,5 +703,23 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(explicit_null.provider_config, ProviderConfig::default());
+    }
+
+    #[tokio::test]
+    async fn manual_model_priority_provider_skips_auto_discovery() {
+        let base_url = reqwest::Url::parse("https://api.minimax.io/v1").unwrap();
+        let err = resolve_test_model(
+            ProviderType::MiniMax,
+            &base_url,
+            None,
+            "sk-test",
+            &ProviderConfig::default(),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.0, "configuration_required");
+        assert!(err.1.unwrap_or_default().contains("手动填写模型"));
     }
 }

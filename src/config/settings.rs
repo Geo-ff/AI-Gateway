@@ -46,6 +46,16 @@ pub struct ProviderConfig {
     pub vertex_location: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vertex_access_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baidu_access_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baidu_secret_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xf_spark_app_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xf_spark_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xf_spark_api_secret: Option<String>,
 }
 
 impl ProviderConfig {
@@ -111,6 +121,36 @@ impl ProviderConfig {
                 .is_none()
             && self
                 .vertex_access_token
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self
+                .baidu_access_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self
+                .baidu_secret_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self
+                .xf_spark_app_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self
+                .xf_spark_api_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self
+                .xf_spark_api_secret
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -317,6 +357,14 @@ pub enum ProviderType {
     Custom,
     XAI,
     Doubao,
+    Yi,
+    MiniMax,
+    TencentHunyuan,
+    BaiduErnie,
+    BaiduErnieV2,
+    XfSpark,
+    ThreeSixtyZhinao,
+    StepFun,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -375,6 +423,14 @@ impl ProviderType {
             ProviderType::Custom => "custom",
             ProviderType::XAI => "xai",
             ProviderType::Doubao => "doubao",
+            ProviderType::Yi => "yi",
+            ProviderType::MiniMax => "minimax",
+            ProviderType::TencentHunyuan => "tencent_hunyuan",
+            ProviderType::BaiduErnie => "baidu_ernie",
+            ProviderType::BaiduErnieV2 => "baidu_ernie_v2",
+            ProviderType::XfSpark => "xf_spark",
+            ProviderType::ThreeSixtyZhinao => "360_zhinao",
+            ProviderType::StepFun => "stepfun",
         }
     }
 
@@ -418,7 +474,15 @@ impl ProviderType {
             | ProviderType::AlibabaQwen
             | ProviderType::Custom
             | ProviderType::XAI
-            | ProviderType::Doubao => ProviderAuthMode::Bearer,
+            | ProviderType::Doubao
+            | ProviderType::Yi
+            | ProviderType::MiniMax
+            | ProviderType::TencentHunyuan
+            | ProviderType::ThreeSixtyZhinao
+            | ProviderType::StepFun => ProviderAuthMode::Bearer,
+            ProviderType::BaiduErnie | ProviderType::BaiduErnieV2 | ProviderType::XfSpark => {
+                ProviderAuthMode::Unsupported
+            }
         }
     }
 
@@ -482,6 +546,26 @@ impl ProviderType {
                 test_connection_family: ProviderProtocolFamily::VertexAI,
                 openai_compatible: false,
             },
+            ProviderType::MiniMax | ProviderType::TencentHunyuan => ProviderCapabilities {
+                auth_mode: self.auth_mode(),
+                supports_auto_model_discovery: false,
+                supports_models_endpoint: false,
+                requires_models_endpoint: false,
+                test_connection_family: ProviderProtocolFamily::OpenAI,
+                openai_compatible: true,
+            },
+            ProviderType::BaiduErnie
+            | ProviderType::BaiduErnieV2
+            | ProviderType::XfSpark
+            | ProviderType::ThreeSixtyZhinao
+            | ProviderType::StepFun => ProviderCapabilities {
+                auth_mode: self.auth_mode(),
+                supports_auto_model_discovery: false,
+                supports_models_endpoint: false,
+                requires_models_endpoint: false,
+                test_connection_family: ProviderProtocolFamily::Unsupported,
+                openai_compatible: false,
+            },
             ProviderType::OpenAI
             | ProviderType::Cloudflare
             | ProviderType::Perplexity
@@ -493,7 +577,8 @@ impl ProviderType {
             // `custom` is intentionally scoped to "custom OpenAI-compatible endpoint" for this stage.
             | ProviderType::Custom
             | ProviderType::XAI
-            | ProviderType::Doubao => ProviderCapabilities {
+            | ProviderType::Doubao
+            | ProviderType::Yi => ProviderCapabilities {
                 auth_mode: self.auth_mode(),
                 supports_auto_model_discovery: true,
                 supports_models_endpoint: true,
@@ -534,6 +619,18 @@ impl FromStr for ProviderType {
             "custom" => Ok(ProviderType::Custom),
             "xai" | "x_ai" | "x-ai" => Ok(ProviderType::XAI),
             "doubao" => Ok(ProviderType::Doubao),
+            "yi" | "lingyi" | "01ai" | "01_ai" | "01-ai" => Ok(ProviderType::Yi),
+            "minimax" | "mini_max" | "mini-max" => Ok(ProviderType::MiniMax),
+            "tencent_hunyuan" | "tencent-hunyuan" | "hunyuan" => Ok(ProviderType::TencentHunyuan),
+            "baidu_ernie" | "baidu-ernie" | "ernie" => Ok(ProviderType::BaiduErnie),
+            "baidu_ernie_v2" | "baidu-ernie-v2" | "ernie_v2" | "ernie-v2" => {
+                Ok(ProviderType::BaiduErnieV2)
+            }
+            "xf_spark" | "xf-spark" | "spark" => Ok(ProviderType::XfSpark),
+            "360_zhinao" | "360-zhinao" | "zhinao360" | "360zhinao" => {
+                Ok(ProviderType::ThreeSixtyZhinao)
+            }
+            "stepfun" | "step_fun" | "step-fun" => Ok(ProviderType::StepFun),
             other => {
                 tracing::warn!(
                     raw_api_type = other,
@@ -566,7 +663,8 @@ impl<'de> Deserialize<'de> for ProviderType {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderAuthMode, ProviderType};
+    use super::{ProviderAuthMode, ProviderProtocolFamily, ProviderType};
+    use std::str::FromStr;
 
     #[test]
     fn provider_auth_modes_are_explicit_for_high_priority_types() {
@@ -594,6 +692,14 @@ mod tests {
             ProviderType::VertexAI.capabilities().auth_mode,
             ProviderAuthMode::OAuth
         );
+        assert_eq!(
+            ProviderType::TencentHunyuan.capabilities().auth_mode,
+            ProviderAuthMode::Bearer
+        );
+        assert_eq!(
+            ProviderType::BaiduErnie.capabilities().auth_mode,
+            ProviderAuthMode::Unsupported
+        );
     }
 
     #[test]
@@ -601,6 +707,41 @@ mod tests {
         let (provider_type, raw) = ProviderType::from_storage_with_raw("future_vendor");
         assert_eq!(provider_type, ProviderType::Custom);
         assert_eq!(raw.as_deref(), Some("future_vendor"));
+    }
+
+    #[test]
+    fn newly_registered_domestic_provider_types_parse_correctly() {
+        assert_eq!(ProviderType::from_str("yi").unwrap(), ProviderType::Yi);
+        assert_eq!(
+            ProviderType::from_str("minimax").unwrap(),
+            ProviderType::MiniMax
+        );
+        assert_eq!(
+            ProviderType::from_str("tencent_hunyuan").unwrap(),
+            ProviderType::TencentHunyuan
+        );
+        assert_eq!(
+            ProviderType::from_str("360_zhinao").unwrap(),
+            ProviderType::ThreeSixtyZhinao
+        );
+    }
+
+    #[test]
+    fn staged_domestic_provider_capabilities_have_explicit_boundaries() {
+        let yi = ProviderType::Yi.capabilities();
+        assert!(yi.openai_compatible);
+        assert!(yi.supports_auto_model_discovery);
+
+        let minimax = ProviderType::MiniMax.capabilities();
+        assert!(minimax.openai_compatible);
+        assert!(!minimax.supports_auto_model_discovery);
+
+        let ernie = ProviderType::BaiduErnie.capabilities();
+        assert!(!ernie.openai_compatible);
+        assert_eq!(
+            ernie.test_connection_family,
+            ProviderProtocolFamily::Unsupported
+        );
     }
 }
 

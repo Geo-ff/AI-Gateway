@@ -320,6 +320,10 @@ pub async fn stream_chat_completions(
         return Err(ge);
     }
 
+    if let Some(message) = runtime_streaming_unsupported_message(selected.provider.api_type) {
+        return Err(GatewayError::Config(message));
+    }
+
     let response = match selected.provider.api_type {
         crate::config::ProviderType::Anthropic => anthropic::stream_anthropic_chat(
             app_state.clone(),
@@ -442,8 +446,16 @@ mod tests {
             runtime_streaming_unsupported_message(crate::config::ProviderType::VertexAI).is_some()
         );
         assert!(
+            runtime_streaming_unsupported_message(crate::config::ProviderType::MiniMax).is_some()
+        );
+        assert!(
+            runtime_streaming_unsupported_message(crate::config::ProviderType::TencentHunyuan)
+                .is_some()
+        );
+        assert!(
             runtime_streaming_unsupported_message(crate::config::ProviderType::OpenAI).is_none()
         );
+        assert!(runtime_streaming_unsupported_message(crate::config::ProviderType::Yi).is_none());
     }
 
     #[tokio::test]
