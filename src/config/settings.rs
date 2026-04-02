@@ -1,8 +1,9 @@
 use crate::error::{GatewayError, Result as AppResult};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::path::Path;
+use std::str::FromStr;
 
 pub const DEFAULT_PROVIDER_COLLECTION: &str = "默认合集";
 
@@ -32,13 +33,210 @@ pub struct Provider {
     pub updated_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProviderType {
+    OpenAI,
+    AzureOpenAI,
+    Anthropic,
+    AwsClaude,
+    GoogleGemini,
+    VertexAI,
+    Cohere,
+    Cloudflare,
+    Perplexity,
+    Mistral,
+    DeepSeek,
+    SiliconCloud,
+    Moonshot,
+    Zhipu,
+    AlibabaQwen,
+    Custom,
+    XAI,
+    Doubao,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderAuthMode {
+    Bearer,
+    XApiKey,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderProtocolFamily {
     OpenAI,
     Anthropic,
     Zhipu,
-    Doubao,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ProviderCapabilities {
+    pub supports_auto_model_discovery: bool,
+    pub supports_models_endpoint: bool,
+    pub requires_models_endpoint: bool,
+    pub test_connection_family: ProviderProtocolFamily,
+    pub openai_compatible: bool,
+}
+
+impl ProviderType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProviderType::OpenAI => "openai",
+            ProviderType::AzureOpenAI => "azure_openai",
+            ProviderType::Anthropic => "anthropic",
+            ProviderType::AwsClaude => "aws_claude",
+            ProviderType::GoogleGemini => "google_gemini",
+            ProviderType::VertexAI => "vertex_ai",
+            ProviderType::Cohere => "cohere",
+            ProviderType::Cloudflare => "cloudflare",
+            ProviderType::Perplexity => "perplexity",
+            ProviderType::Mistral => "mistral",
+            ProviderType::DeepSeek => "deepseek",
+            ProviderType::SiliconCloud => "siliconcloud",
+            ProviderType::Moonshot => "moonshot",
+            ProviderType::Zhipu => "zhipu",
+            ProviderType::AlibabaQwen => "alibaba_qwen",
+            ProviderType::Custom => "custom",
+            ProviderType::XAI => "xai",
+            ProviderType::Doubao => "doubao",
+        }
+    }
+
+    pub fn from_storage_lossy(raw: &str) -> Self {
+        Self::from_str(raw).unwrap_or(ProviderType::Custom)
+    }
+
+    pub fn protocol_family(self) -> ProviderProtocolFamily {
+        match self {
+            ProviderType::Anthropic => ProviderProtocolFamily::Anthropic,
+            ProviderType::Zhipu => ProviderProtocolFamily::Zhipu,
+            ProviderType::AwsClaude
+            | ProviderType::AzureOpenAI
+            | ProviderType::GoogleGemini
+            | ProviderType::VertexAI
+            | ProviderType::Cohere => ProviderProtocolFamily::Unsupported,
+            ProviderType::OpenAI
+            | ProviderType::Cloudflare
+            | ProviderType::Perplexity
+            | ProviderType::Mistral
+            | ProviderType::DeepSeek
+            | ProviderType::SiliconCloud
+            | ProviderType::Moonshot
+            | ProviderType::AlibabaQwen
+            | ProviderType::Custom
+            | ProviderType::XAI
+            | ProviderType::Doubao => ProviderProtocolFamily::OpenAI,
+        }
+    }
+
+    pub fn capabilities(self) -> ProviderCapabilities {
+        match self {
+            ProviderType::Anthropic => ProviderCapabilities {
+                supports_auto_model_discovery: false,
+                supports_models_endpoint: true,
+                requires_models_endpoint: true,
+                test_connection_family: ProviderProtocolFamily::Anthropic,
+                openai_compatible: false,
+            },
+            ProviderType::Zhipu => ProviderCapabilities {
+                supports_auto_model_discovery: false,
+                supports_models_endpoint: true,
+                requires_models_endpoint: true,
+                test_connection_family: ProviderProtocolFamily::Zhipu,
+                openai_compatible: false,
+            },
+            ProviderType::AwsClaude => ProviderCapabilities {
+                supports_auto_model_discovery: false,
+                supports_models_endpoint: false,
+                requires_models_endpoint: false,
+                test_connection_family: ProviderProtocolFamily::Unsupported,
+                openai_compatible: false,
+            },
+            ProviderType::AzureOpenAI
+            | ProviderType::GoogleGemini
+            | ProviderType::VertexAI
+            | ProviderType::Cohere => ProviderCapabilities {
+                supports_auto_model_discovery: false,
+                supports_models_endpoint: false,
+                requires_models_endpoint: false,
+                test_connection_family: ProviderProtocolFamily::Unsupported,
+                openai_compatible: false,
+            },
+            ProviderType::OpenAI
+            | ProviderType::Cloudflare
+            | ProviderType::Perplexity
+            | ProviderType::Mistral
+            | ProviderType::DeepSeek
+            | ProviderType::SiliconCloud
+            | ProviderType::Moonshot
+            | ProviderType::AlibabaQwen
+            | ProviderType::Custom
+            | ProviderType::XAI
+            | ProviderType::Doubao => ProviderCapabilities {
+                supports_auto_model_discovery: true,
+                supports_models_endpoint: true,
+                requires_models_endpoint: false,
+                test_connection_family: ProviderProtocolFamily::OpenAI,
+                openai_compatible: true,
+            },
+        }
+    }
+
+    pub fn supports_test_connection(self) -> bool {
+        self.capabilities().test_connection_family != ProviderProtocolFamily::Unsupported
+    }
+}
+
+impl FromStr for ProviderType {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw.trim().to_lowercase().as_str() {
+            "openai" | "open-ai" | "open_ai" => Ok(ProviderType::OpenAI),
+            "azure_openai" | "azure-openai" | "azure" => Ok(ProviderType::AzureOpenAI),
+            "anthropic" => Ok(ProviderType::Anthropic),
+            "aws_claude" | "aws-claude" | "bedrock_claude" => Ok(ProviderType::AwsClaude),
+            "google_gemini" | "google-gemini" | "google" | "gemini" => {
+                Ok(ProviderType::GoogleGemini)
+            }
+            "vertex_ai" | "vertex-ai" | "vertex" => Ok(ProviderType::VertexAI),
+            "cohere" => Ok(ProviderType::Cohere),
+            "cloudflare" => Ok(ProviderType::Cloudflare),
+            "perplexity" => Ok(ProviderType::Perplexity),
+            "mistral" => Ok(ProviderType::Mistral),
+            "deepseek" => Ok(ProviderType::DeepSeek),
+            "siliconcloud" | "silicon_cloud" | "silicon-cloud" => Ok(ProviderType::SiliconCloud),
+            "moonshot" => Ok(ProviderType::Moonshot),
+            "zhipu" => Ok(ProviderType::Zhipu),
+            "alibaba_qwen" | "alibaba-qwen" | "alibaba" | "qwen" => Ok(ProviderType::AlibabaQwen),
+            "custom" => Ok(ProviderType::Custom),
+            "xai" | "x_ai" | "x-ai" => Ok(ProviderType::XAI),
+            "doubao" => Ok(ProviderType::Doubao),
+            other => Err(format!("unsupported provider type: {other}")),
+        }
+    }
+}
+
+impl Serialize for ProviderType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ProviderType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        ProviderType::from_str(&raw).map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

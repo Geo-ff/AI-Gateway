@@ -564,15 +564,7 @@ pub async fn list_my_models(
             provider_id: m.provider.clone(),
             provider_enabled: provider.map(|p| p.enabled).unwrap_or(false),
             upstream_endpoint_type: provider
-                .map(|p| {
-                    match p.api_type {
-                        crate::config::settings::ProviderType::OpenAI => "openai",
-                        crate::config::settings::ProviderType::Anthropic => "anthropic",
-                        crate::config::settings::ProviderType::Zhipu => "zhipu",
-                        crate::config::settings::ProviderType::Doubao => "doubao",
-                    }
-                    .to_string()
-                })
+                .map(|p| p.api_type.as_str().to_string())
                 .unwrap_or_else(|| "unknown".to_string()),
             input_price,
             output_price,

@@ -3,15 +3,17 @@ use axum::{
     extract::{Path, State},
 };
 use chrono::Utc;
-use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::auth::require_superadmin;
 use crate::config::settings::ProviderType;
 use crate::error::GatewayError;
 use crate::logging::types::REQ_TYPE_PROVIDER_MODEL_TEST;
+use crate::providers::adapters::{
+    ConnectionTestRequest, adapter_for, unsupported_provider_message,
+};
 use crate::server::AppState;
 use crate::server::request_logging::log_simple_request;
 use crate::server::ssrf::validate_outbound_base_url;
@@ -33,97 +35,6 @@ pub struct ProviderModelTestResponse {
     pub error_message: Option<String>,
 }
 
-fn openai_compat_chat_completions_url(base_url: &reqwest::Url) -> String {
-    let base = base_url.as_str().trim_end_matches('/');
-    let path = base_url.path().trim_end_matches('/');
-    if path.ends_with("/v1") || path.ends_with("/api/v3") {
-        format!("{}/chat/completions", base)
-    } else {
-        format!("{}/v1/chat/completions", base)
-    }
-}
-
-fn classify_http_failure(
-    status: reqwest::StatusCode,
-    body_snippet: &str,
-) -> (String, Option<String>) {
-    let snippet = body_snippet.trim();
-    let lower = snippet.to_lowercase();
-
-    if status == reqwest::StatusCode::NOT_FOUND {
-        // 404 can be either "invalid_path" or "model_not_found"; best-effort by message.
-        if lower.contains("model") && (lower.contains("not found") || lower.contains("not_found")) {
-            return ("model_not_found".into(), Some(snippet.to_string()));
-        }
-        return ("invalid_path".into(), Some(snippet.to_string()));
-    }
-
-    if status == reqwest::StatusCode::REQUEST_TIMEOUT {
-        return ("timeout".into(), Some(snippet.to_string()));
-    }
-
-    if status == reqwest::StatusCode::PAYMENT_REQUIRED
-        || lower.contains("insufficient")
-        || lower.contains("balance")
-    {
-        return ("insufficient_balance".into(), Some(snippet.to_string()));
-    }
-
-    (
-        "other".into(),
-        Some(snippet.to_string()).filter(|s| !s.is_empty()),
-    )
-}
-
-fn format_upstream_error_detail(
-    status: reqwest::StatusCode,
-    content_type: Option<&str>,
-    bytes: &[u8],
-) -> Option<String> {
-    let ct = content_type.unwrap_or("").trim();
-
-    // keep JSON as pretty JSON if possible
-    if ct.contains("application/json") {
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) {
-            let out = serde_json::json!({
-                "status": status.as_u16(),
-                "content_type": if ct.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(ct.to_string()) },
-                "body": v,
-            });
-            return serde_json::to_string_pretty(&out).ok();
-        }
-    }
-
-    let snippet = String::from_utf8_lossy(bytes);
-    let snippet = snippet.trim();
-    if snippet.is_empty() {
-        let out = serde_json::json!({
-            "status": status.as_u16(),
-            "content_type": if ct.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(ct.to_string()) },
-        });
-        return serde_json::to_string_pretty(&out).ok();
-    }
-
-    let out = serde_json::json!({
-        "status": status.as_u16(),
-        "content_type": if ct.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(ct.to_string()) },
-        "body_text": snippet,
-    });
-    serde_json::to_string_pretty(&out).ok()
-}
-
-fn classify_reqwest_error(err: &reqwest::Error) -> String {
-    if err.is_timeout() {
-        return "timeout".into();
-    }
-    if let Some(status) = err.status() {
-        if status == reqwest::StatusCode::NOT_FOUND {
-            return "invalid_path".into();
-        }
-    }
-    "other".into()
-}
-
 async fn send_test_request(
     provider_type: ProviderType,
     base_url: &reqwest::Url,
@@ -131,149 +42,20 @@ async fn send_test_request(
     model: &str,
     stream: bool,
 ) -> Result<(), (String, Option<String>)> {
-    let model = model.trim();
-    if model.is_empty() {
-        return Err((
-            "model_not_found".into(),
-            Some("model cannot be empty".into()),
-        ));
-    }
-
-    match provider_type {
-        ProviderType::OpenAI | ProviderType::Doubao => {
-            let url = openai_compat_chat_completions_url(base_url);
-            let builder = reqwest::Client::builder()
-                .redirect(Policy::none())
-                .timeout(Duration::from_secs(30));
-            let client = crate::http_client::maybe_disable_proxy(builder, &url)
-                .build()
-                .map_err(|e| ("other".into(), Some(e.to_string())))?;
-            let payload = serde_json::json!({
-              "model": model,
-              "messages": [{"role":"user","content":"ping"}],
-              "stream": stream,
-              "max_tokens": 1,
-              "temperature": 0
-            });
-            let resp = client
-                .post(&url)
-                .bearer_auth(api_key)
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json")
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|e| (classify_reqwest_error(&e), Some(e.to_string())))?;
-
-            let status = resp.status();
-            let content_type = resp
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            let bytes = resp
-                .bytes()
-                .await
-                .map_err(|e| ("other".into(), Some(e.to_string())))?;
-            if !status.is_success() {
-                let detail = format_upstream_error_detail(status, content_type.as_deref(), &bytes);
-                let snippet = String::from_utf8_lossy(&bytes);
-                let (ty, _) = classify_http_failure(status, &snippet);
-                return Err((ty, detail));
-            }
-            Ok(())
-        }
-        ProviderType::Anthropic => {
-            let url = format!("{}/v1/messages", base_url.as_str().trim_end_matches('/'));
-            let builder = reqwest::Client::builder()
-                .redirect(Policy::none())
-                .timeout(Duration::from_secs(30));
-            let client = crate::http_client::maybe_disable_proxy(builder, &url)
-                .build()
-                .map_err(|e| ("other".into(), Some(e.to_string())))?;
-            // Anthropic Messages API minimal payload
-            let payload = serde_json::json!({
-              "model": model,
-              "stream": stream,
-              "max_tokens": 1,
-              "messages": [{"role":"user","content":[{"type":"text","text":"ping"}]}]
-            });
-            let resp = client
-                .post(&url)
-                .header("x-api-key", api_key)
-                .header("anthropic-version", "2023-06-01")
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json")
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|e| (classify_reqwest_error(&e), Some(e.to_string())))?;
-
-            let status = resp.status();
-            let content_type = resp
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            let bytes = resp
-                .bytes()
-                .await
-                .map_err(|e| ("other".into(), Some(e.to_string())))?;
-            if !status.is_success() {
-                let detail = format_upstream_error_detail(status, content_type.as_deref(), &bytes);
-                let snippet = String::from_utf8_lossy(&bytes);
-                let (ty, _) = classify_http_failure(status, &snippet);
-                return Err((ty, detail));
-            }
-            Ok(())
-        }
-        ProviderType::Zhipu => {
-            let url = format!(
-                "{}/api/paas/v4/chat/completions",
-                base_url.as_str().trim_end_matches('/')
-            );
-            let builder = reqwest::Client::builder()
-                .redirect(Policy::none())
-                .timeout(Duration::from_secs(30));
-            let client = crate::http_client::maybe_disable_proxy(builder, &url)
-                .build()
-                .map_err(|e| ("other".into(), Some(e.to_string())))?;
-            let payload = serde_json::json!({
-              "model": model,
-              "messages": [{"role":"user","content":"ping"}],
-              "stream": stream,
-              "max_tokens": 1,
-              "temperature": 0
-            });
-            let resp = client
-                .post(&url)
-                .bearer_auth(api_key)
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json")
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|e| (classify_reqwest_error(&e), Some(e.to_string())))?;
-
-            let status = resp.status();
-            let content_type = resp
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            let bytes = resp
-                .bytes()
-                .await
-                .map_err(|e| ("other".into(), Some(e.to_string())))?;
-            if !status.is_success() {
-                let detail = format_upstream_error_detail(status, content_type.as_deref(), &bytes);
-                let snippet = String::from_utf8_lossy(&bytes);
-                let (ty, _) = classify_http_failure(status, &snippet);
-                return Err((ty, detail));
-            }
-            Ok(())
-        }
-    }
+    let adapter = adapter_for(provider_type).ok_or_else(|| {
+        (
+            "other".into(),
+            Some(unsupported_provider_message(provider_type)),
+        )
+    })?;
+    adapter
+        .test_connection(ConnectionTestRequest {
+            base_url,
+            api_key,
+            model,
+            stream,
+        })
+        .await
 }
 
 pub async fn test_provider_model(
@@ -447,6 +229,28 @@ pub async fn test_provider_model(
     }
 
     let api_type = provider.api_type.clone();
+    if !api_type.supports_test_connection() {
+        let resp = Json(ProviderModelTestResponse {
+            success: false,
+            latency: None,
+            error_type: Some("other".into()),
+            error_message: Some(unsupported_provider_message(api_type)),
+        });
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &path,
+            REQ_TYPE_PROVIDER_MODEL_TEST,
+            Some(payload.model.clone()),
+            Some(provider.name),
+            token_for_log(provided_token.as_deref()),
+            200,
+            None,
+        )
+        .await;
+        return Ok(resp);
+    }
     let t0 = Instant::now();
     let mut outcome = send_test_request(
         api_type.clone(),
@@ -460,7 +264,9 @@ pub async fn test_provider_model(
     // upstream error indicating status/body parsing issues, retry with `stream=true` (SSE) and
     // treat any 2xx as success.
     if outcome.is_err()
-        && matches!(api_type, ProviderType::OpenAI | ProviderType::Doubao)
+        && adapter_for(api_type)
+            .map(|adapter| adapter.supports_stream_retry())
+            .unwrap_or(false)
         && let Err((_, Some(detail))) = &outcome
     {
         let lower = detail.to_lowercase();

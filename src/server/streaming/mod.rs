@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 // Reuse API key hint from shared server utilities
 use crate::error::GatewayError;
-use crate::providers::openai::ChatCompletionRequest;
 use crate::server::AppState;
 use crate::server::chat_request::GatewayChatCompletionRequest;
 use crate::server::model_redirect::{
@@ -321,36 +320,6 @@ pub async fn stream_chat_completions(
     }
 
     let response = match selected.provider.api_type {
-        crate::config::ProviderType::OpenAI | crate::config::ProviderType::Doubao => {
-            openai::stream_openai_chat(
-                app_state.clone(),
-                start_time,
-                upstream_req.model.clone(),
-                requested_model.clone(),
-                upstream_req.model.clone(),
-                selected.provider.base_url.clone(),
-                selected.provider.name.clone(),
-                selected.api_key.clone(),
-                client_token.clone(),
-                upstream_req,
-            )
-            .await
-            .map(IntoResponse::into_response)
-        }
-        crate::config::ProviderType::Zhipu => zhipu::stream_zhipu_chat(
-            app_state.clone(),
-            start_time,
-            upstream_req.model.clone(),
-            requested_model.clone(),
-            upstream_req.model.clone(),
-            selected.provider.base_url.clone(),
-            selected.provider.name.clone(),
-            selected.api_key.clone(),
-            client_token.clone(),
-            upstream_req,
-        )
-        .await
-        .map(IntoResponse::into_response),
         crate::config::ProviderType::Anthropic => anthropic::stream_anthropic_chat(
             app_state.clone(),
             start_time,
@@ -366,6 +335,43 @@ pub async fn stream_chat_completions(
         )
         .await
         .map(IntoResponse::into_response),
+        crate::config::ProviderType::Zhipu => zhipu::stream_zhipu_chat(
+            app_state.clone(),
+            start_time,
+            upstream_req.model.clone(),
+            requested_model.clone(),
+            upstream_req.model.clone(),
+            selected.provider.base_url.clone(),
+            selected.provider.name.clone(),
+            selected.api_key.clone(),
+            client_token.clone(),
+            upstream_req,
+        )
+        .await
+        .map(IntoResponse::into_response),
+        provider_type if provider_type.capabilities().openai_compatible => {
+            openai::stream_openai_chat(
+                app_state.clone(),
+                start_time,
+                upstream_req.model.clone(),
+                requested_model.clone(),
+                upstream_req.model.clone(),
+                selected.provider.base_url.clone(),
+                selected.provider.name.clone(),
+                selected.api_key.clone(),
+                client_token.clone(),
+                upstream_req,
+            )
+            .await
+            .map(IntoResponse::into_response)
+        }
+        provider_type => Err(GatewayError::Config(
+            format!(
+                "provider type '{}' is registered but streaming dispatch is not implemented yet",
+                provider_type.as_str()
+            )
+            .into(),
+        )),
     };
 
     if let Some(tok) = client_token.as_deref()
@@ -394,6 +400,7 @@ mod tests {
         BalanceStrategy, LoadBalancing, LoggingConfig, Provider, ProviderType, ServerConfig,
     };
     use crate::logging::DatabaseLogger;
+    use crate::providers::openai::ChatCompletionRequest;
     use crate::server::login::LoginManager;
     use crate::users::{CreateUserPayload, UserRole, UserStatus, UserStore};
     use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};

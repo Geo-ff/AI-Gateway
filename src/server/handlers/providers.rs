@@ -334,18 +334,24 @@ pub async fn create_provider(
         .create_provider_collection(&p.collection)
         .await
         .map_err(GatewayError::Db)?;
-    let _ = app_state.log_store.log_provider_op(ProviderOpLog {
-        id: None,
-        timestamp: start_time,
-        operation: REQ_TYPE_PROVIDER_CREATE.to_string(),
-        provider: Some(p.name.clone()),
-        details: Some(serde_json::to_string(&serde_json::json!({
-            "display_name": p.display_name,
-            "api_type": match p.api_type { ProviderType::OpenAI => "openai", ProviderType::Anthropic => "anthropic", ProviderType::Zhipu => "zhipu", ProviderType::Doubao => "doubao" },
-            "base_url": p.base_url,
-            "models_endpoint": p.models_endpoint
-        })).unwrap_or_default()),
-    }).await;
+    let _ = app_state
+        .log_store
+        .log_provider_op(ProviderOpLog {
+            id: None,
+            timestamp: start_time,
+            operation: REQ_TYPE_PROVIDER_CREATE.to_string(),
+            provider: Some(p.name.clone()),
+            details: Some(
+                serde_json::to_string(&serde_json::json!({
+                    "display_name": p.display_name,
+                    "api_type": p.api_type.as_str(),
+                    "base_url": p.base_url,
+                    "models_endpoint": p.models_endpoint
+                }))
+                .unwrap_or_default(),
+            ),
+        })
+        .await;
     let token_for_log = provided_token.as_deref();
     log_simple_request(
         &app_state,
@@ -447,18 +453,24 @@ pub async fn update_provider(
         .get_provider_keys(&name, &app_state.config.logging.key_log_strategy)
         .await
         .map_err(GatewayError::Db)?;
-    let _ = app_state.log_store.log_provider_op(ProviderOpLog {
-        id: None,
-        timestamp: start_time,
-        operation: REQ_TYPE_PROVIDER_UPDATE.to_string(),
-        provider: Some(p.name.clone()),
-        details: Some(serde_json::to_string(&serde_json::json!({
-            "display_name": p.display_name,
-            "api_type": match p.api_type { ProviderType::OpenAI => "openai", ProviderType::Anthropic => "anthropic", ProviderType::Zhipu => "zhipu", ProviderType::Doubao => "doubao" },
-            "base_url": p.base_url,
-            "models_endpoint": p.models_endpoint
-        })).unwrap_or_default()),
-    }).await;
+    let _ = app_state
+        .log_store
+        .log_provider_op(ProviderOpLog {
+            id: None,
+            timestamp: start_time,
+            operation: REQ_TYPE_PROVIDER_UPDATE.to_string(),
+            provider: Some(p.name.clone()),
+            details: Some(
+                serde_json::to_string(&serde_json::json!({
+                    "display_name": p.display_name,
+                    "api_type": p.api_type.as_str(),
+                    "base_url": p.base_url,
+                    "models_endpoint": p.models_endpoint
+                }))
+                .unwrap_or_default(),
+            ),
+        })
+        .await;
     let token_log = token_for_log(provided_token.as_deref());
     log_simple_request(
         &app_state,

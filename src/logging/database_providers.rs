@@ -248,22 +248,11 @@ impl DatabaseLogger {
 }
 
 fn provider_type_from_str(s: &str) -> ProviderType {
-    match s.to_ascii_lowercase().as_str() {
-        "openai" => ProviderType::OpenAI,
-        "anthropic" => ProviderType::Anthropic,
-        "zhipu" => ProviderType::Zhipu,
-        "doubao" => ProviderType::Doubao,
-        _ => ProviderType::OpenAI,
-    }
+    ProviderType::from_storage_lossy(s)
 }
 
 fn provider_type_to_str(t: &ProviderType) -> &'static str {
-    match t {
-        ProviderType::OpenAI => "openai",
-        ProviderType::Anthropic => "anthropic",
-        ProviderType::Zhipu => "zhipu",
-        ProviderType::Doubao => "doubao",
-    }
+    t.as_str()
 }
 
 #[cfg(test)]

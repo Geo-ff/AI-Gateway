@@ -1,6 +1,5 @@
 use axum::{Json, extract::State};
 use chrono::Utc;
-use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -11,7 +10,7 @@ use super::auth::require_superadmin;
 use crate::config::settings::ProviderType;
 use crate::error::GatewayError;
 use crate::logging::types::REQ_TYPE_PROVIDER_MODELS_BASEURL_LIST;
-use crate::providers::openai::ModelListResponse;
+use crate::providers::adapters::{ListModelsRequest, adapter_for, unsupported_provider_message};
 use crate::server::AppState;
 use crate::server::request_logging::log_simple_request;
 use crate::server::ssrf::{join_models_url, validate_outbound_base_url};
@@ -57,12 +56,7 @@ fn cache() -> &'static Mutex<HashMap<CacheKey, CacheEntry>> {
 }
 
 fn api_type_key(t: &ProviderType) -> &'static str {
-    match t {
-        ProviderType::OpenAI => "openai",
-        ProviderType::Anthropic => "anthropic",
-        ProviderType::Zhipu => "zhipu",
-        ProviderType::Doubao => "doubao",
-    }
+    t.as_str()
 }
 
 fn normalize_base_url(s: &str) -> String {
@@ -85,14 +79,17 @@ pub async fn list_models_by_base_url(
     // SSRF：先校验 base_url；若 models_endpoint 是完整 URL，后续还会再校验一次
     let base_url = validate_outbound_base_url(&payload.base_url).await?;
 
-    if matches!(
-        payload.api_type,
-        ProviderType::Anthropic | ProviderType::Zhipu
-    ) && payload.models_endpoint.is_none()
-    {
+    let capabilities = payload.api_type.capabilities();
+    if capabilities.requires_models_endpoint && payload.models_endpoint.is_none() {
         return Err(GatewayError::Config(
             "该 api_type 暂不支持自动获取模型列表；请配置 models_endpoint（OpenAI 兼容响应）或手动输入模型"
                 .into(),
+        ));
+    }
+
+    if !capabilities.supports_auto_model_discovery && !capabilities.requires_models_endpoint {
+        return Err(GatewayError::Config(
+            unsupported_provider_message(payload.api_type).into(),
         ));
     }
 
@@ -179,68 +176,35 @@ pub async fn list_models_by_base_url(
         models_url = validate_outbound_base_url(models_url.as_str()).await?;
     }
 
-    let builder = reqwest::Client::builder()
-        .redirect(Policy::none())
-        .timeout(Duration::from_secs(12));
-    let client = crate::http_client::maybe_disable_proxy(builder, models_url.as_str()).build()?;
-
-    let mut req = client
-        .get(models_url.as_str())
-        .header("Accept", "application/json");
-    if !api_key.is_empty() {
-        req = req.bearer_auth(api_key);
-    }
-
-    let resp = req.send().await?;
-    let status = resp.status();
-    let bytes = resp.bytes().await?;
-
-    if !status.is_success() {
-        let snippet = String::from_utf8_lossy(&bytes);
-        let snippet = snippet.trim();
-        let snippet = if snippet.len() > 240 {
-            &snippet[..240]
-        } else {
-            snippet
-        };
-        let msg = match status.as_u16() {
-            401 | 403 => "上游鉴权失败，请检查 Key（或先添加/启用 Key）".to_string(),
-            404 => "上游未找到模型列表接口（404），该上游可能不支持自动获取模型列表；可配置 models_endpoint 或手动输入模型".to_string(),
-            _ => {
-                if snippet.is_empty() {
-                    format!("上游返回错误（{}）", status.as_u16())
-                } else {
-                    format!("上游返回错误（{}）：{}", status.as_u16(), snippet)
-                }
-            }
-        };
-        let ge = if matches!(status.as_u16(), 401 | 403) {
-            GatewayError::Unauthorized(msg)
-        } else {
-            GatewayError::Config(msg)
-        };
-        let code = ge.status_code().as_u16();
-        log_simple_request(
-            &app_state,
-            start_time,
-            "POST",
-            "/providers/models/list",
-            REQ_TYPE_PROVIDER_MODELS_BASEURL_LIST,
-            None,
-            payload.provider.clone(),
-            token_for_log(provided_token.as_deref()),
-            code,
-            Some(ge.to_string()),
-        )
-        .await;
-        return Err(ge);
-    }
-
-    let parsed: ModelListResponse = serde_json::from_slice(&bytes)
-        .map_err(|_| GatewayError::Config("解析上游模型列表失败（非 OpenAI 兼容响应）".into()))?;
-    let mut models: Vec<String> = parsed.data.into_iter().map(|m| m.id).collect();
-    models.sort();
-    models.dedup();
+    let adapter = adapter_for(payload.api_type).ok_or_else(|| {
+        GatewayError::Config(unsupported_provider_message(payload.api_type).into())
+    })?;
+    let models = match adapter
+        .list_models(ListModelsRequest {
+            models_url: &models_url,
+            api_key: &api_key,
+        })
+        .await
+    {
+        Ok(models) => models,
+        Err(ge) => {
+            let code = ge.status_code().as_u16();
+            log_simple_request(
+                &app_state,
+                start_time,
+                "POST",
+                "/providers/models/list",
+                REQ_TYPE_PROVIDER_MODELS_BASEURL_LIST,
+                None,
+                payload.provider.clone(),
+                token_for_log(provided_token.as_deref()),
+                code,
+                Some(ge.to_string()),
+            )
+            .await;
+            return Err(ge);
+        }
+    };
 
     if cacheable {
         let mut guard = cache().lock().await;

@@ -137,13 +137,20 @@ pub async fn call_provider_with_parsed_model(
     modified_request.model = parsed_model.get_upstream_model_name().to_string();
 
     match selected.provider.api_type {
-        ProviderType::OpenAI | ProviderType::Doubao => {
-            call_openai_provider(selected, &modified_request).await
-        }
         ProviderType::Anthropic => {
             call_anthropic_provider(selected, &modified_request, top_k).await
         }
         ProviderType::Zhipu => call_zhipu_provider(selected, &modified_request).await,
+        provider_type if provider_type.capabilities().openai_compatible => {
+            call_openai_provider(selected, &modified_request).await
+        }
+        provider_type => Err(GatewayError::Config(
+            format!(
+                "provider type '{}' is registered but chat dispatch is not implemented yet",
+                provider_type.as_str()
+            )
+            .into(),
+        )),
     }
 }
 
