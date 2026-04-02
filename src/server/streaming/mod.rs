@@ -438,6 +438,7 @@ mod tests {
                 display_name: None,
                 collection: crate::config::settings::DEFAULT_PROVIDER_COLLECTION.into(),
                 api_type: ProviderType::OpenAI,
+                api_type_raw: None,
                 base_url: "http://localhost".into(),
                 api_keys: Vec::new(),
                 models_endpoint: None,

@@ -105,11 +105,13 @@ impl DatabaseLogger {
                 let enabled: i64 = row.get(6)?;
                 let created_at_raw: Option<String> = row.get(7)?;
                 let updated_at_raw: Option<String> = row.get(8)?;
+                let (api_type, api_type_raw) = ProviderType::from_storage_with_raw(&api_type);
                 Ok(Provider {
                     name,
                     display_name,
                     collection,
-                    api_type: provider_type_from_str(&api_type),
+                    api_type,
+                    api_type_raw,
                     base_url,
                     api_keys: Vec::new(),
                     models_endpoint,
@@ -146,11 +148,13 @@ impl DatabaseLogger {
             let enabled: i64 = row.get(6)?;
             let created_at_raw: Option<String> = row.get(7)?;
             let updated_at_raw: Option<String> = row.get(8)?;
+            let (api_type, api_type_raw) = ProviderType::from_storage_with_raw(&api_type);
             Ok(Provider {
                 name,
                 display_name,
                 collection,
-                api_type: provider_type_from_str(&api_type),
+                api_type,
+                api_type_raw,
                 base_url,
                 api_keys: Vec::new(),
                 models_endpoint,
@@ -247,10 +251,6 @@ impl DatabaseLogger {
     }
 }
 
-fn provider_type_from_str(s: &str) -> ProviderType {
-    ProviderType::from_storage_lossy(s)
-}
-
 fn provider_type_to_str(t: &ProviderType) -> &'static str {
     t.as_str()
 }
@@ -275,6 +275,7 @@ mod tests {
             display_name: None,
             collection: "默认合集".into(),
             api_type: ProviderType::OpenAI,
+            api_type_raw: None,
             base_url: "http://example.com".into(),
             api_keys: vec![],
             models_endpoint: None,

@@ -209,7 +209,7 @@ pub async fn test_provider_model(
         let resp = Json(ProviderModelTestResponse {
             success: false,
             latency: None,
-            error_type: Some("other".into()),
+            error_type: Some("configuration_required".into()),
             error_message: Some("no available api key".into()),
         });
         log_simple_request(
@@ -233,7 +233,7 @@ pub async fn test_provider_model(
         let resp = Json(ProviderModelTestResponse {
             success: false,
             latency: None,
-            error_type: Some("other".into()),
+            error_type: Some("unsupported_provider".into()),
             error_message: Some(unsupported_provider_message(api_type)),
         });
         log_simple_request(

@@ -1555,21 +1555,26 @@ impl ProviderStore for PgLogStore {
                 .query_opt("SELECT name, display_name, collection, api_type, base_url, models_endpoint, enabled, created_at, updated_at FROM providers WHERE name = $1", &[&name])
                 .await
                 .map_err(pg_err)?;
-            Ok(row.map(|r| Provider {
-                name: pg_row_string(&r, 0),
-                display_name: pg_row_opt_string(&r, 1),
-                collection: pg_row_string(&r, 2),
-                api_type: provider_type_from_str(&pg_row_string(&r, 3)),
-                base_url: pg_row_string(&r, 4),
-                api_keys: Vec::new(),
-                models_endpoint: pg_row_opt_string(&r, 5),
-                enabled: pg_row_bool_or(&r, 6, true),
-                created_at: r.try_get::<usize, DateTime<Utc>>(7).ok().or_else(|| {
-                    pg_row_opt_string(&r, 7).and_then(|s| parse_datetime_string(&s).ok())
-                }),
-                updated_at: r.try_get::<usize, DateTime<Utc>>(8).ok().or_else(|| {
-                    pg_row_opt_string(&r, 8).and_then(|s| parse_datetime_string(&s).ok())
-                }),
+            Ok(row.map(|r| {
+                let api_type_raw = pg_row_string(&r, 3);
+                let (api_type, api_type_raw) = ProviderType::from_storage_with_raw(&api_type_raw);
+                Provider {
+                    name: pg_row_string(&r, 0),
+                    display_name: pg_row_opt_string(&r, 1),
+                    collection: pg_row_string(&r, 2),
+                    api_type,
+                    api_type_raw,
+                    base_url: pg_row_string(&r, 4),
+                    api_keys: Vec::new(),
+                    models_endpoint: pg_row_opt_string(&r, 5),
+                    enabled: pg_row_bool_or(&r, 6, true),
+                    created_at: r.try_get::<usize, DateTime<Utc>>(7).ok().or_else(|| {
+                        pg_row_opt_string(&r, 7).and_then(|s| parse_datetime_string(&s).ok())
+                    }),
+                    updated_at: r.try_get::<usize, DateTime<Utc>>(8).ok().or_else(|| {
+                        pg_row_opt_string(&r, 8).and_then(|s| parse_datetime_string(&s).ok())
+                    }),
+                }
             }))
         })
     }
@@ -1603,11 +1608,14 @@ impl ProviderStore for PgLogStore {
                 let updated_at = r.try_get::<usize, DateTime<Utc>>(8).ok().or_else(|| {
                     pg_row_opt_string(&r, 8).and_then(|s| parse_datetime_string(&s).ok())
                 });
+                let api_type_raw = pg_row_string(&r, 3);
+                let (api_type, api_type_raw) = ProviderType::from_storage_with_raw(&api_type_raw);
                 out.push(Provider {
                     name: pg_row_string(&r, 0),
                     display_name: pg_row_opt_string(&r, 1),
                     collection: pg_row_string(&r, 2),
-                    api_type: provider_type_from_str(&pg_row_string(&r, 3)),
+                    api_type,
+                    api_type_raw,
                     base_url: pg_row_string(&r, 4),
                     api_keys: Vec::new(),
                     models_endpoint: pg_row_opt_string(&r, 5),
@@ -2456,10 +2464,6 @@ impl LoginStore for PgLogStore {
             Ok(rows > 0)
         })
     }
-}
-
-fn provider_type_from_str(s: &str) -> ProviderType {
-    ProviderType::from_storage_lossy(s)
 }
 
 fn provider_type_to_str(t: &ProviderType) -> &'static str {

@@ -253,6 +253,7 @@ mod tests {
             display_name: None,
             collection: DEFAULT_PROVIDER_COLLECTION.to_string(),
             api_type: ProviderType::OpenAI,
+            api_type_raw: None,
             base_url: "http://example.invalid".to_string(),
             api_keys: keys.iter().map(|s| s.to_string()).collect(),
             models_endpoint: None,

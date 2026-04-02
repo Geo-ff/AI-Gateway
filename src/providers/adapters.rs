@@ -117,6 +117,10 @@ fn classify_http_failure(status: StatusCode, body_snippet: &str) -> (String, Opt
         return ("timeout".into(), Some(snippet.to_string()));
     }
 
+    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        return ("authentication_failed".into(), Some(snippet.to_string()));
+    }
+
     if status == StatusCode::PAYMENT_REQUIRED
         || lower.contains("insufficient")
         || lower.contains("balance")
@@ -265,13 +269,18 @@ impl ProviderAdapter for ProtocolAdapter {
                     .map_err(|e| ("other".into(), Some(e.to_string())))?;
                 headers.insert(AUTHORIZATION, value);
             }
+            ProviderAuthMode::ApiKey => {
+                let api_key_value = HeaderValue::from_str(api_key)
+                    .map_err(|e| ("other".into(), Some(e.to_string())))?;
+                headers.insert("api-key", api_key_value);
+            }
             ProviderAuthMode::XApiKey => {
                 let api_key_value = HeaderValue::from_str(api_key)
                     .map_err(|e| ("other".into(), Some(e.to_string())))?;
                 headers.insert("x-api-key", api_key_value);
                 headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
             }
-            ProviderAuthMode::None => {}
+            ProviderAuthMode::Unsupported | ProviderAuthMode::SigV4 | ProviderAuthMode::OAuth => {}
         }
         Ok(headers)
     }

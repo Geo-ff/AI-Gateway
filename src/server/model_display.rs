@@ -65,6 +65,7 @@ mod tests {
             display_name: display_name.map(|value| value.to_string()),
             collection: "默认合集".to_string(),
             api_type: ProviderType::OpenAI,
+            api_type_raw: None,
             base_url: "https://example.com".to_string(),
             api_keys: Vec::new(),
             models_endpoint: None,

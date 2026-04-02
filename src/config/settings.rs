@@ -22,6 +22,8 @@ pub struct Provider {
     #[serde(default = "default_provider_collection")]
     pub collection: String,
     pub api_type: ProviderType,
+    #[serde(default)]
+    pub api_type_raw: Option<String>,
     pub base_url: String,
     pub api_keys: Vec<String>,
     pub models_endpoint: Option<String>,
@@ -60,7 +62,10 @@ pub enum ProviderType {
 pub enum ProviderAuthMode {
     Bearer,
     XApiKey,
-    None,
+    ApiKey,
+    SigV4,
+    OAuth,
+    Unsupported,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +79,7 @@ pub enum ProviderProtocolFamily {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ProviderCapabilities {
+    pub auth_mode: ProviderAuthMode,
     pub supports_auto_model_discovery: bool,
     pub supports_models_endpoint: bool,
     pub requires_models_endpoint: bool,
@@ -105,8 +111,48 @@ impl ProviderType {
         }
     }
 
-    pub fn from_storage_lossy(raw: &str) -> Self {
-        Self::from_str(raw).unwrap_or(ProviderType::Custom)
+    pub fn from_storage_with_raw(raw: &str) -> (Self, Option<String>) {
+        let trimmed = raw.trim();
+        match Self::from_str(trimmed) {
+            Ok(provider_type) => {
+                let raw_out =
+                    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case(provider_type.as_str()) {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    };
+                (provider_type, raw_out)
+            }
+            Err(_) => {
+                tracing::warn!(
+                    raw_api_type = trimmed,
+                    "Unknown provider type from storage; falling back to custom openai-compatible semantics"
+                );
+                (ProviderType::Custom, Some(trimmed.to_string()))
+            }
+        }
+    }
+
+    pub fn auth_mode(self) -> ProviderAuthMode {
+        match self {
+            ProviderType::Anthropic => ProviderAuthMode::XApiKey,
+            ProviderType::AzureOpenAI | ProviderType::GoogleGemini => ProviderAuthMode::ApiKey,
+            ProviderType::AwsClaude => ProviderAuthMode::SigV4,
+            ProviderType::VertexAI => ProviderAuthMode::OAuth,
+            ProviderType::OpenAI
+            | ProviderType::Cohere
+            | ProviderType::Cloudflare
+            | ProviderType::Perplexity
+            | ProviderType::Mistral
+            | ProviderType::DeepSeek
+            | ProviderType::SiliconCloud
+            | ProviderType::Moonshot
+            | ProviderType::Zhipu
+            | ProviderType::AlibabaQwen
+            | ProviderType::Custom
+            | ProviderType::XAI
+            | ProviderType::Doubao => ProviderAuthMode::Bearer,
+        }
     }
 
     pub fn protocol_family(self) -> ProviderProtocolFamily {
@@ -132,9 +178,12 @@ impl ProviderType {
         }
     }
 
+    // Keep these capability semantics aligned with `captok/src/features/channels/data/provider-registry.ts`.
+    // When adding a provider here, update the frontend registry in the same change.
     pub fn capabilities(self) -> ProviderCapabilities {
         match self {
             ProviderType::Anthropic => ProviderCapabilities {
+                auth_mode: self.auth_mode(),
                 supports_auto_model_discovery: false,
                 supports_models_endpoint: true,
                 requires_models_endpoint: true,
@@ -142,6 +191,7 @@ impl ProviderType {
                 openai_compatible: false,
             },
             ProviderType::Zhipu => ProviderCapabilities {
+                auth_mode: self.auth_mode(),
                 supports_auto_model_discovery: false,
                 supports_models_endpoint: true,
                 requires_models_endpoint: true,
@@ -149,6 +199,7 @@ impl ProviderType {
                 openai_compatible: false,
             },
             ProviderType::AwsClaude => ProviderCapabilities {
+                auth_mode: self.auth_mode(),
                 supports_auto_model_discovery: false,
                 supports_models_endpoint: false,
                 requires_models_endpoint: false,
@@ -159,6 +210,7 @@ impl ProviderType {
             | ProviderType::GoogleGemini
             | ProviderType::VertexAI
             | ProviderType::Cohere => ProviderCapabilities {
+                auth_mode: self.auth_mode(),
                 supports_auto_model_discovery: false,
                 supports_models_endpoint: false,
                 requires_models_endpoint: false,
@@ -173,9 +225,11 @@ impl ProviderType {
             | ProviderType::SiliconCloud
             | ProviderType::Moonshot
             | ProviderType::AlibabaQwen
+            // `custom` is intentionally scoped to "custom OpenAI-compatible endpoint" for this stage.
             | ProviderType::Custom
             | ProviderType::XAI
             | ProviderType::Doubao => ProviderCapabilities {
+                auth_mode: self.auth_mode(),
                 supports_auto_model_discovery: true,
                 supports_models_endpoint: true,
                 requires_models_endpoint: false,
@@ -215,7 +269,13 @@ impl FromStr for ProviderType {
             "custom" => Ok(ProviderType::Custom),
             "xai" | "x_ai" | "x-ai" => Ok(ProviderType::XAI),
             "doubao" => Ok(ProviderType::Doubao),
-            other => Err(format!("unsupported provider type: {other}")),
+            other => {
+                tracing::warn!(
+                    raw_api_type = other,
+                    "Unknown provider type from request parsing"
+                );
+                Err(format!("unsupported provider type: {other}"))
+            }
         }
     }
 }
@@ -236,6 +296,46 @@ impl<'de> Deserialize<'de> for ProviderType {
     {
         let raw = String::deserialize(deserializer)?;
         ProviderType::from_str(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProviderAuthMode, ProviderType};
+
+    #[test]
+    fn provider_auth_modes_are_explicit_for_high_priority_types() {
+        assert_eq!(
+            ProviderType::OpenAI.capabilities().auth_mode,
+            ProviderAuthMode::Bearer
+        );
+        assert_eq!(
+            ProviderType::AzureOpenAI.capabilities().auth_mode,
+            ProviderAuthMode::ApiKey
+        );
+        assert_eq!(
+            ProviderType::Anthropic.capabilities().auth_mode,
+            ProviderAuthMode::XApiKey
+        );
+        assert_eq!(
+            ProviderType::AwsClaude.capabilities().auth_mode,
+            ProviderAuthMode::SigV4
+        );
+        assert_eq!(
+            ProviderType::GoogleGemini.capabilities().auth_mode,
+            ProviderAuthMode::ApiKey
+        );
+        assert_eq!(
+            ProviderType::VertexAI.capabilities().auth_mode,
+            ProviderAuthMode::OAuth
+        );
+    }
+
+    #[test]
+    fn unknown_storage_types_keep_raw_information() {
+        let (provider_type, raw) = ProviderType::from_storage_with_raw("future_vendor");
+        assert_eq!(provider_type, ProviderType::Custom);
+        assert_eq!(raw.as_deref(), Some("future_vendor"));
     }
 }
 
