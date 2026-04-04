@@ -174,21 +174,6 @@ pub async fn runtime_chat_completions(
 
 pub fn runtime_streaming_unsupported_message(provider_type: ProviderType) -> Option<String> {
     match provider_type {
-        ProviderType::AzureOpenAI => {
-            Some("Azure OpenAI 当前仅支持非流式真实请求，stream=true 暂未实现。".into())
-        }
-        ProviderType::GoogleGemini => {
-            Some("Google Gemini 当前仅支持非流式真实请求，stream=true 暂未实现。".into())
-        }
-        ProviderType::Cohere => {
-            Some("Cohere 当前仅支持非流式真实请求，stream=true 暂未实现。".into())
-        }
-        ProviderType::AwsClaude => {
-            Some("AWS Claude 当前仅支持非流式真实请求，stream=true 暂未实现。".into())
-        }
-        ProviderType::VertexAI => {
-            Some("Vertex AI 当前仅支持非流式真实请求，stream=true 暂未实现。".into())
-        }
         ProviderType::BaiduErnie => {
             Some("百度文心旧版当前仅支持非流式真实请求，stream=true 暂未纳入本轮支持范围。".into())
         }
@@ -523,7 +508,7 @@ fn adapt_baidu_ernie_response(
     )
 }
 
-fn azure_openai_chat_completions_url(
+pub(crate) fn azure_openai_chat_completions_url(
     base_url: &Url,
     provider_config: &ProviderConfig,
 ) -> Result<String, (String, Option<String>)> {
@@ -584,6 +569,29 @@ fn gemini_model_name(model: &str) -> Result<String, (String, Option<String>)> {
     } else {
         Ok(format!("models/{}", model))
     }
+}
+
+pub(crate) fn gemini_generate_content_url(
+    base_url: &Url,
+    provider_config: &ProviderConfig,
+    model: &str,
+    stream: bool,
+    api_key: &str,
+) -> Result<String, (String, Option<String>)> {
+    let model = gemini_model_name(model)?;
+    let action = if stream {
+        "streamGenerateContent?alt=sse"
+    } else {
+        "generateContent"
+    };
+    let url = Url::parse(&format!(
+        "{}/{}:{}",
+        gemini_base_url(base_url, provider_config),
+        model,
+        action
+    ))
+    .map_err(|err| ("invalid_path".into(), Some(err.to_string())))?;
+    append_query_api_key(&url, api_key)
 }
 
 fn classify_http_failure(status: StatusCode, body_snippet: &str) -> (String, Option<String>) {
@@ -722,7 +730,10 @@ fn extract_error_message(bytes: &[u8]) -> Option<String> {
         })
 }
 
-fn gateway_error_from_normalized(error_type: &str, fallback_message: String) -> GatewayError {
+pub(crate) fn gateway_error_from_normalized(
+    error_type: &str,
+    fallback_message: String,
+) -> GatewayError {
     match error_type {
         "authentication_failed" => GatewayError::Unauthorized(fallback_message),
         "rate_limited" => GatewayError::RateLimited(fallback_message),
@@ -910,7 +921,7 @@ fn parse_openai_compatible_response(
     Ok(RawAndTypedChatCompletion { typed, raw })
 }
 
-fn gemini_finish_reason(reason: Option<&str>) -> &'static str {
+pub(crate) fn gemini_finish_reason(reason: Option<&str>) -> &'static str {
     match reason.unwrap_or_default() {
         "MAX_TOKENS" => "length",
         "SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" => "content_filter",
@@ -918,14 +929,14 @@ fn gemini_finish_reason(reason: Option<&str>) -> &'static str {
     }
 }
 
-fn cohere_finish_reason(reason: Option<&str>) -> &'static str {
+pub(crate) fn cohere_finish_reason(reason: Option<&str>) -> &'static str {
     match reason.unwrap_or_default() {
         "MAX_TOKENS" => "length",
         _ => "stop",
     }
 }
 
-fn aws_claude_finish_reason(reason: Option<&str>) -> &'static str {
+pub(crate) fn aws_claude_finish_reason(reason: Option<&str>) -> &'static str {
     match reason.unwrap_or_default() {
         "max_tokens" => "length",
         "content_filtered" => "content_filter",
@@ -1017,7 +1028,7 @@ fn aws_signed_headers_and_canonical_headers(
     )
 }
 
-fn aws_sigv4_headers(
+pub(crate) fn aws_sigv4_headers(
     method: &str,
     url: &Url,
     payload_bytes: &[u8],
@@ -1108,7 +1119,7 @@ fn aws_sigv4_headers(
     Ok(headers)
 }
 
-fn build_aws_claude_payload(
+pub(crate) fn build_aws_claude_payload(
     request: &ChatCompletionRequest,
 ) -> Result<serde_json::Value, GatewayError> {
     let value = request_value(request)?;
@@ -1219,7 +1230,7 @@ fn adapt_aws_claude_response(
     )
 }
 
-fn aws_claude_error_message(status: StatusCode, bytes: &[u8]) -> String {
+pub(crate) fn aws_claude_error_message(status: StatusCode, bytes: &[u8]) -> String {
     let upstream = trim_error_message(bytes);
     let lower = upstream.to_lowercase();
 
@@ -1246,7 +1257,7 @@ fn aws_claude_error_message(status: StatusCode, bytes: &[u8]) -> String {
     }
 }
 
-fn classify_aws_claude_error(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
+pub(crate) fn classify_aws_claude_error(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
     let message = aws_claude_error_message(status, bytes);
     let lower = message.to_lowercase();
 
@@ -1287,7 +1298,7 @@ fn vertex_base_url(base_url: &Url) -> String {
     }
 }
 
-fn vertex_generate_content_url(
+pub(crate) fn vertex_generate_content_url(
     base_url: &Url,
     provider_config: &ProviderConfig,
     model: &str,
@@ -1314,7 +1325,18 @@ fn vertex_generate_content_url(
     ))
 }
 
-fn vertex_access_token(provider_config: &ProviderConfig) -> Result<&str, (String, Option<String>)> {
+pub(crate) fn vertex_stream_generate_content_url(
+    base_url: &Url,
+    provider_config: &ProviderConfig,
+    model: &str,
+) -> Result<String, (String, Option<String>)> {
+    vertex_generate_content_url(base_url, provider_config, model)
+        .map(|url| url.replacen(":generateContent", ":streamGenerateContent", 1))
+}
+
+pub(crate) fn vertex_access_token(
+    provider_config: &ProviderConfig,
+) -> Result<&str, (String, Option<String>)> {
     provider_config.vertex_access_token().ok_or_else(|| {
         (
             "configuration_required".into(),
@@ -1323,7 +1345,7 @@ fn vertex_access_token(provider_config: &ProviderConfig) -> Result<&str, (String
     })
 }
 
-fn vertex_error_message(status: StatusCode, bytes: &[u8]) -> String {
+pub(crate) fn vertex_error_message(status: StatusCode, bytes: &[u8]) -> String {
     let upstream = trim_error_message(bytes);
     let lower = upstream.to_lowercase();
 
@@ -1350,7 +1372,7 @@ fn vertex_error_message(status: StatusCode, bytes: &[u8]) -> String {
     }
 }
 
-fn classify_vertex_error(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
+pub(crate) fn classify_vertex_error(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
     let message = vertex_error_message(status, bytes);
     let lower = message.to_lowercase();
 
@@ -1366,7 +1388,7 @@ fn classify_vertex_error(status: StatusCode, bytes: &[u8]) -> (String, Option<St
     classify_http_failure(status, &message)
 }
 
-fn build_gemini_payload(
+pub(crate) fn build_gemini_payload(
     request: &ChatCompletionRequest,
 ) -> Result<serde_json::Value, GatewayError> {
     let value = request_value(request)?;
@@ -1523,7 +1545,7 @@ fn adapt_gemini_response(
     )
 }
 
-fn build_cohere_payload(
+pub(crate) fn build_cohere_payload(
     request: &ChatCompletionRequest,
 ) -> Result<serde_json::Value, GatewayError> {
     let value = request_value(request)?;
@@ -1671,7 +1693,7 @@ fn adapt_cohere_response(
     )
 }
 
-fn azure_error_message(status: StatusCode, bytes: &[u8]) -> String {
+pub(crate) fn azure_error_message(status: StatusCode, bytes: &[u8]) -> String {
     let upstream = extract_error_message(bytes)
         .unwrap_or_else(|| String::from_utf8_lossy(bytes).trim().to_string());
     let lower = upstream.to_lowercase();
@@ -1692,7 +1714,7 @@ fn azure_error_message(status: StatusCode, bytes: &[u8]) -> String {
     }
 }
 
-fn classify_azure_error(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
+pub(crate) fn classify_azure_error(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
     let message = azure_error_message(status, bytes);
     let lower = message.to_lowercase();
 
@@ -1711,7 +1733,7 @@ fn classify_azure_error(status: StatusCode, bytes: &[u8]) -> (String, Option<Str
     classify_http_failure(status, &message)
 }
 
-fn gemini_error_message(status: StatusCode, bytes: &[u8]) -> String {
+pub(crate) fn gemini_error_message(status: StatusCode, bytes: &[u8]) -> String {
     let upstream = extract_error_message(bytes)
         .unwrap_or_else(|| String::from_utf8_lossy(bytes).trim().to_string());
     let lower = upstream.to_lowercase();
@@ -1738,7 +1760,7 @@ fn gemini_error_message(status: StatusCode, bytes: &[u8]) -> String {
     }
 }
 
-fn classify_gemini_error(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
+pub(crate) fn classify_gemini_error(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
     let message = gemini_error_message(status, bytes);
     let lower = message.to_lowercase();
 
@@ -1754,7 +1776,7 @@ fn classify_gemini_error(status: StatusCode, bytes: &[u8]) -> (String, Option<St
     classify_http_failure(status, &message)
 }
 
-fn cohere_error_message(status: StatusCode, bytes: &[u8]) -> String {
+pub(crate) fn cohere_error_message(status: StatusCode, bytes: &[u8]) -> String {
     let upstream = extract_error_message(bytes)
         .unwrap_or_else(|| String::from_utf8_lossy(bytes).trim().to_string());
     let lower = upstream.to_lowercase();
@@ -1775,7 +1797,7 @@ fn cohere_error_message(status: StatusCode, bytes: &[u8]) -> String {
     }
 }
 
-fn classify_cohere_error(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
+pub(crate) fn classify_cohere_error(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
     let message = cohere_error_message(status, bytes);
     let lower = message.to_lowercase();
 
@@ -3121,11 +3143,11 @@ mod tests {
 
     #[test]
     fn runtime_streaming_boundary_is_explicit_for_new_native_providers() {
-        assert!(runtime_streaming_unsupported_message(ProviderType::AzureOpenAI).is_some());
-        assert!(runtime_streaming_unsupported_message(ProviderType::GoogleGemini).is_some());
-        assert!(runtime_streaming_unsupported_message(ProviderType::Cohere).is_some());
-        assert!(runtime_streaming_unsupported_message(ProviderType::AwsClaude).is_some());
-        assert!(runtime_streaming_unsupported_message(ProviderType::VertexAI).is_some());
+        assert!(runtime_streaming_unsupported_message(ProviderType::AzureOpenAI).is_none());
+        assert!(runtime_streaming_unsupported_message(ProviderType::GoogleGemini).is_none());
+        assert!(runtime_streaming_unsupported_message(ProviderType::Cohere).is_none());
+        assert!(runtime_streaming_unsupported_message(ProviderType::AwsClaude).is_none());
+        assert!(runtime_streaming_unsupported_message(ProviderType::VertexAI).is_none());
         assert!(runtime_streaming_unsupported_message(ProviderType::BaiduErnie).is_some());
         assert!(runtime_streaming_unsupported_message(ProviderType::BaiduErnieV2).is_some());
         assert!(runtime_streaming_unsupported_message(ProviderType::XfSpark).is_some());

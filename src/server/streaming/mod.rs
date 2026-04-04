@@ -18,13 +18,14 @@ use crate::server::provider_dispatch::select_provider_for_model;
 
 mod anthropic;
 mod common;
+mod native;
 mod openai;
 mod zhipu;
 
 /// Chat Completions 流式入口：
 /// - 仅接受 `stream=true` 的请求，否则直接报错
 /// - 应用模型重定向后，根据模型选择具体 Provider，并校验令牌额度/过期/模型白名单
-/// - 按 Provider 类型分发到对应的流式实现（OpenAI/Zhipu），并统一返回 SSE 响应
+/// - 按 Provider 类型分发到对应的流式实现（OpenAI/Zhipu/原生协议族），并统一返回 SSE 响应
 pub async fn stream_chat_completions(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -370,6 +371,26 @@ pub async fn stream_chat_completions(
             .await
             .map(IntoResponse::into_response)
         }
+        crate::config::ProviderType::AzureOpenAI
+        | crate::config::ProviderType::GoogleGemini
+        | crate::config::ProviderType::Cohere
+        | crate::config::ProviderType::AwsClaude
+        | crate::config::ProviderType::VertexAI => native::stream_native_chat(
+            app_state.clone(),
+            start_time,
+            upstream_req.model.clone(),
+            requested_model.clone(),
+            upstream_req.model.clone(),
+            selected.provider.api_type,
+            selected.provider.base_url.clone(),
+            selected.provider.name.clone(),
+            selected.api_key.clone(),
+            client_token.clone(),
+            upstream_req,
+            selected.provider.provider_config.clone(),
+        )
+        .await
+        .map(IntoResponse::into_response),
         provider_type => Err(GatewayError::Config(
             runtime_streaming_unsupported_message(provider_type).unwrap_or_else(|| {
                 format!(
@@ -430,20 +451,20 @@ mod tests {
     fn explicit_non_stream_only_providers_have_clear_streaming_message() {
         assert!(
             runtime_streaming_unsupported_message(crate::config::ProviderType::AzureOpenAI)
-                .is_some()
+                .is_none()
         );
         assert!(
             runtime_streaming_unsupported_message(crate::config::ProviderType::GoogleGemini)
-                .is_some()
+                .is_none()
         );
         assert!(
-            runtime_streaming_unsupported_message(crate::config::ProviderType::Cohere).is_some()
+            runtime_streaming_unsupported_message(crate::config::ProviderType::Cohere).is_none()
         );
         assert!(
-            runtime_streaming_unsupported_message(crate::config::ProviderType::AwsClaude).is_some()
+            runtime_streaming_unsupported_message(crate::config::ProviderType::AwsClaude).is_none()
         );
         assert!(
-            runtime_streaming_unsupported_message(crate::config::ProviderType::VertexAI).is_some()
+            runtime_streaming_unsupported_message(crate::config::ProviderType::VertexAI).is_none()
         );
         assert!(
             runtime_streaming_unsupported_message(crate::config::ProviderType::MiniMax).is_none()

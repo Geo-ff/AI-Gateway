@@ -603,6 +603,18 @@ mod tests {
         });
     }
 
+    fn encode_mock_aws_eventstream_frame(payload: &Value) -> Vec<u8> {
+        let payload_bytes = serde_json::to_vec(payload).unwrap();
+        let total_len = (16 + payload_bytes.len()) as u32;
+        let mut out = Vec::with_capacity(total_len as usize);
+        out.extend_from_slice(&total_len.to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(&payload_bytes);
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out
+    }
+
     async fn spawn_mock_azure_server() -> (String, SharedCapturedRequests) {
         async fn handler(
             State(captured): State<SharedCapturedRequests>,
@@ -610,15 +622,67 @@ mod tests {
             Query(query): Query<HashMap<String, String>>,
             headers: HeaderMap,
             Json(body): Json<Value>,
-        ) -> (StatusCode, Json<Value>) {
+        ) -> axum::response::Response {
+            let captured_body = body.clone();
             capture_request(
                 captured,
                 format!("/openai/deployments/{deployment}/chat/completions"),
                 query,
                 &headers,
-                body,
+                captured_body,
             )
             .await;
+
+            if body.get("stream").and_then(Value::as_bool).unwrap_or(false) {
+                let role_chunk = json!({
+                    "id": "azure-stream-1",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": deployment,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"role": "assistant"},
+                        "finish_reason": Value::Null,
+                    }],
+                    "usage": Value::Null,
+                })
+                .to_string();
+                let text_chunk = json!({
+                    "id": "azure-stream-1",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": deployment,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": "mock azure stream ok"},
+                        "finish_reason": "stop",
+                    }],
+                    "usage": Value::Null,
+                })
+                .to_string();
+                let usage_chunk = json!({
+                    "id": "azure-stream-1",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": deployment,
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 5,
+                        "completion_tokens": 3,
+                        "total_tokens": 8,
+                    }
+                })
+                .to_string();
+                return (
+                    StatusCode::OK,
+                    [(CONTENT_TYPE, "text/event-stream")],
+                    format!(
+                        "data: {role_chunk}\n\ndata: {text_chunk}\n\ndata: {usage_chunk}\n\ndata: [DONE]\n\n"
+                    ),
+                )
+                    .into_response();
+            }
+
             (
                 StatusCode::OK,
                 Json(json!({
@@ -638,6 +702,7 @@ mod tests {
                     }
                 })),
             )
+                .into_response()
         }
 
         let captured = Arc::new(Mutex::new(Vec::new()));
@@ -662,15 +727,49 @@ mod tests {
             Query(query): Query<HashMap<String, String>>,
             headers: HeaderMap,
             Json(body): Json<Value>,
-        ) -> (StatusCode, Json<Value>) {
+        ) -> axum::response::Response {
+            let captured_body = body.clone();
             capture_request(
                 captured,
                 format!("/v1beta/models/{model_action}"),
                 query,
                 &headers,
-                body,
+                captured_body,
             )
             .await;
+
+            if model_action.ends_with(":streamGenerateContent") {
+                let first = json!({
+                    "candidates": [{
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": "mock gemini "}]
+                        }
+                    }]
+                })
+                .to_string();
+                let second = json!({
+                    "candidates": [{
+                        "content": {
+                            "parts": [{"text": "stream ok"}]
+                        },
+                        "finishReason": "STOP"
+                    }],
+                    "usageMetadata": {
+                        "promptTokenCount": 7,
+                        "candidatesTokenCount": 4,
+                        "totalTokenCount": 11
+                    }
+                })
+                .to_string();
+                return (
+                    StatusCode::OK,
+                    [(CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {first}\n\ndata: {second}\n\n"),
+                )
+                    .into_response();
+            }
+
             (
                 StatusCode::OK,
                 Json(json!({
@@ -689,6 +788,7 @@ mod tests {
                     }
                 })),
             )
+                .into_response()
         }
 
         let captured = Arc::new(Mutex::new(Vec::new()));
@@ -708,8 +808,39 @@ mod tests {
             State(captured): State<SharedCapturedRequests>,
             headers: HeaderMap,
             Json(body): Json<Value>,
-        ) -> (StatusCode, Json<Value>) {
-            capture_request(captured, "/v2/chat".into(), HashMap::new(), &headers, body).await;
+        ) -> axum::response::Response {
+            let captured_body = body.clone();
+            capture_request(
+                captured,
+                "/v2/chat".into(),
+                HashMap::new(),
+                &headers,
+                captured_body,
+            )
+            .await;
+
+            if body.get("stream").and_then(Value::as_bool).unwrap_or(false) {
+                return (
+                    StatusCode::OK,
+                    [(CONTENT_TYPE, "text/event-stream")],
+                    concat!(
+                        "event: message-start\n",
+                        "data: {\"type\":\"message-start\"}\n\n",
+                        "event: content-start\n",
+                        "data: {\"type\":\"content-start\",\"index\":0}\n\n",
+                        "event: content-delta\n",
+                        "data: {\"type\":\"content-delta\",\"index\":0,\"delta\":{\"message\":{\"content\":{\"text\":\"mock cohere \"}}}}\n\n",
+                        "event: content-delta\n",
+                        "data: {\"type\":\"content-delta\",\"index\":0,\"delta\":{\"message\":{\"content\":{\"text\":\"stream ok\"}}}}\n\n",
+                        "event: content-end\n",
+                        "data: {\"type\":\"content-end\",\"index\":0}\n\n",
+                        "event: message-end\n",
+                        "data: {\"type\":\"message-end\",\"delta\":{\"finish_reason\":\"COMPLETE\",\"usage\":{\"tokens\":{\"input_tokens\":9,\"output_tokens\":6}}}}\n\n"
+                    ),
+                )
+                    .into_response();
+            }
+
             (
                 StatusCode::OK,
                 Json(json!({
@@ -727,6 +858,7 @@ mod tests {
                     }
                 })),
             )
+                .into_response()
         }
 
         let captured = Arc::new(Mutex::new(Vec::new()));
@@ -747,15 +879,41 @@ mod tests {
             Path(model): Path<String>,
             headers: HeaderMap,
             Json(body): Json<Value>,
-        ) -> (StatusCode, Json<Value>) {
+        ) -> axum::response::Response {
+            let is_stream = headers
+                .get("accept")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.contains("application/vnd.amazon.eventstream"));
+            let suffix = if is_stream { "converse-stream" } else { "converse" };
             capture_request(
                 captured,
-                format!("/model/{model}/converse"),
+                format!("/model/{model}/{suffix}"),
                 HashMap::new(),
                 &headers,
                 body,
             )
             .await;
+
+            if is_stream {
+                let frames = [
+                    json!({"messageStart": {"role": "assistant"}}),
+                    json!({"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "mock aws "}}}),
+                    json!({"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "claude stream ok"}}}),
+                    json!({"messageStop": {"stopReason": "end_turn"}}),
+                    json!({"metadata": {"usage": {"inputTokens": 8, "outputTokens": 5, "totalTokens": 13}, "metrics": {"latencyMs": 123}}}),
+                ]
+                .into_iter()
+                .flat_map(|payload| encode_mock_aws_eventstream_frame(&payload))
+                .collect::<Vec<u8>>();
+
+                return (
+                    StatusCode::OK,
+                    [(CONTENT_TYPE, "application/vnd.amazon.eventstream")],
+                    axum::body::Body::from(frames),
+                )
+                    .into_response();
+            }
+
             (
                 StatusCode::OK,
                 Json(json!({
@@ -773,11 +931,13 @@ mod tests {
                     }
                 })),
             )
+                .into_response()
         }
 
         let captured = Arc::new(Mutex::new(Vec::new()));
         let app = Router::new()
             .route("/model/{model}/converse", post(handler))
+            .route("/model/{model}/converse-stream", post(handler))
             .with_state(captured.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -793,7 +953,8 @@ mod tests {
             Path((project, location, model_action)): Path<(String, String, String)>,
             headers: HeaderMap,
             Json(body): Json<Value>,
-        ) -> (StatusCode, Json<Value>) {
+        ) -> axum::response::Response {
+            let captured_body = body.clone();
             capture_request(
                 captured,
                 format!(
@@ -801,9 +962,22 @@ mod tests {
                 ),
                 HashMap::new(),
                 &headers,
-                body,
+                captured_body,
             )
             .await;
+
+            if model_action.ends_with(":streamGenerateContent") {
+                return (
+                    StatusCode::OK,
+                    [(CONTENT_TYPE, "application/json")],
+                    concat!(
+                        "{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"mock vertex \"}]}}]}\n",
+                        "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"stream ok\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":6,\"totalTokenCount\":16}}\n"
+                    ),
+                )
+                    .into_response();
+            }
+
             (
                 StatusCode::OK,
                 Json(json!({
@@ -822,6 +996,7 @@ mod tests {
                     }
                 })),
             )
+                .into_response()
         }
 
         let captured = Arc::new(Mutex::new(Vec::new()));
@@ -1087,6 +1262,37 @@ mod tests {
         Ok((response_headers, String::from_utf8(bytes.to_vec()).unwrap()))
     }
 
+    fn stream_data_lines(body: &str) -> Vec<&str> {
+        body.lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .collect()
+    }
+
+    fn parse_stream_json_chunks(body: &str) -> Vec<Value> {
+        stream_data_lines(body)
+            .into_iter()
+            .filter(|line| *line != "[DONE]")
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .collect()
+    }
+
+    fn collect_stream_content(body: &str) -> String {
+        parse_stream_json_chunks(body)
+            .into_iter()
+            .filter_map(|chunk| {
+                chunk
+                    .get("choices")
+                    .and_then(Value::as_array)
+                    .and_then(|choices| choices.first())
+                    .and_then(|choice| choice.get("delta"))
+                    .and_then(|delta| delta.get("content"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
     #[tokio::test]
     async fn mock_runtime_azure_openai_chat() {
         let (base_url, captured) = spawn_mock_azure_server().await;
@@ -1287,6 +1493,256 @@ mod tests {
             Some(&"Bearer ya29.vertex-test".to_string())
         );
         assert_eq!(call.body["contents"][0]["role"], json!("user"));
+    }
+
+    #[tokio::test]
+    async fn mock_runtime_azure_openai_stream() {
+        let (base_url, captured) = spawn_mock_azure_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "azure-stream-mock",
+            ProviderType::AzureOpenAI,
+            &base_url,
+            ProviderConfig {
+                azure_deployment: Some("gpt-4o-prod".into()),
+                azure_api_version: Some("2024-06-01".into()),
+                ..ProviderConfig::default()
+            },
+            "ignored-model-name",
+        )
+        .await;
+
+        let (headers, body) = invoke_chat_and_collect_text(
+            app_state,
+            &token,
+            "azure-stream-mock/ignored-model-name",
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .contains("text/event-stream")
+        );
+        assert_eq!(collect_stream_content(&body), "mock azure stream ok");
+
+        let data_lines = stream_data_lines(&body);
+        assert_eq!(data_lines.last().copied(), Some("[DONE]"));
+        let chunks = parse_stream_json_chunks(&body);
+        assert_eq!(chunks[0]["choices"][0]["delta"]["role"], json!("assistant"));
+        assert_eq!(chunks[1]["choices"][0]["delta"]["content"], json!("mock azure stream ok"));
+        assert_eq!(chunks[2]["choices"][0]["finish_reason"], json!("stop"));
+        assert_eq!(chunks[3]["choices"], json!([]));
+        assert_eq!(chunks[3]["usage"]["total_tokens"], json!(8));
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("azure stream mock call");
+        assert_eq!(call.path, "/openai/deployments/gpt-4o-prod/chat/completions");
+        assert_eq!(call.query.get("api-version"), Some(&"2024-06-01".to_string()));
+        assert_eq!(call.headers.get("api-key"), Some(&"mock-upstream-key".to_string()));
+        assert_eq!(call.body["stream"], json!(true));
+        assert_eq!(call.body["stream_options"]["include_usage"], json!(true));
+        assert!(call.body.get("model").is_none());
+    }
+
+    #[tokio::test]
+    async fn mock_runtime_google_gemini_stream() {
+        let (base_url, captured) = spawn_mock_gemini_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "gemini-stream-mock",
+            ProviderType::GoogleGemini,
+            &base_url,
+            ProviderConfig {
+                google_api_version: Some("v1beta".into()),
+                ..ProviderConfig::default()
+            },
+            "gemini-2.0-flash",
+        )
+        .await;
+
+        let (headers, body) = invoke_chat_and_collect_text(
+            app_state,
+            &token,
+            "gemini-stream-mock/gemini-2.0-flash",
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .contains("text/event-stream")
+        );
+        assert_eq!(collect_stream_content(&body), "mock gemini stream ok");
+
+        let data_lines = stream_data_lines(&body);
+        assert_eq!(data_lines.last().copied(), Some("[DONE]"));
+        let chunks = parse_stream_json_chunks(&body);
+        assert_eq!(chunks[0]["choices"][0]["delta"]["role"], json!("assistant"));
+        assert_eq!(chunks.last().unwrap()["usage"]["total_tokens"], json!(11));
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("gemini stream mock call");
+        assert_eq!(call.path, "/v1beta/models/gemini-2.0-flash:streamGenerateContent");
+        assert_eq!(call.query.get("alt"), Some(&"sse".to_string()));
+        assert_eq!(call.query.get("key"), Some(&"mock-upstream-key".to_string()));
+        assert_eq!(call.body["contents"][0]["parts"][0]["text"], json!("hello"));
+    }
+
+    #[tokio::test]
+    async fn mock_runtime_cohere_stream() {
+        let (base_url, captured) = spawn_mock_cohere_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "cohere-stream-mock",
+            ProviderType::Cohere,
+            &base_url,
+            ProviderConfig::default(),
+            "command-r-plus",
+        )
+        .await;
+
+        let (headers, body) = invoke_chat_and_collect_text(
+            app_state,
+            &token,
+            "cohere-stream-mock/command-r-plus",
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .contains("text/event-stream")
+        );
+        assert_eq!(collect_stream_content(&body), "mock cohere stream ok");
+
+        let data_lines = stream_data_lines(&body);
+        assert_eq!(data_lines.last().copied(), Some("[DONE]"));
+        let chunks = parse_stream_json_chunks(&body);
+        assert_eq!(chunks[0]["choices"][0]["delta"]["role"], json!("assistant"));
+        assert_eq!(chunks.last().unwrap()["usage"]["total_tokens"], json!(15));
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("cohere stream mock call");
+        assert_eq!(call.path, "/v2/chat");
+        assert_eq!(call.headers.get("authorization"), Some(&"Bearer mock-upstream-key".to_string()));
+        assert_eq!(call.body["stream"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn mock_runtime_aws_claude_stream() {
+        let (base_url, captured) = spawn_mock_aws_claude_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "aws-stream-mock",
+            ProviderType::AwsClaude,
+            &base_url,
+            ProviderConfig {
+                aws_region: Some("us-west-2".into()),
+                aws_access_key_id: Some("AKIA_TEST".into()),
+                aws_secret_access_key: Some("secret-test".into()),
+                ..ProviderConfig::default()
+            },
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        )
+        .await;
+
+        let (headers, body) = invoke_chat_and_collect_text(
+            app_state,
+            &token,
+            "aws-stream-mock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .contains("text/event-stream")
+        );
+        assert_eq!(collect_stream_content(&body), "mock aws claude stream ok");
+
+        let data_lines = stream_data_lines(&body);
+        assert_eq!(data_lines.last().copied(), Some("[DONE]"));
+        let chunks = parse_stream_json_chunks(&body);
+        assert_eq!(chunks[0]["choices"][0]["delta"]["role"], json!("assistant"));
+        assert_eq!(chunks.last().unwrap()["usage"]["total_tokens"], json!(13));
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("aws stream mock call");
+        assert_eq!(
+            call.path,
+            "/model/anthropic.claude-3-5-sonnet-20241022-v2:0/converse-stream"
+        );
+        assert!(call.headers.contains_key("authorization"));
+        assert_eq!(
+            call.headers.get("accept"),
+            Some(&"application/vnd.amazon.eventstream".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_runtime_vertex_ai_stream() {
+        let (base_url, captured) = spawn_mock_vertex_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "vertex-stream-mock",
+            ProviderType::VertexAI,
+            &base_url,
+            ProviderConfig {
+                vertex_project_id: Some("demo-project".into()),
+                vertex_location: Some("us-central1".into()),
+                vertex_access_token: Some("ya29.vertex-test".into()),
+                ..ProviderConfig::default()
+            },
+            "gemini-2.0-flash-001",
+        )
+        .await;
+
+        let (headers, body) = invoke_chat_and_collect_text(
+            app_state,
+            &token,
+            "vertex-stream-mock/gemini-2.0-flash-001",
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .contains("text/event-stream")
+        );
+        assert_eq!(collect_stream_content(&body), "mock vertex stream ok");
+
+        let data_lines = stream_data_lines(&body);
+        assert_eq!(data_lines.last().copied(), Some("[DONE]"));
+        let chunks = parse_stream_json_chunks(&body);
+        assert_eq!(chunks[0]["choices"][0]["delta"]["role"], json!("assistant"));
+        assert_eq!(chunks.last().unwrap()["usage"]["total_tokens"], json!(16));
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("vertex stream mock call");
+        assert_eq!(
+            call.path,
+            "/v1/projects/demo-project/locations/us-central1/publishers/google/models/gemini-2.0-flash-001:streamGenerateContent"
+        );
+        assert_eq!(
+            call.headers.get("authorization"),
+            Some(&"Bearer ya29.vertex-test".to_string())
+        );
     }
 
     #[tokio::test]
@@ -1510,81 +1966,6 @@ mod tests {
 
     #[tokio::test]
     async fn mock_runtime_remaining_non_stream_providers_reject_stream() {
-        let (base_url, _captured) = spawn_mock_gemini_server().await;
-        let (_dir, app_state, token) = test_app_state_with_provider(
-            "gemini-stream-mock",
-            ProviderType::GoogleGemini,
-            &base_url,
-            ProviderConfig {
-                azure_deployment: None,
-                azure_api_version: None,
-                google_api_version: Some("v1beta".into()),
-                ..ProviderConfig::default()
-            },
-            "gemini-2.0-flash",
-        )
-        .await;
-
-        let err = invoke_chat_and_parse_json(
-            app_state,
-            &token,
-            "gemini-stream-mock/gemini-2.0-flash",
-            true,
-        )
-        .await
-        .unwrap_err();
-        assert!(err.to_string().contains("仅支持非流式真实请求"));
-
-        let (aws_base_url, _captured) = spawn_mock_aws_claude_server().await;
-        let (_dir, aws_app_state, aws_token) = test_app_state_with_provider(
-            "aws-stream-mock",
-            ProviderType::AwsClaude,
-            &aws_base_url,
-            ProviderConfig {
-                aws_region: Some("us-west-2".into()),
-                aws_access_key_id: Some("AKIA_TEST".into()),
-                aws_secret_access_key: Some("secret-test".into()),
-                ..ProviderConfig::default()
-            },
-            "anthropic.claude-3-5-sonnet-20241022-v2:0",
-        )
-        .await;
-
-        let aws_err = invoke_chat_and_parse_json(
-            aws_app_state,
-            &aws_token,
-            "aws-stream-mock/anthropic.claude-3-5-sonnet-20241022-v2:0",
-            true,
-        )
-        .await
-        .unwrap_err();
-        assert!(aws_err.to_string().contains("仅支持非流式真实请求"));
-
-        let (vertex_base_url, _captured) = spawn_mock_vertex_server().await;
-        let (_dir, vertex_app_state, vertex_token) = test_app_state_with_provider(
-            "vertex-stream-mock",
-            ProviderType::VertexAI,
-            &vertex_base_url,
-            ProviderConfig {
-                vertex_project_id: Some("demo-project".into()),
-                vertex_location: Some("us-central1".into()),
-                vertex_access_token: Some("ya29.vertex-test".into()),
-                ..ProviderConfig::default()
-            },
-            "gemini-2.0-flash-001",
-        )
-        .await;
-
-        let vertex_err = invoke_chat_and_parse_json(
-            vertex_app_state,
-            &vertex_token,
-            "vertex-stream-mock/gemini-2.0-flash-001",
-            true,
-        )
-        .await
-        .unwrap_err();
-        assert!(vertex_err.to_string().contains("仅支持非流式真实请求"));
-
         let (openai_compat_base_url, _captured) = spawn_mock_openai_compat_server().await;
 
         let (_dir, ernie_v2_app_state, ernie_v2_token) = test_app_state_with_provider(
