@@ -503,7 +503,11 @@ mod tests {
     use axum::extract::State;
     use axum::extract::{Path, Query};
     use axum::http::StatusCode;
-    use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+    use axum::http::{
+        HeaderMap, HeaderValue,
+        header::{AUTHORIZATION, CONTENT_TYPE},
+    };
+    use axum::response::IntoResponse;
     use axum::routing::post;
     use axum::{Json, Router};
     use serde_json::{Value, json};
@@ -840,25 +844,41 @@ mod tests {
             State(captured): State<SharedCapturedRequests>,
             headers: HeaderMap,
             Json(body): Json<Value>,
-        ) -> (StatusCode, Json<Value>) {
+        ) -> axum::response::Response {
+            let captured_body = body.clone();
             capture_request(
                 captured,
                 "/v1/chat/completions".into(),
                 HashMap::new(),
                 &headers,
-                body,
+                captured_body,
             )
             .await;
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "id": "openai-compat-mock-1",
-                    "object": "chat.completion",
+            if body.get("stream").and_then(Value::as_bool).unwrap_or(false) {
+                let model = body
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or("mock-model");
+                let first_chunk = json!({
+                    "id": "openai-compat-stream-1",
+                    "object": "chat.completion.chunk",
                     "created": 1,
-                    "model": "mock-model",
+                    "model": model,
                     "choices": [{
                         "index": 0,
-                        "message": {"role": "assistant", "content": "mock openai compat ok"},
+                        "delta": {"role": "assistant", "content": "mock openai compat "},
+                        "finish_reason": null
+                    }]
+                })
+                .to_string();
+                let second_chunk = json!({
+                    "id": "openai-compat-stream-1",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": "stream ok"},
                         "finish_reason": "stop"
                     }],
                     "usage": {
@@ -866,8 +886,37 @@ mod tests {
                         "completion_tokens": 4,
                         "total_tokens": 10
                     }
-                })),
-            )
+                })
+                .to_string();
+
+                (
+                    StatusCode::OK,
+                    [(CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {first_chunk}\n\ndata: {second_chunk}\n\ndata: [DONE]\n\n"),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "id": "openai-compat-mock-1",
+                        "object": "chat.completion",
+                        "created": 1,
+                        "model": "mock-model",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "mock openai compat ok"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {
+                            "prompt_tokens": 6,
+                            "completion_tokens": 4,
+                            "total_tokens": 10
+                        }
+                    })),
+                )
+                    .into_response()
+            }
         }
 
         let captured = Arc::new(Mutex::new(Vec::new()));
@@ -1000,6 +1049,42 @@ mod tests {
 
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         Ok(serde_json::from_slice(&bytes).unwrap())
+    }
+
+    async fn invoke_chat_and_collect_text(
+        app_state: Arc<AppState>,
+        client_token: &str,
+        model: &str,
+        stream: bool,
+    ) -> Result<(HeaderMap, String), crate::error::GatewayError> {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {client_token}")).unwrap(),
+        );
+        let request: crate::providers::openai::ChatCompletionRequest =
+            serde_json::from_value(json!({
+                "model": model,
+                "messages": [{"role":"system","content":"You are a test assistant"},{"role":"user","content":"hello"}],
+                "stream": stream,
+                "max_tokens": 16,
+                "temperature": 0
+            }))
+            .unwrap();
+
+        let response = super::chat_completions(
+            State(app_state),
+            headers,
+            Json(super::GatewayChatCompletionRequest {
+                request,
+                top_k: None,
+            }),
+        )
+        .await?;
+
+        let response_headers = response.headers().clone();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        Ok((response_headers, String::from_utf8(bytes.to_vec()).unwrap()))
     }
 
     #[tokio::test]
@@ -1267,6 +1352,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mock_runtime_openai_compatible_providers_stream() {
+        let (base_url, captured) = spawn_mock_openai_compat_server().await;
+        let cases = [
+            (
+                "minimax-stream-mock",
+                ProviderType::MiniMax,
+                "MiniMax-Text-01",
+            ),
+            (
+                "hunyuan-stream-mock",
+                ProviderType::TencentHunyuan,
+                "hunyuan-lite",
+            ),
+            (
+                "zhinao-stream-mock",
+                ProviderType::ThreeSixtyZhinao,
+                "360gpt-pro",
+            ),
+            ("stepfun-stream-mock", ProviderType::StepFun, "step-1-8k"),
+        ];
+
+        for (provider_name, provider_type, upstream_model) in cases {
+            let (_dir, app_state, token) = test_app_state_with_provider(
+                provider_name,
+                provider_type,
+                &base_url,
+                ProviderConfig::default(),
+                upstream_model,
+            )
+            .await;
+
+            let (headers, body) = invoke_chat_and_collect_text(
+                app_state,
+                &token,
+                &format!("{provider_name}/{upstream_model}"),
+                true,
+            )
+            .await
+            .unwrap();
+
+            assert!(
+                headers
+                    .get(CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default()
+                    .contains("text/event-stream")
+            );
+
+            let data_lines: Vec<_> = body
+                .lines()
+                .filter_map(|line| line.strip_prefix("data: "))
+                .collect();
+            assert_eq!(data_lines.last().copied(), Some("[DONE]"));
+            assert_eq!(data_lines.len(), 3);
+
+            let first_chunk: Value = serde_json::from_str(data_lines[0]).unwrap();
+            let second_chunk: Value = serde_json::from_str(data_lines[1]).unwrap();
+            assert_eq!(
+                first_chunk["choices"][0]["delta"]["role"],
+                json!("assistant")
+            );
+            assert_eq!(
+                first_chunk["choices"][0]["delta"]["content"],
+                json!("mock openai compat ")
+            );
+            assert_eq!(
+                second_chunk["choices"][0]["delta"]["content"],
+                json!("stream ok")
+            );
+            assert_eq!(second_chunk["choices"][0]["finish_reason"], json!("stop"));
+            assert_eq!(second_chunk["usage"]["total_tokens"], json!(10));
+        }
+
+        let calls = captured.lock().await;
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[0].body["model"], json!("MiniMax-Text-01"));
+        assert_eq!(calls[1].body["model"], json!("hunyuan-lite"));
+        assert_eq!(calls[2].body["model"], json!("360gpt-pro"));
+        assert_eq!(calls[3].body["model"], json!("step-1-8k"));
+        for call in calls.iter() {
+            assert_eq!(call.path, "/v1/chat/completions");
+            assert_eq!(
+                call.headers.get("authorization"),
+                Some(&"Bearer mock-upstream-key".to_string())
+            );
+            assert_eq!(call.body["stream"], json!(true));
+            assert_eq!(call.body["stream_options"]["include_usage"], json!(true));
+        }
+    }
+
+    #[tokio::test]
     async fn mock_runtime_baidu_ernie_v2_chat() {
         let (base_url, captured) = spawn_mock_openai_compat_server().await;
         let (_dir, app_state, token) = test_app_state_with_provider(
@@ -1333,7 +1509,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mock_runtime_new_native_providers_reject_stream() {
+    async fn mock_runtime_remaining_non_stream_providers_reject_stream() {
         let (base_url, _captured) = spawn_mock_gemini_server().await;
         let (_dir, app_state, token) = test_app_state_with_provider(
             "gemini-stream-mock",
@@ -1410,43 +1586,6 @@ mod tests {
         assert!(vertex_err.to_string().contains("仅支持非流式真实请求"));
 
         let (openai_compat_base_url, _captured) = spawn_mock_openai_compat_server().await;
-        let (_dir, zhinao_app_state, zhinao_token) = test_app_state_with_provider(
-            "zhinao-stream-mock",
-            ProviderType::ThreeSixtyZhinao,
-            &openai_compat_base_url,
-            ProviderConfig::default(),
-            "360gpt-pro",
-        )
-        .await;
-
-        let zhinao_err = invoke_chat_and_parse_json(
-            zhinao_app_state,
-            &zhinao_token,
-            "zhinao-stream-mock/360gpt-pro",
-            true,
-        )
-        .await
-        .unwrap_err();
-        assert!(zhinao_err.to_string().contains("仅保证非流式真实请求闭环"));
-
-        let (_dir, stepfun_app_state, stepfun_token) = test_app_state_with_provider(
-            "stepfun-stream-mock",
-            ProviderType::StepFun,
-            &openai_compat_base_url,
-            ProviderConfig::default(),
-            "step-1-8k",
-        )
-        .await;
-
-        let stepfun_err = invoke_chat_and_parse_json(
-            stepfun_app_state,
-            &stepfun_token,
-            "stepfun-stream-mock/step-1-8k",
-            true,
-        )
-        .await
-        .unwrap_err();
-        assert!(stepfun_err.to_string().contains("仅保证非流式真实请求闭环"));
 
         let (_dir, ernie_v2_app_state, ernie_v2_token) = test_app_state_with_provider(
             "ernie-v2-stream-mock",
@@ -1465,7 +1604,11 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(ernie_v2_err.to_string().contains("仅保证非流式真实请求闭环"));
+        assert!(
+            ernie_v2_err
+                .to_string()
+                .contains("仅保证非流式真实请求闭环")
+        );
 
         let (_dir, spark_app_state, spark_token) = test_app_state_with_provider(
             "spark-stream-mock",

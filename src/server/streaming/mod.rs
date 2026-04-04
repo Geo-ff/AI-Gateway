@@ -446,18 +446,18 @@ mod tests {
             runtime_streaming_unsupported_message(crate::config::ProviderType::VertexAI).is_some()
         );
         assert!(
-            runtime_streaming_unsupported_message(crate::config::ProviderType::MiniMax).is_some()
+            runtime_streaming_unsupported_message(crate::config::ProviderType::MiniMax).is_none()
         );
         assert!(
             runtime_streaming_unsupported_message(crate::config::ProviderType::TencentHunyuan)
-                .is_some()
+                .is_none()
         );
         assert!(
             runtime_streaming_unsupported_message(crate::config::ProviderType::ThreeSixtyZhinao)
-                .is_some()
+                .is_none()
         );
         assert!(
-            runtime_streaming_unsupported_message(crate::config::ProviderType::StepFun).is_some()
+            runtime_streaming_unsupported_message(crate::config::ProviderType::StepFun).is_none()
         );
         assert!(
             runtime_streaming_unsupported_message(crate::config::ProviderType::OpenAI).is_none()
