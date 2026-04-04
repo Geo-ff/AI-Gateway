@@ -355,6 +355,24 @@ pub async fn stream_chat_completions(
         )
         .await
         .map(IntoResponse::into_response),
+        crate::config::ProviderType::BaiduErnie | crate::config::ProviderType::XfSpark => {
+            native::stream_native_chat(
+                app_state.clone(),
+                start_time,
+                upstream_req.model.clone(),
+                requested_model.clone(),
+                upstream_req.model.clone(),
+                selected.provider.api_type,
+                selected.provider.base_url.clone(),
+                selected.provider.name.clone(),
+                selected.api_key.clone(),
+                client_token.clone(),
+                upstream_req,
+                selected.provider.provider_config.clone(),
+            )
+            .await
+            .map(IntoResponse::into_response)
+        }
         provider_type if provider_type.capabilities().openai_compatible => {
             openai::stream_openai_chat(
                 app_state.clone(),
@@ -482,6 +500,17 @@ mod tests {
         );
         assert!(
             runtime_streaming_unsupported_message(crate::config::ProviderType::OpenAI).is_none()
+        );
+        assert!(
+            runtime_streaming_unsupported_message(crate::config::ProviderType::BaiduErnie)
+                .is_none()
+        );
+        assert!(
+            runtime_streaming_unsupported_message(crate::config::ProviderType::BaiduErnieV2)
+                .is_none()
+        );
+        assert!(
+            runtime_streaming_unsupported_message(crate::config::ProviderType::XfSpark).is_none()
         );
         assert!(runtime_streaming_unsupported_message(crate::config::ProviderType::Yi).is_none());
     }

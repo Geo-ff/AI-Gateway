@@ -16,17 +16,33 @@ use crate::error::GatewayError;
 use crate::providers::{
     adapters::{
         aws_claude_error_message, aws_claude_finish_reason, aws_sigv4_headers,
-        azure_error_message, azure_openai_chat_completions_url, build_aws_claude_payload,
-        build_cohere_payload, build_gemini_payload, classify_aws_claude_error,
-        classify_azure_error, classify_cohere_error, classify_gemini_error,
-        classify_vertex_error, cohere_error_message, cohere_finish_reason,
-        gemini_error_message, gemini_finish_reason, gemini_generate_content_url,
-        gateway_error_from_normalized, vertex_access_token, vertex_error_message,
-        vertex_stream_generate_content_url,
+        azure_error_message, azure_openai_chat_completions_url, baidu_access_token,
+        baidu_ernie_chat_url, baidu_error_response, baidu_requires_error,
+        build_aws_claude_payload, build_baidu_ernie_payload, build_cohere_payload,
+        build_gemini_payload, classify_aws_claude_error, classify_azure_error,
+        classify_cohere_error, classify_gemini_error, classify_vertex_error,
+        cohere_error_message, cohere_finish_reason, gemini_error_message,
+        gemini_finish_reason, gemini_generate_content_url, gateway_error_from_normalized,
+        vertex_access_token, vertex_error_message, vertex_stream_generate_content_url,
     },
     openai::{ChatCompletionRequest, Usage},
 };
 use crate::server::{AppState, util::mask_key};
+
+fn join_openai_compat_endpoint(base_url: &str, path: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    let normalized_path = path.trim_start_matches('/');
+    let base_path = match reqwest::Url::parse(base) {
+        Ok(u) => u.path().trim_end_matches('/').to_string(),
+        Err(_) => String::new(),
+    };
+
+    if base_path.ends_with("/v1") || base_path.ends_with("/api/v3") {
+        format!("{}/{}", base, normalized_path)
+    } else {
+        format!("{}/v1/{}", base, normalized_path)
+    }
+}
 
 #[derive(Debug)]
 enum NormalizedStreamEvent {
@@ -550,6 +566,128 @@ fn parse_cohere_event(event_name: &str, data: &str) -> Result<Vec<NormalizedStre
     Ok(events)
 }
 
+fn parse_baidu_ernie_chunk(data: &str) -> Result<Vec<NormalizedStreamEvent>, String> {
+    let value: Value = serde_json::from_str(data)
+        .map_err(|err| format!("百度文心旧版流式响应解析失败：{err}"))?;
+    if value.get("error_code").is_some() || value.get("error").is_some() {
+        let bytes = serde_json::to_vec(&value)
+            .map_err(|err| format!("百度文心旧版错误响应编码失败：{err}"))?;
+        let (_, detail) = baidu_error_response(reqwest::StatusCode::OK, &bytes);
+        return Err(detail.unwrap_or_else(|| "百度文心旧版流式请求失败。".into()));
+    }
+
+    let mut events = Vec::new();
+    if let Some(text) = value
+        .get("result")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+    {
+        events.push(NormalizedStreamEvent::TextDelta(text.to_string()));
+    }
+
+    if let Some(usage) = value.get("usage") {
+        let prompt = usage
+            .get("prompt_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let completion = usage
+            .get("completion_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let total = usage
+            .get("total_tokens")
+            .and_then(Value::as_u64)
+            .or(Some(prompt + completion));
+        events.push(NormalizedStreamEvent::Usage(usage_from_counts(
+            prompt, completion, total,
+        )));
+    }
+
+    if value
+        .get("is_end")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        let reason = if let Some(reason) = value.get("finish_reason").and_then(Value::as_str) {
+            reason.to_string()
+        } else if value
+            .get("is_truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            "length".into()
+        } else {
+            "stop".into()
+        };
+        events.push(NormalizedStreamEvent::Finish(reason));
+    }
+
+    Ok(events)
+}
+
+fn parse_xf_spark_chunk(data: &str) -> Result<Vec<NormalizedStreamEvent>, String> {
+    let value: Value = serde_json::from_str(data)
+        .map_err(|err| format!("讯飞星火流式响应解析失败：{err}"))?;
+
+    if let Some(code) = value.get("code").and_then(Value::as_i64)
+        && code != 0
+    {
+        let message = value
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("讯飞星火流式请求失败");
+        return Err(format!("讯飞星火流式请求失败：code={code}, message={message}"));
+    }
+
+    let mut events = Vec::new();
+    if let Some(choice) = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+    {
+        if choice
+            .get("delta")
+            .and_then(|delta| delta.get("role"))
+            .and_then(Value::as_str)
+            == Some("assistant")
+        {
+            events.push(NormalizedStreamEvent::RoleStart);
+        }
+        if let Some(text) = choice
+            .get("delta")
+            .and_then(|delta| delta.get("content"))
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+        {
+            events.push(NormalizedStreamEvent::TextDelta(text.to_string()));
+        }
+        if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+            events.push(NormalizedStreamEvent::Finish(reason.to_string()));
+        }
+    }
+
+    if let Some(usage) = value.get("usage") {
+        let prompt = usage
+            .get("prompt_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let completion = usage
+            .get("completion_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let total = usage
+            .get("total_tokens")
+            .and_then(Value::as_u64)
+            .or(Some(prompt + completion));
+        events.push(NormalizedStreamEvent::Usage(usage_from_counts(
+            prompt, completion, total,
+        )));
+        events.push(NormalizedStreamEvent::Finish("stop".into()));
+    }
+
+    Ok(events)
+}
+
 fn parse_bedrock_event(value: &Value) -> Result<Vec<NormalizedStreamEvent>, String> {
     let mut events = Vec::new();
 
@@ -777,6 +915,65 @@ pub async fn stream_native_chat(
             }
             response
         }
+        ProviderType::BaiduErnie => {
+            let base = Url::parse(&base_url)
+                .map_err(|err| GatewayError::Config(format!("百度文心旧版 base_url 无效：{err}")))?;
+            let access_token = baidu_access_token(Some(&base), &provider_config)
+                .await
+                .map_err(|(_, detail)| {
+                    GatewayError::Config(
+                        detail.unwrap_or_else(|| "百度文心旧版鉴权配置无效。".into()),
+                    )
+                })?;
+            let url = baidu_ernie_chat_url(&base, &upstream_req.model, &access_token).map_err(
+                |(_, detail)| {
+                    GatewayError::Config(
+                        detail.unwrap_or_else(|| "百度文心旧版模型或路径配置无效。".into()),
+                    )
+                },
+            )?;
+            let payload = build_baidu_ernie_payload(&upstream_req, true)?;
+            let response = client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream, application/json")
+                .json(&payload)
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let bytes = response.bytes().await?;
+                let (error_type, detail) = baidu_error_response(status, &bytes);
+                return Err(gateway_error_from_normalized(
+                    &error_type,
+                    detail.unwrap_or_else(|| "百度文心旧版流式请求失败。".into()),
+                ));
+            }
+            response
+        }
+        ProviderType::XfSpark => {
+            let url = join_openai_compat_endpoint(&base_url, "chat/completions");
+            let mut payload = serde_json::to_value(&upstream_req)?;
+            if let Some(object) = payload.as_object_mut() {
+                object.remove("stream_options");
+            }
+            let response = client
+                .post(&url)
+                .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream")
+                .json(&payload)
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                let bytes = response.bytes().await?;
+                return Err(gateway_error_from_normalized(
+                    "other",
+                    String::from_utf8_lossy(&bytes).trim().to_string(),
+                ));
+            }
+            response
+        }
         ProviderType::AwsClaude => {
             let url = Url::parse(&format!(
                 "{}/model/{}/converse-stream",
@@ -908,6 +1105,67 @@ pub async fn stream_native_chat(
                         }
                     }
                 }
+                let _ = emitter.emit_done();
+                Ok(())
+            }
+            ProviderType::BaiduErnie => {
+                let is_sse = content_type.contains("text/event-stream");
+                let mut sse_decoder = SseMessageDecoder::default();
+                let mut json_decoder = JsonObjectStreamDecoder::default();
+                let mut stream = response.bytes_stream();
+                while let Some(item) = stream.next().await {
+                    let chunk = item.map_err(|err| format!("百度文心旧版流式读取失败：{err}"))?;
+                    if baidu_requires_error(&chunk) {
+                        let (error_type, detail) = baidu_error_response(reqwest::StatusCode::OK, &chunk);
+                        return Err(detail.unwrap_or_else(|| error_type));
+                    }
+                    let text = String::from_utf8_lossy(&chunk).to_string();
+                    if is_sse || text.contains("data:") {
+                        for message in sse_decoder.push(&text) {
+                            let data = message.data.trim();
+                            if data == "[DONE]" {
+                                let _ = emitter.emit(NormalizedStreamEvent::Finish("stop".into()));
+                                let _ = emitter.emit_done();
+                                return Ok(());
+                            }
+                            let events = parse_baidu_ernie_chunk(data)?;
+                            if !handle_normalized_events(&mut emitter, &usage_cell_for_task, events)? {
+                                return Ok(());
+                            }
+                        }
+                    } else {
+                        for fragment in json_decoder.push(&text) {
+                            let events = parse_baidu_ernie_chunk(&fragment)?;
+                            if !handle_normalized_events(&mut emitter, &usage_cell_for_task, events)? {
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+                let _ = emitter.emit(NormalizedStreamEvent::Finish("stop".into()));
+                let _ = emitter.emit_done();
+                Ok(())
+            }
+            ProviderType::XfSpark => {
+                let mut decoder = SseMessageDecoder::default();
+                let mut stream = response.bytes_stream();
+                while let Some(item) = stream.next().await {
+                    let chunk = item.map_err(|err| format!("讯飞星火流式读取失败：{err}"))?;
+                    let text = String::from_utf8_lossy(&chunk).to_string();
+                    for message in decoder.push(&text) {
+                        let data = message.data.trim();
+                        if data == "[DONE]" {
+                            let _ = emitter.emit(NormalizedStreamEvent::Finish("stop".into()));
+                            let _ = emitter.emit_done();
+                            return Ok(());
+                        }
+                        let events = parse_xf_spark_chunk(data)?;
+                        if !handle_normalized_events(&mut emitter, &usage_cell_for_task, events)? {
+                            return Ok(());
+                        }
+                    }
+                }
+                let _ = emitter.emit(NormalizedStreamEvent::Finish("stop".into()));
                 let _ = emitter.emit_done();
                 Ok(())
             }

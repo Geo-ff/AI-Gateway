@@ -172,19 +172,8 @@ pub async fn runtime_chat_completions(
     adapter.chat_completions(request).await
 }
 
-pub fn runtime_streaming_unsupported_message(provider_type: ProviderType) -> Option<String> {
-    match provider_type {
-        ProviderType::BaiduErnie => {
-            Some("百度文心旧版当前仅支持非流式真实请求，stream=true 暂未纳入本轮支持范围。".into())
-        }
-        ProviderType::BaiduErnieV2 => Some(
-            "百度文心 v2 当前仅保证非流式真实请求闭环，stream=true 暂未纳入本轮支持范围。".into(),
-        ),
-        ProviderType::XfSpark => {
-            Some("讯飞星火当前仅保证非流式真实请求闭环，stream=true 暂未纳入本轮支持范围。".into())
-        }
-        _ => None,
-    }
+pub fn runtime_streaming_unsupported_message(_provider_type: ProviderType) -> Option<String> {
+    None
 }
 
 fn client_for_url(url: &str, timeout_secs: u64) -> Result<reqwest::Client, GatewayError> {
@@ -204,7 +193,7 @@ fn openai_compat_chat_completions_url(base_url: &Url) -> String {
     }
 }
 
-fn baidu_ernie_chat_url(
+pub(crate) fn baidu_ernie_chat_url(
     base_url: &Url,
     model: &str,
     access_token: &str,
@@ -324,21 +313,45 @@ fn baidu_error_detail(status: StatusCode, bytes: &[u8]) -> Option<String> {
     serde_json::to_string_pretty(&detail).ok()
 }
 
-fn baidu_error_response(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
+pub(crate) fn baidu_error_response(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
     (
         baidu_error_type(status, bytes),
         baidu_error_detail(status, bytes),
     )
 }
 
-fn baidu_requires_error(bytes: &[u8]) -> bool {
+pub(crate) fn baidu_requires_error(bytes: &[u8]) -> bool {
     serde_json::from_slice::<serde_json::Value>(bytes)
         .ok()
         .and_then(|value| value.get("error_code").cloned())
         .is_some()
 }
 
-async fn baidu_access_token(
+fn baidu_access_token_url(base_url: Option<&Url>) -> Result<Url, (String, Option<String>)> {
+    if let Some(base_url) = base_url {
+        let scheme = base_url.scheme();
+        let host = base_url.host_str().ok_or_else(|| {
+            (
+                "configuration_required".into(),
+                Some("百度文心旧版 base_url 缺少有效主机名。".into()),
+            )
+        })?;
+        let mut root = Url::parse(&format!("{scheme}://{host}"))
+            .map_err(|err| ("other".into(), Some(err.to_string())))?;
+        if let Some(port) = base_url.port() {
+            root.set_port(Some(port))
+                .map_err(|_| ("other".into(), Some("百度文心旧版 base_url 端口无效。".into())))?;
+        }
+        root.set_path("/oauth/2.0/token");
+        return Ok(root);
+    }
+
+    Url::parse("https://aip.baidubce.com/oauth/2.0/token")
+        .map_err(|err| ("other".into(), Some(err.to_string())))
+}
+
+pub(crate) async fn baidu_access_token(
+    base_url: Option<&Url>,
     provider_config: &ProviderConfig,
 ) -> Result<String, (String, Option<String>)> {
     let access_key = provider_config.baidu_access_key().ok_or_else(|| {
@@ -353,8 +366,7 @@ async fn baidu_access_token(
             Some("百度文心旧版需要填写 Secret Key。".into()),
         )
     })?;
-    let mut url = Url::parse("https://aip.baidubce.com/oauth/2.0/token")
-        .map_err(|err| ("other".into(), Some(err.to_string())))?;
+    let mut url = baidu_access_token_url(base_url)?;
     url.query_pairs_mut()
         .append_pair("grant_type", "client_credentials")
         .append_pair("client_id", access_key)
@@ -399,7 +411,7 @@ async fn baidu_access_token(
         })
 }
 
-fn build_baidu_ernie_payload(
+pub(crate) fn build_baidu_ernie_payload(
     request: &ChatCompletionRequest,
     stream: bool,
 ) -> Result<serde_json::Value, GatewayError> {
@@ -2054,7 +2066,7 @@ impl ProviderAdapter for BaiduErnieAdapter {
         &self,
         request: ConnectionTestRequest<'_>,
     ) -> Result<(), (String, Option<String>)> {
-        let access_token = baidu_access_token(request.provider_config).await?;
+        let access_token = baidu_access_token(Some(request.base_url), request.provider_config).await?;
         let url = baidu_ernie_chat_url(request.base_url, request.model, &access_token)?;
         let client =
             client_for_url(&url, 30).map_err(|err| ("other".into(), Some(err.to_string())))?;
@@ -2091,7 +2103,7 @@ impl ProviderAdapter for BaiduErnieAdapter {
         let base_url = Url::parse(request.base_url)
             .map_err(|err| GatewayError::Config(format!("百度文心旧版 base_url 无效：{err}")))?;
         let access_token =
-            baidu_access_token(request.provider_config)
+            baidu_access_token(Some(&base_url), request.provider_config)
                 .await
                 .map_err(|(_, detail)| {
                     GatewayError::Config(
@@ -3148,9 +3160,9 @@ mod tests {
         assert!(runtime_streaming_unsupported_message(ProviderType::Cohere).is_none());
         assert!(runtime_streaming_unsupported_message(ProviderType::AwsClaude).is_none());
         assert!(runtime_streaming_unsupported_message(ProviderType::VertexAI).is_none());
-        assert!(runtime_streaming_unsupported_message(ProviderType::BaiduErnie).is_some());
-        assert!(runtime_streaming_unsupported_message(ProviderType::BaiduErnieV2).is_some());
-        assert!(runtime_streaming_unsupported_message(ProviderType::XfSpark).is_some());
+        assert!(runtime_streaming_unsupported_message(ProviderType::BaiduErnie).is_none());
+        assert!(runtime_streaming_unsupported_message(ProviderType::BaiduErnieV2).is_none());
+        assert!(runtime_streaming_unsupported_message(ProviderType::XfSpark).is_none());
         assert!(runtime_streaming_unsupported_message(ProviderType::MiniMax).is_none());
         assert!(runtime_streaming_unsupported_message(ProviderType::TencentHunyuan).is_none());
         assert!(runtime_streaming_unsupported_message(ProviderType::ThreeSixtyZhinao).is_none());

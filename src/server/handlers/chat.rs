@@ -1106,6 +1106,155 @@ mod tests {
         (format!("http://{addr}/v1"), captured)
     }
 
+    async fn spawn_mock_baidu_ernie_server() -> (String, SharedCapturedRequests) {
+        async fn token_handler(
+            State(captured): State<SharedCapturedRequests>,
+            Query(query): Query<HashMap<String, String>>,
+            headers: HeaderMap,
+        ) -> axum::response::Response {
+            capture_request(
+                captured,
+                "/oauth/2.0/token".into(),
+                query,
+                &headers,
+                json!(null),
+            )
+            .await;
+
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "access_token": "mock-baidu-access-token",
+                    "expires_in": 2592000,
+                })),
+            )
+                .into_response()
+        }
+
+        async fn chat_handler(
+            State(captured): State<SharedCapturedRequests>,
+            Path(model): Path<String>,
+            Query(query): Query<HashMap<String, String>>,
+            headers: HeaderMap,
+            Json(body): Json<Value>,
+        ) -> axum::response::Response {
+            let captured_body = body.clone();
+            capture_request(
+                captured,
+                format!("/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/{model}"),
+                query,
+                &headers,
+                captured_body,
+            )
+            .await;
+
+            if body.get("stream").and_then(Value::as_bool).unwrap_or(false) {
+                return (
+                    StatusCode::OK,
+                    [(CONTENT_TYPE, "text/event-stream")],
+                    concat!(
+                        "data: {\"id\":\"as-baidu-stream-1\",\"sentence_id\":0,\"is_end\":false,\"is_truncated\":false,\"result\":\"mock baidu \"}\n\n",
+                        "data: {\"id\":\"as-baidu-stream-1\",\"sentence_id\":1,\"is_end\":true,\"is_truncated\":false,\"result\":\"stream ok\",\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":5,\"total_tokens\":13}}\n\n"
+                    ),
+                )
+                    .into_response();
+            }
+
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "id": "as-baidu-mock-1",
+                    "result": "mock baidu ok",
+                    "is_truncated": false,
+                    "usage": {
+                        "prompt_tokens": 8,
+                        "completion_tokens": 5,
+                        "total_tokens": 13
+                    }
+                })),
+            )
+                .into_response()
+        }
+
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/oauth/2.0/token", post(token_handler))
+            .route(
+                "/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/{model}",
+                post(chat_handler),
+            )
+            .with_state(captured.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), captured)
+    }
+
+    async fn spawn_mock_xf_spark_server() -> (String, SharedCapturedRequests) {
+        async fn handler(
+            State(captured): State<SharedCapturedRequests>,
+            headers: HeaderMap,
+            Json(body): Json<Value>,
+        ) -> axum::response::Response {
+            let captured_body = body.clone();
+            capture_request(
+                captured,
+                "/v1/chat/completions".into(),
+                HashMap::new(),
+                &headers,
+                captured_body,
+            )
+            .await;
+
+            if body.get("stream").and_then(Value::as_bool).unwrap_or(false) {
+                return (
+                    StatusCode::OK,
+                    [(CONTENT_TYPE, "text/event-stream")],
+                    concat!(
+                        "data: {\"code\":0,\"message\":\"Success\",\"sid\":\"spark-sid-1\",\"id\":\"spark-id-1\",\"created\":1719546385,\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"mock spark \"},\"index\":0}]}\n\n",
+                        "data: {\"code\":0,\"message\":\"Success\",\"sid\":\"spark-sid-1\",\"id\":\"spark-id-1\",\"created\":1719546386,\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"stream ok\"},\"index\":0}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":4,\"total_tokens\":11}}\n\n",
+                        "data: [DONE]\n\n"
+                    ),
+                )
+                    .into_response();
+            }
+
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "code": 0,
+                    "message": "Success",
+                    "sid": "spark-sid-1",
+                    "id": "spark-id-1",
+                    "created": 1719546385,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "mock spark ok"}
+                    }],
+                    "usage": {
+                        "prompt_tokens": 7,
+                        "completion_tokens": 4,
+                        "total_tokens": 11
+                    }
+                })),
+            )
+                .into_response()
+        }
+
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/v1/chat/completions", post(handler))
+            .with_state(captured.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}/v1"), captured)
+    }
+
     async fn test_app_state_with_provider(
         provider_name: &str,
         provider_type: ProviderType,
@@ -1934,6 +2083,134 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mock_runtime_baidu_ernie_stream() {
+        let (base_url, captured) = spawn_mock_baidu_ernie_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "ernie-stream-mock",
+            ProviderType::BaiduErnie,
+            &base_url,
+            ProviderConfig {
+                baidu_access_key: Some("mock-ak".into()),
+                baidu_secret_key: Some("mock-sk".into()),
+                ..ProviderConfig::default()
+            },
+            "completions_pro",
+        )
+        .await;
+
+        let (headers, body) = invoke_chat_and_collect_text(
+            app_state,
+            &token,
+            "ernie-stream-mock/completions_pro",
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .contains("text/event-stream")
+        );
+        assert_eq!(collect_stream_content(&body), "mock baidu stream ok");
+        let chunks = parse_stream_json_chunks(&body);
+        assert_eq!(chunks[0]["choices"][0]["delta"]["role"], json!("assistant"));
+        assert_eq!(chunks[1]["choices"][0]["delta"]["content"], json!("mock baidu "));
+        assert_eq!(chunks[2]["choices"][0]["delta"]["content"], json!("stream ok"));
+        assert_eq!(
+            chunks
+                .iter()
+                .find(|chunk| chunk.get("usage").is_some())
+                .unwrap()["usage"]["total_tokens"],
+            json!(13)
+        );
+        assert_eq!(
+            chunks
+                .iter()
+                .find(|chunk| {
+                    chunk
+                        .get("choices")
+                        .and_then(Value::as_array)
+                        .and_then(|choices| choices.first())
+                        .and_then(|choice| choice.get("finish_reason"))
+                        .and_then(Value::as_str)
+                        == Some("stop")
+                })
+                .unwrap()["choices"][0]["finish_reason"],
+            json!("stop")
+        );
+        assert_eq!(stream_data_lines(&body).last().copied(), Some("[DONE]"));
+
+        let calls = captured.lock().await;
+        assert_eq!(calls.len(), 2);
+        let token_call = &calls[0];
+        assert_eq!(token_call.path, "/oauth/2.0/token");
+        assert_eq!(
+            token_call.query.get("client_id"),
+            Some(&"mock-ak".to_string())
+        );
+        assert_eq!(
+            token_call.query.get("client_secret"),
+            Some(&"mock-sk".to_string())
+        );
+        let chat_call = &calls[1];
+        assert_eq!(
+            chat_call.path,
+            "/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions_pro"
+        );
+        assert_eq!(
+            chat_call.query.get("access_token"),
+            Some(&"mock-baidu-access-token".to_string())
+        );
+        assert_eq!(chat_call.body["stream"], json!(true));
+        assert_eq!(chat_call.body["max_output_tokens"], json!(16));
+    }
+
+    #[tokio::test]
+    async fn mock_runtime_baidu_ernie_v2_stream() {
+        let (base_url, captured) = spawn_mock_openai_compat_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
+            "ernie-v2-stream-mock",
+            ProviderType::BaiduErnieV2,
+            &base_url,
+            ProviderConfig::default(),
+            "ernie-4.0-turbo-8k",
+        )
+        .await;
+
+        let (headers, body) = invoke_chat_and_collect_text(
+            app_state,
+            &token,
+            "ernie-v2-stream-mock/ernie-4.0-turbo-8k",
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .contains("text/event-stream")
+        );
+        assert_eq!(collect_stream_content(&body), "mock openai compat stream ok");
+        let chunks = parse_stream_json_chunks(&body);
+        assert_eq!(chunks[0]["choices"][0]["delta"]["role"], json!("assistant"));
+        assert_eq!(chunks[1]["choices"][0]["finish_reason"], json!("stop"));
+        assert_eq!(chunks[1]["usage"]["total_tokens"], json!(10));
+        assert_eq!(stream_data_lines(&body).last().copied(), Some("[DONE]"));
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("baidu ernie v2 stream mock call");
+        assert_eq!(call.path, "/v1/chat/completions");
+        assert_eq!(call.body["model"], json!("ernie-4.0-turbo-8k"));
+        assert_eq!(call.body["stream_options"]["include_usage"], json!(true));
+    }
+
+    #[tokio::test]
     async fn mock_runtime_xf_spark_chat() {
         let (base_url, captured) = spawn_mock_openai_compat_server().await;
         let (_dir, app_state, token) = test_app_state_with_provider(
@@ -1965,50 +2242,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mock_runtime_remaining_non_stream_providers_reject_stream() {
-        let (openai_compat_base_url, _captured) = spawn_mock_openai_compat_server().await;
-
-        let (_dir, ernie_v2_app_state, ernie_v2_token) = test_app_state_with_provider(
-            "ernie-v2-stream-mock",
-            ProviderType::BaiduErnieV2,
-            &openai_compat_base_url,
-            ProviderConfig::default(),
-            "ernie-4.0-turbo-8k",
-        )
-        .await;
-
-        let ernie_v2_err = invoke_chat_and_parse_json(
-            ernie_v2_app_state,
-            &ernie_v2_token,
-            "ernie-v2-stream-mock/ernie-4.0-turbo-8k",
-            true,
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            ernie_v2_err
-                .to_string()
-                .contains("仅保证非流式真实请求闭环")
-        );
-
-        let (_dir, spark_app_state, spark_token) = test_app_state_with_provider(
+    async fn mock_runtime_xf_spark_stream() {
+        let (base_url, captured) = spawn_mock_xf_spark_server().await;
+        let (_dir, app_state, token) = test_app_state_with_provider(
             "spark-stream-mock",
             ProviderType::XfSpark,
-            &openai_compat_base_url,
+            &base_url,
             ProviderConfig::default(),
             "generalv3.5",
         )
         .await;
 
-        let spark_err = invoke_chat_and_parse_json(
-            spark_app_state,
-            &spark_token,
+        let (headers, body) = invoke_chat_and_collect_text(
+            app_state,
+            &token,
             "spark-stream-mock/generalv3.5",
             true,
         )
         .await
-        .unwrap_err();
-        assert!(spark_err.to_string().contains("仅保证非流式真实请求闭环"));
+        .unwrap();
+
+        assert!(
+            headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .contains("text/event-stream")
+        );
+        assert_eq!(collect_stream_content(&body), "mock spark stream ok");
+        let chunks = parse_stream_json_chunks(&body);
+        assert_eq!(chunks[0]["choices"][0]["delta"]["role"], json!("assistant"));
+        assert_eq!(chunks[1]["choices"][0]["delta"]["content"], json!("mock spark "));
+        assert_eq!(chunks[2]["choices"][0]["delta"]["content"], json!("stream ok"));
+        assert_eq!(
+            chunks
+                .iter()
+                .find(|chunk| chunk.get("usage").is_some())
+                .unwrap()["usage"]["total_tokens"],
+            json!(11)
+        );
+        assert_eq!(
+            chunks
+                .iter()
+                .find(|chunk| {
+                    chunk
+                        .get("choices")
+                        .and_then(Value::as_array)
+                        .and_then(|choices| choices.first())
+                        .and_then(|choice| choice.get("finish_reason"))
+                        .and_then(Value::as_str)
+                        == Some("stop")
+                })
+                .unwrap()["choices"][0]["finish_reason"],
+            json!("stop")
+        );
+        assert_eq!(stream_data_lines(&body).last().copied(), Some("[DONE]"));
+
+        let calls = captured.lock().await;
+        let call = calls.first().expect("xf spark stream mock call");
+        assert_eq!(call.path, "/v1/chat/completions");
+        assert_eq!(
+            call.headers.get("authorization"),
+            Some(&"Bearer mock-upstream-key".to_string())
+        );
+        assert_eq!(call.body["stream"], json!(true));
+        assert!(call.body.get("stream_options").is_none());
     }
 
     #[tokio::test]
