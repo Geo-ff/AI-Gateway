@@ -37,9 +37,11 @@ pub async fn log_chat_request(
                     .get_model_price(provider_name, billing_model)
                     .await
                 {
-                    Ok(Some((p_pm, c_pm, _, _))) => {
-                        let p = u.prompt_tokens as f64 * p_pm / 1_000_000.0;
-                        let c = u.completion_tokens as f64 * c_pm / 1_000_000.0;
+                    Ok(Some(record)) => {
+                        let p =
+                            u.prompt_tokens as f64 * record.prompt_price_per_million / 1_000_000.0;
+                        let c = u.completion_tokens as f64 * record.completion_price_per_million
+                            / 1_000_000.0;
                         Some(p + c)
                     }
                     _ => None,
@@ -277,7 +279,14 @@ mod tests {
 
         // model pricing needed for amount_spent
         logger
-            .upsert_model_price("p1", "m1", 2.0, 4.0, Some("USD"), None)
+            .upsert_model_price(crate::logging::ModelPriceUpsert::manual(
+                "p1",
+                "m1",
+                2.0,
+                4.0,
+                Some("USD".into()),
+                None,
+            ))
             .await
             .unwrap();
 
@@ -389,7 +398,14 @@ mod tests {
         };
 
         logger
-            .upsert_model_price("p1", "m1", 1_000_000.0, 0.0, Some("USD"), None)
+            .upsert_model_price(crate::logging::ModelPriceUpsert::manual(
+                "p1",
+                "m1",
+                1_000_000.0,
+                0.0,
+                Some("USD".into()),
+                None,
+            ))
             .await
             .unwrap();
 

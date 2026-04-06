@@ -10,12 +10,14 @@ use std::sync::Arc;
 use super::auth::{ensure_admin, ensure_client_token, require_user};
 use crate::error::GatewayError;
 use crate::logging::types::{REQ_TYPE_MODELS_LIST, REQ_TYPE_PROVIDER_MODELS_LIST};
+use crate::logging::{ModelPriceRecord, ModelPriceSource, ModelPriceStatus};
 use crate::providers::openai::Model;
 use crate::providers::openai::ModelListResponse;
 use crate::server::AppState;
 use crate::server::model_cache::{get_cached_models_all, get_cached_models_for_provider};
 use crate::server::model_display::{format_model_display_name, format_provider_model_display_name};
 use crate::server::model_helpers::fetch_provider_models;
+use crate::server::pricing::derive_model_price_view;
 use crate::server::request_logging::log_simple_request;
 use crate::server::util::{bearer_token, token_for_log};
 
@@ -49,6 +51,10 @@ pub struct MyModelOut {
     pub upstream_endpoint_type: String,
     pub input_price: Option<f64>,
     pub output_price: Option<f64>,
+    pub price_source: Option<ModelPriceSource>,
+    pub price_status: ModelPriceStatus,
+    pub price_synced_at: Option<chrono::DateTime<Utc>>,
+    pub price_expires_at: Option<chrono::DateTime<Utc>>,
     pub redirect_name: String,
     pub status: String,
     pub created_at: String,
@@ -400,10 +406,10 @@ pub async fn list_my_models(
     }
 
     // Prices (optional; missing => null)
-    let mut price_by_key = std::collections::HashMap::<String, (f64, f64, Option<String>)>::new();
+    let mut price_by_key = std::collections::HashMap::<String, ModelPriceRecord>::new();
     if let Ok(items) = app_state.log_store.list_model_prices(None).await {
-        for (provider, model, p_pm, c_pm, _currency, model_type) in items {
-            price_by_key.insert(format!("{}:{}", provider, model), (p_pm, c_pm, model_type));
+        for item in items {
+            price_by_key.insert(format!("{}:{}", item.provider, item.model), item);
         }
     }
 
@@ -516,7 +522,7 @@ pub async fn list_my_models(
     let mut out: Vec<MyModelOut> = Vec::with_capacity(union.len());
     for m in union.into_values() {
         let provider = providers_by_id.get(&m.provider);
-        let (input_price, output_price, model_type_raw) = {
+        let price_view = {
             let direct = price_by_key.get(&format!("{}:{}", m.provider, m.model_id));
             let mut picked = direct.cloned();
 
@@ -537,12 +543,10 @@ pub async fn list_my_models(
                 }
             }
 
-            picked
-                .map(|(p, c, mt)| (Some(p), Some(c), mt))
-                .unwrap_or((None, None, None))
+            derive_model_price_view(&m.provider, &m.model_id, picked)
         };
-        let (model_type, model_types) =
-            crate::server::model_types::model_types_for_response(model_type_raw.as_deref());
+        let model_type = price_view.model_type.clone();
+        let model_types = price_view.model_types.clone();
 
         let mut tokens: Vec<MyModelTokenOut> = tokens_by_model
             .remove(&m.full_id)
@@ -566,8 +570,12 @@ pub async fn list_my_models(
             upstream_endpoint_type: provider
                 .map(|p| p.api_type.as_str().to_string())
                 .unwrap_or_else(|| "unknown".to_string()),
-            input_price,
-            output_price,
+            input_price: price_view.prompt_price_per_million,
+            output_price: price_view.completion_price_per_million,
+            price_source: price_view.source,
+            price_status: price_view.status,
+            price_synced_at: price_view.synced_at,
+            price_expires_at: price_view.expires_at,
             redirect_name: String::new(),
             status: "enabled".to_string(),
             created_at: m.cached_at.to_rfc3339(),

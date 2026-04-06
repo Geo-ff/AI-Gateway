@@ -941,12 +941,26 @@ impl DatabaseLogger {
                 completion_price_per_million REAL NOT NULL,
                 currency TEXT,
                 model_type TEXT,
+                source TEXT NOT NULL DEFAULT 'manual',
+                status TEXT NOT NULL DEFAULT 'active',
+                synced_at TEXT,
+                expires_at TEXT,
                 PRIMARY KEY (provider, model)
             )",
             [],
         )?;
         // Best-effort migrations for existing deployments
         let _ = conn.execute("ALTER TABLE model_prices ADD COLUMN model_type TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE model_prices ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE model_prices ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+            [],
+        );
+        let _ = conn.execute("ALTER TABLE model_prices ADD COLUMN synced_at TEXT", []);
+        let _ = conn.execute("ALTER TABLE model_prices ADD COLUMN expires_at TEXT", []);
 
         // Model enabled settings (per provider+model)
         conn.execute(

@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use crate::config::settings::{KeyLogStrategy, Provider};
-use crate::logging::types::ProviderOpLog;
+use crate::logging::types::{ModelPriceRecord, ModelPriceUpsert, ProviderOpLog};
 use crate::logging::{CachedModel, DatabaseLogger, ProviderKeyStatsAgg, RequestLog};
 use crate::providers::openai::Model;
 use crate::routing::{KeyRotationStrategy, ProviderKeyEntry};
@@ -11,12 +11,8 @@ use chrono::{DateTime, Utc};
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 type DateRangeFuture<'a> = BoxFuture<'a, rusqlite::Result<Option<(DateTime<Utc>, DateTime<Utc>)>>>;
-type ModelPriceFuture<'a> =
-    BoxFuture<'a, rusqlite::Result<Option<(f64, f64, Option<String>, Option<String>)>>>;
-type ModelPriceListFuture<'a> = BoxFuture<
-    'a,
-    rusqlite::Result<Vec<(String, String, f64, f64, Option<String>, Option<String>)>>,
->;
+type ModelPriceFuture<'a> = BoxFuture<'a, rusqlite::Result<Option<ModelPriceRecord>>>;
+type ModelPriceListFuture<'a> = BoxFuture<'a, rusqlite::Result<Vec<ModelPriceRecord>>>;
 type ModelEnabledGetFuture<'a> = BoxFuture<'a, rusqlite::Result<Option<bool>>>;
 type ModelEnabledListFuture<'a> = BoxFuture<'a, rusqlite::Result<Vec<(String, String, bool)>>>;
 
@@ -116,12 +112,7 @@ pub trait RequestLogStore: Send + Sync {
     // pricing & billing
     fn upsert_model_price<'a>(
         &'a self,
-        provider: &'a str,
-        model: &'a str,
-        prompt_price_per_million: f64,
-        completion_price_per_million: f64,
-        currency: Option<&'a str>,
-        model_type: Option<&'a str>,
+        price: ModelPriceUpsert,
     ) -> BoxFuture<'a, rusqlite::Result<()>>;
     fn get_model_price<'a>(&'a self, provider: &'a str, model: &'a str) -> ModelPriceFuture<'a>;
     fn list_model_prices<'a>(&'a self, provider: Option<&'a str>) -> ModelPriceListFuture<'a>;
@@ -507,24 +498,9 @@ impl RequestLogStore for DatabaseLogger {
 
     fn upsert_model_price<'a>(
         &'a self,
-        provider: &'a str,
-        model: &'a str,
-        prompt_price_per_million: f64,
-        completion_price_per_million: f64,
-        currency: Option<&'a str>,
-        model_type: Option<&'a str>,
+        price: ModelPriceUpsert,
     ) -> BoxFuture<'a, rusqlite::Result<()>> {
-        Box::pin(async move {
-            self.upsert_model_price(
-                provider,
-                model,
-                prompt_price_per_million,
-                completion_price_per_million,
-                currency,
-                model_type,
-            )
-            .await
-        })
+        Box::pin(async move { self.upsert_model_price(price).await })
     }
 
     fn get_model_price<'a>(&'a self, provider: &'a str, model: &'a str) -> ModelPriceFuture<'a> {

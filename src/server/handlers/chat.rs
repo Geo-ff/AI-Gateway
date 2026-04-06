@@ -444,7 +444,7 @@ mod tests {
         BalanceStrategy, LoadBalancing, LoggingConfig, PricingMode, Provider, ProviderConfig,
         ProviderType, ServerConfig,
     };
-    use crate::logging::DatabaseLogger;
+    use crate::logging::{DatabaseLogger, ModelPriceUpsert};
     use crate::server::AppState;
     use crate::server::login::LoginManager;
     use crate::users::{CreateUserPayload, UserRole, UserStatus, UserStore};
@@ -1254,7 +1254,14 @@ mod tests {
             .unwrap();
         if seed_price {
             logger
-                .upsert_model_price(provider_name, upstream_model, 1.0, 1.0, Some("USD"), None)
+                .upsert_model_price(ModelPriceUpsert::manual(
+                    provider_name,
+                    upstream_model,
+                    1.0,
+                    1.0,
+                    Some("USD".into()),
+                    None,
+                ))
                 .await
                 .unwrap();
         }

@@ -92,9 +92,10 @@ pub(super) async fn log_stream_success(
             .get_model_price(&provider, &billing_model)
             .await
         {
-            Ok(Some((p_pm, c_pm, _, _))) => {
-                let p = u.prompt_tokens as f64 * p_pm / 1_000_000.0;
-                let c = u.completion_tokens as f64 * c_pm / 1_000_000.0;
+            Ok(Some(record)) => {
+                let p = u.prompt_tokens as f64 * record.prompt_price_per_million / 1_000_000.0;
+                let c =
+                    u.completion_tokens as f64 * record.completion_price_per_million / 1_000_000.0;
                 Some(p + c)
             }
             _ => None,

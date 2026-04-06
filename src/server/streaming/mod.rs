@@ -459,7 +459,7 @@ mod tests {
         BalanceStrategy, LoadBalancing, LoggingConfig, PricingMode, Provider, ProviderConfig,
         ProviderType, ServerConfig,
     };
-    use crate::logging::DatabaseLogger;
+    use crate::logging::{DatabaseLogger, ModelPriceUpsert};
     use crate::providers::openai::ChatCompletionRequest;
     use crate::server::login::LoginManager;
     use crate::users::{CreateUserPayload, UserRole, UserStatus, UserStore};
@@ -561,7 +561,14 @@ mod tests {
             .unwrap();
         if seed_price {
             logger
-                .upsert_model_price("p1", "m1", 1.0, 1.0, Some("USD"), None)
+                .upsert_model_price(ModelPriceUpsert::manual(
+                    "p1",
+                    "m1",
+                    1.0,
+                    1.0,
+                    Some("USD".into()),
+                    None,
+                ))
                 .await
                 .unwrap();
         }

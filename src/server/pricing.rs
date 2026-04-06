@@ -1,12 +1,31 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::error::GatewayError;
+use crate::logging::{ModelPriceRecord, ModelPriceSource, ModelPriceStatus};
+use chrono::{DateTime, Utc};
+use serde::Serialize;
 
 use super::AppState;
+use super::model_types;
 
 pub(crate) struct ResolvedModelPricing {
     pub billing_model: String,
     pub price_found: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub(crate) struct ModelPriceView {
+    pub provider: String,
+    pub model: String,
+    pub prompt_price_per_million: Option<f64>,
+    pub completion_price_per_million: Option<f64>,
+    pub currency: Option<String>,
+    pub model_type: Option<String>,
+    pub model_types: Option<Vec<String>>,
+    pub source: Option<ModelPriceSource>,
+    pub status: ModelPriceStatus,
+    pub synced_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 pub(crate) fn missing_price_allowed_for_chat(app_state: &AppState) -> bool {
@@ -15,6 +34,91 @@ pub(crate) fn missing_price_allowed_for_chat(app_state: &AppState) -> bool {
         .server
         .pricing_mode
         .allows_missing_price_for_chat()
+}
+
+pub(crate) fn normalize_model_price_status(
+    status: ModelPriceStatus,
+    expires_at: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> ModelPriceStatus {
+    if matches!(status, ModelPriceStatus::Active)
+        && let Some(expires_at) = expires_at
+        && expires_at <= now
+    {
+        ModelPriceStatus::Stale
+    } else {
+        status
+    }
+}
+
+pub(crate) fn normalize_model_price_record(mut record: ModelPriceRecord) -> ModelPriceRecord {
+    record.status = normalize_model_price_status(record.status, record.expires_at, Utc::now());
+    record
+}
+
+pub(crate) fn normalized_price_metadata(
+    source: Option<ModelPriceSource>,
+    status: Option<ModelPriceStatus>,
+    synced_at: Option<DateTime<Utc>>,
+    expires_at: Option<DateTime<Utc>>,
+) -> (
+    ModelPriceSource,
+    ModelPriceStatus,
+    Option<DateTime<Utc>>,
+    Option<DateTime<Utc>>,
+) {
+    let source = source.unwrap_or(ModelPriceSource::Manual);
+    let status = normalize_model_price_status(
+        status.unwrap_or(ModelPriceStatus::Active),
+        expires_at,
+        Utc::now(),
+    );
+    (source, status, synced_at, expires_at)
+}
+
+pub(crate) fn model_price_view_from_record(record: ModelPriceRecord) -> ModelPriceView {
+    let record = normalize_model_price_record(record);
+    let (model_type, model_types) =
+        model_types::model_types_for_response(record.model_type.as_deref());
+    ModelPriceView {
+        provider: record.provider,
+        model: record.model,
+        prompt_price_per_million: Some(record.prompt_price_per_million),
+        completion_price_per_million: Some(record.completion_price_per_million),
+        currency: record.currency,
+        model_type,
+        model_types,
+        source: Some(record.source),
+        status: record.status,
+        synced_at: record.synced_at,
+        expires_at: record.expires_at,
+    }
+}
+
+pub(crate) fn missing_model_price_view(provider: &str, model: &str) -> ModelPriceView {
+    ModelPriceView {
+        provider: provider.to_string(),
+        model: model.to_string(),
+        prompt_price_per_million: None,
+        completion_price_per_million: None,
+        currency: None,
+        model_type: None,
+        model_types: None,
+        source: None,
+        status: ModelPriceStatus::Missing,
+        synced_at: None,
+        expires_at: None,
+    }
+}
+
+pub(crate) fn derive_model_price_view(
+    provider: &str,
+    model: &str,
+    record: Option<ModelPriceRecord>,
+) -> ModelPriceView {
+    record
+        .map(model_price_view_from_record)
+        .unwrap_or_else(|| missing_model_price_view(provider, model))
 }
 
 pub(crate) async fn resolve_model_pricing(
@@ -95,7 +199,9 @@ fn resolve_redirect_chain(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_redirect_chain;
+    use super::{missing_model_price_view, normalize_model_price_status, resolve_redirect_chain};
+    use crate::logging::ModelPriceStatus;
+    use chrono::{Duration, Utc};
     use std::collections::HashMap;
 
     #[test]
@@ -106,5 +212,30 @@ mod tests {
         ]);
 
         assert_eq!(resolve_redirect_chain(&map, "a", 8), "a");
+    }
+
+    #[test]
+    fn normalize_model_price_status_marks_expired_active_as_stale() {
+        let now = Utc::now();
+
+        assert_eq!(
+            normalize_model_price_status(
+                ModelPriceStatus::Active,
+                Some(now - Duration::minutes(1)),
+                now,
+            ),
+            ModelPriceStatus::Stale
+        );
+    }
+
+    #[test]
+    fn missing_model_price_view_has_stable_shape() {
+        let view = missing_model_price_view("p1", "m1");
+
+        assert_eq!(view.provider, "p1");
+        assert_eq!(view.model, "m1");
+        assert_eq!(view.status, ModelPriceStatus::Missing);
+        assert_eq!(view.source, None);
+        assert_eq!(view.prompt_price_per_million, None);
     }
 }

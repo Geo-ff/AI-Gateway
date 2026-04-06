@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 // 建议统一的请求类型常量（可扩展）
 pub const REQ_TYPE_CHAT_ONCE: &str = "chat_once";
@@ -82,4 +83,99 @@ pub struct ProviderOpLog {
     pub operation: String,
     pub provider: Option<String>,
     pub details: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelPriceSource {
+    #[default]
+    Manual,
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelPriceStatus {
+    #[default]
+    Active,
+    Missing,
+    Stale,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelPriceRecord {
+    pub provider: String,
+    pub model: String,
+    pub prompt_price_per_million: f64,
+    pub completion_price_per_million: f64,
+    pub currency: Option<String>,
+    pub model_type: Option<String>,
+    pub source: ModelPriceSource,
+    pub status: ModelPriceStatus,
+    pub synced_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelPriceUpsert {
+    pub provider: String,
+    pub model: String,
+    pub prompt_price_per_million: f64,
+    pub completion_price_per_million: f64,
+    pub currency: Option<String>,
+    pub model_type: Option<String>,
+    pub source: ModelPriceSource,
+    pub status: ModelPriceStatus,
+    pub synced_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+impl ModelPriceUpsert {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn manual(
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        prompt_price_per_million: f64,
+        completion_price_per_million: f64,
+        currency: Option<String>,
+        model_type: Option<String>,
+    ) -> Self {
+        Self {
+            provider: provider.into(),
+            model: model.into(),
+            prompt_price_per_million,
+            completion_price_per_million,
+            currency,
+            model_type,
+            source: ModelPriceSource::Manual,
+            status: ModelPriceStatus::Active,
+            synced_at: None,
+            expires_at: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ModelPriceSource, ModelPriceStatus};
+
+    #[test]
+    fn model_price_enums_serialize_and_deserialize() {
+        assert_eq!(
+            serde_json::to_string(&ModelPriceSource::Manual).unwrap(),
+            "\"manual\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ModelPriceStatus::Stale).unwrap(),
+            "\"stale\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ModelPriceSource>("\"auto\"").unwrap(),
+            ModelPriceSource::Auto
+        );
+        assert_eq!(
+            serde_json::from_str::<ModelPriceStatus>("\"missing\"").unwrap(),
+            ModelPriceStatus::Missing
+        );
+    }
 }

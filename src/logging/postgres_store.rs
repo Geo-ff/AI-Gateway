@@ -8,7 +8,10 @@ use crate::config::settings::{KeyLogStrategy, Provider, ProviderConfig, Provider
 use crate::error::GatewayError;
 use crate::logging::time::{parse_datetime_string, to_beijing_string, to_iso8601_utc_string};
 use crate::logging::types::ProviderOpLog;
-use crate::logging::{CachedModel, ProviderKeyStatsAgg, RequestLog};
+use crate::logging::{
+    CachedModel, ModelPriceRecord, ModelPriceSource, ModelPriceStatus, ModelPriceUpsert,
+    ProviderKeyStatsAgg, RequestLog,
+};
 use crate::providers::openai::Model;
 use crate::routing::{KeyRotationStrategy, ProviderKeyEntry};
 use crate::server::storage_traits::{
@@ -77,6 +80,36 @@ fn pg_row_bool_or(row: &Row, idx: usize, default: bool) -> bool {
 
 fn pg_row_string(row: &Row, idx: usize) -> String {
     row.try_get::<usize, String>(idx).unwrap_or_default()
+}
+
+fn pg_price_source(row: &Row, idx: usize) -> ModelPriceSource {
+    match pg_row_string(row, idx).as_str() {
+        "auto" => ModelPriceSource::Auto,
+        _ => ModelPriceSource::Manual,
+    }
+}
+
+fn pg_price_status(row: &Row, idx: usize) -> ModelPriceStatus {
+    match pg_row_string(row, idx).as_str() {
+        "missing" => ModelPriceStatus::Missing,
+        "stale" => ModelPriceStatus::Stale,
+        _ => ModelPriceStatus::Active,
+    }
+}
+
+fn pg_price_source_str(source: ModelPriceSource) -> &'static str {
+    match source {
+        ModelPriceSource::Manual => "manual",
+        ModelPriceSource::Auto => "auto",
+    }
+}
+
+fn pg_price_status_str(status: ModelPriceStatus) -> &'static str {
+    match status {
+        ModelPriceStatus::Active => "active",
+        ModelPriceStatus::Missing => "missing",
+        ModelPriceStatus::Stale => "stale",
+    }
 }
 
 fn pg_row_opt_string(row: &Row, idx: usize) -> Option<String> {
@@ -271,6 +304,10 @@ impl PgLogStore {
                 completion_price_per_million DOUBLE PRECISION NOT NULL,
                 currency TEXT,
                 model_type TEXT,
+                source TEXT NOT NULL DEFAULT 'manual',
+                status TEXT NOT NULL DEFAULT 'active',
+                synced_at TEXT,
+                expires_at TEXT,
                 PRIMARY KEY (provider, model)
             )"#,
                 &[],
@@ -280,6 +317,24 @@ impl PgLogStore {
         // best-effort migrations for existing deployments
         let _ = client
             .execute("ALTER TABLE model_prices ADD COLUMN model_type TEXT", &[])
+            .await;
+        let _ = client
+            .execute(
+                "ALTER TABLE model_prices ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'",
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute(
+                "ALTER TABLE model_prices ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute("ALTER TABLE model_prices ADD COLUMN synced_at TEXT", &[])
+            .await;
+        let _ = client
+            .execute("ALTER TABLE model_prices ADD COLUMN expires_at TEXT", &[])
             .await;
 
         client
@@ -1036,20 +1091,39 @@ impl RequestLogStore for PgLogStore {
 
     fn upsert_model_price<'a>(
         &'a self,
-        provider: &'a str,
-        model: &'a str,
-        prompt_price_per_million: f64,
-        completion_price_per_million: f64,
-        currency: Option<&'a str>,
-        model_type: Option<&'a str>,
+        price: ModelPriceUpsert,
     ) -> BoxFuture<'a, rusqlite::Result<()>> {
         Box::pin(async move {
+            let synced_at = price.synced_at.as_ref().map(to_iso8601_utc_string);
+            let expires_at = price.expires_at.as_ref().map(to_iso8601_utc_string);
+            let source = pg_price_source_str(price.source);
+            let status = pg_price_status_str(price.status);
             // 尝试 UPDATE，若未影响行则 INSERT（兼容不支持 ON CONFLICT 的库）
             let client = self.pool.pick();
             let updated = client
                 .execute(
-                    "UPDATE model_prices SET prompt_price_per_million=$3, completion_price_per_million=$4, currency=$5, model_type=$6 WHERE provider=$1 AND model=$2",
-                    &[&provider, &model, &prompt_price_per_million, &completion_price_per_million, &currency, &model_type],
+                    "UPDATE model_prices
+                     SET prompt_price_per_million=$3,
+                         completion_price_per_million=$4,
+                         currency=$5,
+                         model_type=$6,
+                         source=$7,
+                         status=$8,
+                         synced_at=$9,
+                         expires_at=$10
+                     WHERE provider=$1 AND model=$2",
+                    &[
+                        &price.provider,
+                        &price.model,
+                        &price.prompt_price_per_million,
+                        &price.completion_price_per_million,
+                        &price.currency,
+                        &price.model_type,
+                        &source,
+                        &status,
+                        &synced_at,
+                        &expires_at,
+                    ],
                 )
                 .await
                 .map_err(pg_err)?;
@@ -1057,8 +1131,30 @@ impl RequestLogStore for PgLogStore {
                 let client = self.pool.pick();
                 client
                     .execute(
-                        "INSERT INTO model_prices (provider, model, prompt_price_per_million, completion_price_per_million, currency, model_type) VALUES ($1,$2,$3,$4,$5,$6)",
-                        &[&provider, &model, &prompt_price_per_million, &completion_price_per_million, &currency, &model_type],
+                        "INSERT INTO model_prices (
+                            provider,
+                            model,
+                            prompt_price_per_million,
+                            completion_price_per_million,
+                            currency,
+                            model_type,
+                            source,
+                            status,
+                            synced_at,
+                            expires_at
+                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+                        &[
+                            &price.provider,
+                            &price.model,
+                            &price.prompt_price_per_million,
+                            &price.completion_price_per_million,
+                            &price.currency,
+                            &price.model_type,
+                            &source,
+                            &status,
+                            &synced_at,
+                            &expires_at,
+                        ],
                     )
                     .await
                     .map_err(pg_err)?;
@@ -1071,23 +1167,30 @@ impl RequestLogStore for PgLogStore {
         &'a self,
         provider: &'a str,
         model: &'a str,
-    ) -> BoxFuture<'a, rusqlite::Result<Option<(f64, f64, Option<String>, Option<String>)>>> {
+    ) -> BoxFuture<'a, rusqlite::Result<Option<ModelPriceRecord>>> {
         Box::pin(async move {
             let client = self.pool.pick();
             let row = client
                 .query_opt(
-                    "SELECT prompt_price_per_million, completion_price_per_million, currency, model_type FROM model_prices WHERE provider = $1 AND model = $2",
+                    "SELECT provider, model, prompt_price_per_million, completion_price_per_million, currency, model_type, source, status, synced_at, expires_at
+                     FROM model_prices WHERE provider = $1 AND model = $2",
                     &[&provider, &model],
                 )
                 .await
                 .map_err(pg_err)?;
-            Ok(row.map(|r| {
-                (
-                    pg_row_f64_or(&r, 0, 0.0),
-                    pg_row_f64_or(&r, 1, 0.0),
-                    pg_row_opt_string(&r, 2),
-                    pg_row_opt_string(&r, 3),
-                )
+            Ok(row.map(|r| ModelPriceRecord {
+                provider: pg_row_string(&r, 0),
+                model: pg_row_string(&r, 1),
+                prompt_price_per_million: pg_row_f64_or(&r, 2, 0.0),
+                completion_price_per_million: pg_row_f64_or(&r, 3, 0.0),
+                currency: pg_row_opt_string(&r, 4),
+                model_type: pg_row_opt_string(&r, 5),
+                source: pg_price_source(&r, 6),
+                status: pg_price_status(&r, 7),
+                synced_at: pg_row_opt_string(&r, 8)
+                    .and_then(|raw| parse_datetime_string(&raw).ok()),
+                expires_at: pg_row_opt_string(&r, 9)
+                    .and_then(|raw| parse_datetime_string(&raw).ok()),
             }))
         })
     }
@@ -1095,49 +1198,58 @@ impl RequestLogStore for PgLogStore {
     fn list_model_prices<'a>(
         &'a self,
         provider: Option<&'a str>,
-    ) -> BoxFuture<
-        'a,
-        rusqlite::Result<Vec<(String, String, f64, f64, Option<String>, Option<String>)>>,
-    > {
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<ModelPriceRecord>>> {
         Box::pin(async move {
             let mut out = Vec::new();
             if let Some(p) = provider {
                 let client = self.pool.pick();
                 let rows = client
                     .query(
-                        "SELECT provider, model, prompt_price_per_million, completion_price_per_million, currency, model_type FROM model_prices WHERE provider = $1 ORDER BY model",
+                        "SELECT provider, model, prompt_price_per_million, completion_price_per_million, currency, model_type, source, status, synced_at, expires_at FROM model_prices WHERE provider = $1 ORDER BY model",
                         &[&p],
-                )
+                    )
                     .await
                     .map_err(pg_err)?;
                 for r in rows {
-                    out.push((
-                        pg_row_string(&r, 0),
-                        pg_row_string(&r, 1),
-                        pg_row_f64_or(&r, 2, 0.0),
-                        pg_row_f64_or(&r, 3, 0.0),
-                        pg_row_opt_string(&r, 4),
-                        pg_row_opt_string(&r, 5),
-                    ));
+                    out.push(ModelPriceRecord {
+                        provider: pg_row_string(&r, 0),
+                        model: pg_row_string(&r, 1),
+                        prompt_price_per_million: pg_row_f64_or(&r, 2, 0.0),
+                        completion_price_per_million: pg_row_f64_or(&r, 3, 0.0),
+                        currency: pg_row_opt_string(&r, 4),
+                        model_type: pg_row_opt_string(&r, 5),
+                        source: pg_price_source(&r, 6),
+                        status: pg_price_status(&r, 7),
+                        synced_at: pg_row_opt_string(&r, 8)
+                            .and_then(|raw| parse_datetime_string(&raw).ok()),
+                        expires_at: pg_row_opt_string(&r, 9)
+                            .and_then(|raw| parse_datetime_string(&raw).ok()),
+                    });
                 }
             } else {
                 let client = self.pool.pick();
                 let rows = client
                     .query(
-                        "SELECT provider, model, prompt_price_per_million, completion_price_per_million, currency, model_type FROM model_prices ORDER BY provider, model",
+                        "SELECT provider, model, prompt_price_per_million, completion_price_per_million, currency, model_type, source, status, synced_at, expires_at FROM model_prices ORDER BY provider, model",
                         &[],
                     )
                     .await
                     .map_err(pg_err)?;
                 for r in rows {
-                    out.push((
-                        pg_row_string(&r, 0),
-                        pg_row_string(&r, 1),
-                        pg_row_f64_or(&r, 2, 0.0),
-                        pg_row_f64_or(&r, 3, 0.0),
-                        pg_row_opt_string(&r, 4),
-                        pg_row_opt_string(&r, 5),
-                    ));
+                    out.push(ModelPriceRecord {
+                        provider: pg_row_string(&r, 0),
+                        model: pg_row_string(&r, 1),
+                        prompt_price_per_million: pg_row_f64_or(&r, 2, 0.0),
+                        completion_price_per_million: pg_row_f64_or(&r, 3, 0.0),
+                        currency: pg_row_opt_string(&r, 4),
+                        model_type: pg_row_opt_string(&r, 5),
+                        source: pg_price_source(&r, 6),
+                        status: pg_price_status(&r, 7),
+                        synced_at: pg_row_opt_string(&r, 8)
+                            .and_then(|raw| parse_datetime_string(&raw).ok()),
+                        expires_at: pg_row_opt_string(&r, 9)
+                            .and_then(|raw| parse_datetime_string(&raw).ok()),
+                    });
                 }
             }
             Ok(out)
@@ -2474,4 +2586,69 @@ impl LoginStore for PgLogStore {
 
 fn provider_type_to_str(t: &ProviderType) -> &'static str {
     t.as_str()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PgLogStore;
+    use crate::logging::{ModelPriceSource, ModelPriceStatus, ModelPriceUpsert};
+    use crate::server::storage_traits::RequestLogStore;
+    use chrono::{Duration, Timelike, Utc};
+    use tokio_postgres::NoTls;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn postgres_model_price_roundtrip_preserves_metadata() {
+        let Ok(pg_url) = std::env::var("GATEWAY_TEST_PG_URL") else {
+            return;
+        };
+
+        let schema = format!("gateway_test_{}", Uuid::new_v4().simple());
+        let (client, connection) = tokio_postgres::connect(&pg_url, NoTls).await.unwrap();
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        client
+            .execute(&format!("CREATE SCHEMA {}", schema), &[])
+            .await
+            .unwrap();
+
+        let store = PgLogStore::connect(&pg_url, &Some(schema.clone()), 1)
+            .await
+            .unwrap();
+        let synced_at = Utc::now().with_nanosecond(0).unwrap();
+        let expires_at = synced_at + Duration::hours(3);
+
+        RequestLogStore::upsert_model_price(
+            &store,
+            ModelPriceUpsert {
+                provider: "p1".into(),
+                model: "m1".into(),
+                prompt_price_per_million: 1.25,
+                completion_price_per_million: 2.5,
+                currency: Some("USD".into()),
+                model_type: Some("chat".into()),
+                source: ModelPriceSource::Auto,
+                status: ModelPriceStatus::Stale,
+                synced_at: Some(synced_at),
+                expires_at: Some(expires_at),
+            },
+        )
+        .await
+        .unwrap();
+
+        let record = RequestLogStore::get_model_price(&store, "p1", "m1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.source, ModelPriceSource::Auto);
+        assert_eq!(record.status, ModelPriceStatus::Stale);
+        assert_eq!(record.synced_at, Some(synced_at));
+        assert_eq!(record.expires_at, Some(expires_at));
+
+        client
+            .execute(&format!("DROP SCHEMA {} CASCADE", schema), &[])
+            .await
+            .unwrap();
+    }
 }
