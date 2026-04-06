@@ -827,6 +827,10 @@ pub struct ServerConfig {
     pub admin_secret: Option<String>,
     #[serde(default)]
     pub pricing_mode: PricingMode,
+    #[serde(default = "default_pricing_sync_enabled")]
+    pub pricing_sync_enabled: bool,
+    #[serde(default = "default_pricing_sync_default_ttl_hours")]
+    pub pricing_sync_default_ttl_hours: u16,
 }
 
 impl Default for ServerConfig {
@@ -836,6 +840,8 @@ impl Default for ServerConfig {
             port: 8000,
             admin_secret: None,
             pricing_mode: PricingMode::default(),
+            pricing_sync_enabled: default_pricing_sync_enabled(),
+            pricing_sync_default_ttl_hours: default_pricing_sync_default_ttl_hours(),
         }
     }
 }
@@ -888,6 +894,14 @@ impl Default for LoggingConfig {
 
 fn default_database_path() -> String {
     "data/gateway.db".to_string()
+}
+
+fn default_pricing_sync_enabled() -> bool {
+    true
+}
+
+fn default_pricing_sync_default_ttl_hours() -> u16 {
+    168
 }
 
 fn default_provider_enabled() -> bool {
@@ -972,5 +986,29 @@ pricing_mode = "allow_missing"
 
         assert_eq!(config.pricing_mode, PricingMode::AllowMissing);
         assert!(config.pricing_mode.allows_missing_price_for_chat());
+    }
+
+    #[test]
+    fn pricing_sync_defaults_are_enabled_with_weekly_ttl() {
+        let config = ServerConfig::default();
+
+        assert!(config.pricing_sync_enabled);
+        assert_eq!(config.pricing_sync_default_ttl_hours, 168);
+    }
+
+    #[test]
+    fn pricing_sync_settings_deserialize() {
+        let config: ServerConfig = toml::from_str(
+            r#"
+host = "127.0.0.1"
+port = 8080
+pricing_sync_enabled = false
+pricing_sync_default_ttl_hours = 12
+"#,
+        )
+        .unwrap();
+
+        assert!(!config.pricing_sync_enabled);
+        assert_eq!(config.pricing_sync_default_ttl_hours, 12);
     }
 }

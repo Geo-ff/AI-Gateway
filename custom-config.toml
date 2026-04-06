@@ -27,6 +27,10 @@ port = 8080
 # - "allow_missing"：缺少模型价格时允许请求继续，但日志/统计不会伪造金额
 # - "admin_test_only"：为后续管理端测试场景预留；当前聊天主链路仍按 strict 处理
 # pricing_mode = "strict"
+# 是否启用手动触发的模型价格自动同步（默认 true）
+# pricing_sync_enabled = true
+# 自动同步价格记录的默认过期时间（小时，默认 168 = 7 天）
+# pricing_sync_default_ttl_hours = 168
 # 可选：管理员 HTTP 访问密钥（例如用于保护敏感管理接口），为空表示不启用
 # admin_secret = "your-admin-secret"
 

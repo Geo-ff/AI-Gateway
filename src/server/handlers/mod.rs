@@ -198,6 +198,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             post(admin_prices::upsert_model_price).get(admin_prices::list_model_prices),
         )
         .route(
+            "/admin/model-prices/sync",
+            post(admin_prices::sync_model_prices),
+        )
+        .route(
             "/admin/model-prices/{provider}/{model}",
             get(admin_prices::get_model_price),
         )

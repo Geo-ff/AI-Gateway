@@ -17,6 +17,7 @@ use crate::server::pricing::{
     ModelPriceView, derive_model_price_view, model_price_view_from_record,
     normalized_price_metadata,
 };
+use crate::server::pricing_sync::{PricingSyncReport, PricingSyncRequest};
 use crate::server::request_logging::log_simple_request;
 use chrono::Utc;
 
@@ -40,6 +41,16 @@ pub struct UpsertModelPricePayload {
     pub synced_at: Option<chrono::DateTime<Utc>>,
     #[serde(default)]
     pub expires_at: Option<chrono::DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SyncModelPricesPayload {
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub force: bool,
 }
 
 pub async fn upsert_model_price(
@@ -222,6 +233,112 @@ pub async fn upsert_model_price(
         Json(serde_json::json!({ "success": true })),
     )
         .into_response())
+}
+
+pub async fn sync_model_prices(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<SyncModelPricesPayload>,
+) -> Result<Json<PricingSyncReport>, GatewayError> {
+    let start_time = Utc::now();
+    let provided_token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
+        let _ = app_state
+            .log_store
+            .log_provider_op(ProviderOpLog {
+                id: None,
+                timestamp: start_time,
+                operation: "model_price_sync".to_string(),
+                provider: payload.provider.clone(),
+                details: Some(e.to_string()),
+            })
+            .await;
+        let code = e.status_code().as_u16();
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            "/admin/model-prices/sync",
+            "model_price_sync",
+            None,
+            payload.provider.clone(),
+            provided_token.as_deref(),
+            code,
+            Some("auth failed".into()),
+        )
+        .await;
+        return Err(e);
+    }
+
+    let report = crate::server::pricing_sync::sync_model_prices(
+        &app_state,
+        PricingSyncRequest {
+            provider: payload.provider.clone(),
+            dry_run: payload.dry_run,
+            force: payload.force,
+        },
+    )
+    .await;
+
+    match report {
+        Ok(report) => {
+            let _ = app_state
+                .log_store
+                .log_provider_op(ProviderOpLog {
+                    id: None,
+                    timestamp: start_time,
+                    operation: "model_price_sync".into(),
+                    provider: payload.provider.clone(),
+                    details: Some(serde_json::to_string(&report).unwrap_or_else(|_| "{}".into())),
+                })
+                .await;
+            log_simple_request(
+                &app_state,
+                start_time,
+                "POST",
+                "/admin/model-prices/sync",
+                "model_price_sync",
+                None,
+                payload.provider,
+                provided_token.as_deref(),
+                200,
+                None,
+            )
+            .await;
+            Ok(Json(report))
+        }
+        Err(err) => {
+            let code = err.status_code().as_u16();
+            let _ = app_state
+                .log_store
+                .log_provider_op(ProviderOpLog {
+                    id: None,
+                    timestamp: start_time,
+                    operation: "model_price_sync".into(),
+                    provider: payload.provider.clone(),
+                    details: Some(err.to_string()),
+                })
+                .await;
+            log_simple_request(
+                &app_state,
+                start_time,
+                "POST",
+                "/admin/model-prices/sync",
+                "model_price_sync",
+                None,
+                payload.provider,
+                provided_token.as_deref(),
+                code,
+                Some(err.to_string()),
+            )
+            .await;
+            Err(err)
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -436,6 +553,36 @@ mod tests {
             )
             .await
             .unwrap();
+        logger
+            .insert_provider(&Provider {
+                name: "p_sync".into(),
+                display_name: Some("Sync Provider".into()),
+                collection: DEFAULT_PROVIDER_COLLECTION.into(),
+                api_type: ProviderType::OpenAI,
+                api_type_raw: None,
+                base_url: "https://api.openai.com/v1".into(),
+                api_keys: Vec::new(),
+                models_endpoint: None,
+                provider_config: ProviderConfig::default(),
+                enabled: true,
+                created_at: None,
+                updated_at: None,
+            })
+            .await
+            .unwrap();
+        logger
+            .cache_models(
+                "p_sync",
+                &[Model {
+                    id: "gpt-4o-mini".into(),
+                    object: "model".into(),
+                    created: 0,
+                    owned_by: "openai".into(),
+                    display_name: None,
+                }],
+            )
+            .await
+            .unwrap();
 
         let fingerprint = "test-fp".to_string();
         let now = Utc::now();
@@ -510,6 +657,18 @@ mod tests {
         assert_eq!(payload.status, None);
         assert_eq!(payload.synced_at, None);
         assert_eq!(payload.expires_at, None);
+    }
+
+    #[test]
+    fn sync_payload_defaults_flags_to_false() {
+        let payload: SyncModelPricesPayload = serde_json::from_value(serde_json::json!({
+            "provider": "p_sync"
+        }))
+        .unwrap();
+
+        assert_eq!(payload.provider.as_deref(), Some("p_sync"));
+        assert!(!payload.dry_run);
+        assert!(!payload.force);
     }
 
     #[tokio::test]
@@ -587,5 +746,33 @@ mod tests {
         assert_eq!(items[0].provider, "p1");
         assert_eq!(items[0].model, "m1");
         assert_eq!(items[0].status, ModelPriceStatus::Missing);
+    }
+
+    #[tokio::test]
+    async fn admin_sync_model_prices_dry_run_does_not_write() {
+        let h = harness().await;
+        let headers = auth_headers(&h.token);
+
+        let Json(report) = sync_model_prices(
+            State(h.state.clone()),
+            headers,
+            Json(SyncModelPricesPayload {
+                provider: Some("p_sync".into()),
+                dry_run: true,
+                force: false,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert!(report.dry_run);
+        assert_eq!(report.inserted, 1);
+        let record = h
+            .state
+            .log_store
+            .get_model_price("p_sync", "gpt-4o-mini")
+            .await
+            .unwrap();
+        assert!(record.is_none());
     }
 }
