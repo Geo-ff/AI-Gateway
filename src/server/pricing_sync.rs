@@ -93,6 +93,27 @@ const OPENAI_PRICE_SOURCE: &[StaticPriceDefinition] = &[
         currency: "USD",
         model_type: "chat",
     },
+    StaticPriceDefinition {
+        model: "gpt-5.4",
+        prompt_price_per_million: 2.50,
+        completion_price_per_million: 15.0,
+        currency: "USD",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "gpt-5.4-mini",
+        prompt_price_per_million: 0.75,
+        completion_price_per_million: 4.5,
+        currency: "USD",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "gpt-5.4-nano",
+        prompt_price_per_million: 0.20,
+        completion_price_per_million: 1.25,
+        currency: "USD",
+        model_type: "chat",
+    },
 ];
 
 const ANTHROPIC_PRICE_SOURCE: &[StaticPriceDefinition] = &[
@@ -115,6 +136,179 @@ const ANTHROPIC_PRICE_SOURCE: &[StaticPriceDefinition] = &[
         prompt_price_per_million: 15.0,
         completion_price_per_million: 75.0,
         currency: "USD",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "claude-opus-4-6",
+        prompt_price_per_million: 5.0,
+        completion_price_per_million: 25.0,
+        currency: "USD",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "claude-sonnet-4-6",
+        prompt_price_per_million: 3.0,
+        completion_price_per_million: 15.0,
+        currency: "USD",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "claude-haiku-4-5",
+        prompt_price_per_million: 1.0,
+        completion_price_per_million: 5.0,
+        currency: "USD",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "claude-haiku-4-5-20251001",
+        prompt_price_per_million: 1.0,
+        completion_price_per_million: 5.0,
+        currency: "USD",
+        model_type: "chat",
+    },
+];
+
+const GOOGLE_GEMINI_PRICE_SOURCE: &[StaticPriceDefinition] = &[
+    StaticPriceDefinition {
+        model: "gemini-2.5-pro",
+        prompt_price_per_million: 1.25,
+        completion_price_per_million: 10.0,
+        currency: "USD",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "gemini-2.5-flash",
+        prompt_price_per_million: 0.30,
+        completion_price_per_million: 2.5,
+        currency: "USD",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "gemini-2.5-flash-lite",
+        prompt_price_per_million: 0.10,
+        completion_price_per_million: 0.40,
+        currency: "USD",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "gemini-2.0-flash",
+        prompt_price_per_million: 0.10,
+        completion_price_per_million: 0.40,
+        currency: "USD",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "gemini-2.0-flash-lite",
+        prompt_price_per_million: 0.075,
+        completion_price_per_million: 0.30,
+        currency: "USD",
+        model_type: "chat",
+    },
+];
+
+const DEEPSEEK_PRICE_SOURCE: &[StaticPriceDefinition] = &[
+    StaticPriceDefinition {
+        model: "deepseek-chat",
+        prompt_price_per_million: 0.28,
+        completion_price_per_million: 0.42,
+        currency: "USD",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "deepseek-reasoner",
+        prompt_price_per_million: 0.28,
+        completion_price_per_million: 0.42,
+        currency: "USD",
+        model_type: "chat",
+    },
+];
+
+const ALIBABA_QWEN_PRICE_SOURCE: &[StaticPriceDefinition] = &[
+    StaticPriceDefinition {
+        model: "qwen3-max",
+        prompt_price_per_million: 2.5,
+        completion_price_per_million: 10.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "qwen3-max-2026-01-23",
+        prompt_price_per_million: 2.5,
+        completion_price_per_million: 10.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "qwen3.6-plus",
+        prompt_price_per_million: 2.0,
+        completion_price_per_million: 12.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "qwen3.6-plus-2026-04-02",
+        prompt_price_per_million: 2.0,
+        completion_price_per_million: 12.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "qwen3.5-flash",
+        prompt_price_per_million: 0.2,
+        completion_price_per_million: 2.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "qwen3.5-flash-2026-02-23",
+        prompt_price_per_million: 0.2,
+        completion_price_per_million: 2.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+];
+
+const TENCENT_HUNYUAN_PRICE_SOURCE: &[StaticPriceDefinition] = &[
+    StaticPriceDefinition {
+        model: "Hunyuan-T1",
+        prompt_price_per_million: 1.0,
+        completion_price_per_million: 4.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "hunyuan-t1",
+        prompt_price_per_million: 1.0,
+        completion_price_per_million: 4.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "Hunyuan-TurboS",
+        prompt_price_per_million: 0.8,
+        completion_price_per_million: 2.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "hunyuan-turbos",
+        prompt_price_per_million: 0.8,
+        completion_price_per_million: 2.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "Hunyuan-a13b",
+        prompt_price_per_million: 0.5,
+        completion_price_per_million: 2.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "hunyuan-a13b",
+        prompt_price_per_million: 0.5,
+        completion_price_per_million: 2.0,
+        currency: "CNY",
         model_type: "chat",
     },
 ];
@@ -316,6 +510,10 @@ fn fetch_price_source(provider: &Provider) -> Result<&'static [StaticPriceDefini
     match provider.api_type {
         ProviderType::OpenAI => Ok(OPENAI_PRICE_SOURCE),
         ProviderType::Anthropic => Ok(ANTHROPIC_PRICE_SOURCE),
+        ProviderType::GoogleGemini => Ok(GOOGLE_GEMINI_PRICE_SOURCE),
+        ProviderType::DeepSeek => Ok(DEEPSEEK_PRICE_SOURCE),
+        ProviderType::AlibabaQwen => Ok(ALIBABA_QWEN_PRICE_SOURCE),
+        ProviderType::TencentHunyuan => Ok(TENCENT_HUNYUAN_PRICE_SOURCE),
         other => Err(format!(
             "provider '{}' with api_type '{}' is not supported by the built-in pricing sync source",
             provider.name,
@@ -419,7 +617,7 @@ async fn persist_auto_price(
 
 #[cfg(test)]
 mod tests {
-    use super::{PricingSyncRequest, sync_model_prices};
+    use super::{PricingSyncRequest, fetch_price_source, sync_model_prices};
     use crate::config::BalanceStrategy;
     use crate::config::settings::{
         DEFAULT_PROVIDER_COLLECTION, LoadBalancing, LoggingConfig, Provider, ProviderConfig,
@@ -756,5 +954,44 @@ mod tests {
         assert_eq!(record.status, ModelPriceStatus::Stale);
         assert_eq!(record.source, ModelPriceSource::Auto);
         assert!(record.expires_at.unwrap() <= Utc::now());
+    }
+
+    #[test]
+    fn fetch_price_source_supports_new_major_providers() {
+        let providers = [
+            (
+                ProviderType::GoogleGemini,
+                "gemini-2.5-pro",
+                "USD",
+                1.25,
+                10.0,
+            ),
+            (ProviderType::DeepSeek, "deepseek-chat", "USD", 0.28, 0.42),
+            (ProviderType::AlibabaQwen, "qwen3-max", "CNY", 2.5, 10.0),
+            (ProviderType::TencentHunyuan, "Hunyuan-T1", "CNY", 1.0, 4.0),
+        ];
+
+        for (api_type, model, currency, prompt_price, completion_price) in providers {
+            let provider = Provider {
+                name: format!("{}-provider", api_type.as_str()),
+                display_name: None,
+                collection: DEFAULT_PROVIDER_COLLECTION.into(),
+                api_type,
+                api_type_raw: None,
+                base_url: "https://example.com/v1".into(),
+                api_keys: Vec::new(),
+                models_endpoint: None,
+                provider_config: ProviderConfig::default(),
+                enabled: true,
+                created_at: None,
+                updated_at: None,
+            };
+
+            let entries = fetch_price_source(&provider).unwrap();
+            let entry = entries.iter().find(|entry| entry.model == model).unwrap();
+            assert_eq!(entry.currency, currency);
+            assert_eq!(entry.prompt_price_per_million, prompt_price);
+            assert_eq!(entry.completion_price_per_million, completion_price);
+        }
     }
 }

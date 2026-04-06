@@ -339,8 +339,12 @@ fn baidu_access_token_url(base_url: Option<&Url>) -> Result<Url, (String, Option
         let mut root = Url::parse(&format!("{scheme}://{host}"))
             .map_err(|err| ("other".into(), Some(err.to_string())))?;
         if let Some(port) = base_url.port() {
-            root.set_port(Some(port))
-                .map_err(|_| ("other".into(), Some("百度文心旧版 base_url 端口无效。".into())))?;
+            root.set_port(Some(port)).map_err(|_| {
+                (
+                    "other".into(),
+                    Some("百度文心旧版 base_url 端口无效。".into()),
+                )
+            })?;
         }
         root.set_path("/oauth/2.0/token");
         return Ok(root);
@@ -1269,7 +1273,10 @@ pub(crate) fn aws_claude_error_message(status: StatusCode, bytes: &[u8]) -> Stri
     }
 }
 
-pub(crate) fn classify_aws_claude_error(status: StatusCode, bytes: &[u8]) -> (String, Option<String>) {
+pub(crate) fn classify_aws_claude_error(
+    status: StatusCode,
+    bytes: &[u8],
+) -> (String, Option<String>) {
     let message = aws_claude_error_message(status, bytes);
     let lower = message.to_lowercase();
 
@@ -2066,7 +2073,8 @@ impl ProviderAdapter for BaiduErnieAdapter {
         &self,
         request: ConnectionTestRequest<'_>,
     ) -> Result<(), (String, Option<String>)> {
-        let access_token = baidu_access_token(Some(request.base_url), request.provider_config).await?;
+        let access_token =
+            baidu_access_token(Some(request.base_url), request.provider_config).await?;
         let url = baidu_ernie_chat_url(request.base_url, request.model, &access_token)?;
         let client =
             client_for_url(&url, 30).map_err(|err| ("other".into(), Some(err.to_string())))?;
@@ -2102,14 +2110,11 @@ impl ProviderAdapter for BaiduErnieAdapter {
     ) -> Result<RawAndTypedChatCompletion, GatewayError> {
         let base_url = Url::parse(request.base_url)
             .map_err(|err| GatewayError::Config(format!("百度文心旧版 base_url 无效：{err}")))?;
-        let access_token =
-            baidu_access_token(Some(&base_url), request.provider_config)
-                .await
-                .map_err(|(_, detail)| {
-                    GatewayError::Config(
-                        detail.unwrap_or_else(|| "百度文心旧版鉴权配置无效。".into()),
-                    )
-                })?;
+        let access_token = baidu_access_token(Some(&base_url), request.provider_config)
+            .await
+            .map_err(|(_, detail)| {
+                GatewayError::Config(detail.unwrap_or_else(|| "百度文心旧版鉴权配置无效。".into()))
+            })?;
         let url = baidu_ernie_chat_url(&base_url, &request.request.model, &access_token).map_err(
             |(_, detail)| {
                 GatewayError::Config(
