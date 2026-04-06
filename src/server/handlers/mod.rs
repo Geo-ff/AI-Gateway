@@ -205,6 +205,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/admin/model-prices/{provider}/{model}",
             get(admin_prices::get_model_price),
         )
+        .route(
+            "/admin/model-prices/{provider}/{model}/sync",
+            post(admin_prices::sync_single_model_price),
+        )
         .route("/admin/metrics/summary", get(admin_metrics::summary))
         .route("/admin/metrics/series", get(admin_metrics::series))
         .route(

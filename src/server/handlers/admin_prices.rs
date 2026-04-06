@@ -20,6 +20,86 @@ use crate::server::pricing::{
 use crate::server::pricing_sync::{PricingSyncReport, PricingSyncRequest};
 use crate::server::request_logging::log_simple_request;
 use chrono::Utc;
+use serde::Serialize;
+
+fn normalize_price_currency(currency: Option<&str>) -> Result<Option<String>, GatewayError> {
+    let Some(currency) = currency.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    match currency.to_ascii_uppercase().as_str() {
+        "USD" => Ok(Some("USD".into())),
+        "CNY" | "RMB" | "CNH" => Ok(Some("CNY".into())),
+        other => Err(GatewayError::Config(format!(
+            "unsupported price currency '{}' ; only USD and CNY are allowed",
+            other
+        ))),
+    }
+}
+
+fn validate_non_negative_price(field: &str, value: f64) -> Result<(), GatewayError> {
+    if value.is_finite() && value >= 0.0 {
+        Ok(())
+    } else {
+        Err(GatewayError::Config(format!(
+            "{} must be a non-negative finite number",
+            field
+        )))
+    }
+}
+
+async fn ensure_provider_exists(app_state: &AppState, provider: &str) -> Result<(), GatewayError> {
+    if app_state
+        .providers
+        .provider_exists(provider)
+        .await
+        .map_err(GatewayError::Db)?
+    {
+        Ok(())
+    } else {
+        Err(GatewayError::NotFound(format!(
+            "provider '{}' not found",
+            provider
+        )))
+    }
+}
+
+async fn ensure_cached_model_exists(
+    app_state: &AppState,
+    provider: &str,
+    model: &str,
+) -> Result<(), GatewayError> {
+    let models = crate::server::model_cache::get_cached_models_for_provider(app_state, provider)
+        .await
+        .map_err(GatewayError::Db)?;
+    if models.iter().any(|item| item.id == model) {
+        Ok(())
+    } else {
+        Err(GatewayError::NotFound(format!(
+            "model '{}' not found under provider '{}'",
+            model, provider
+        )))
+    }
+}
+
+async fn load_model_price_view(
+    app_state: &AppState,
+    provider: &str,
+    model: &str,
+) -> Result<ModelPriceView, GatewayError> {
+    match app_state
+        .log_store
+        .get_model_price(provider, model)
+        .await
+        .map_err(GatewayError::Db)?
+    {
+        Some(record) => Ok(model_price_view_from_record(record)),
+        None => {
+            ensure_cached_model_exists(app_state, provider, model).await?;
+            Ok(derive_model_price_view(provider, model, None))
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct UpsertModelPricePayload {
@@ -48,9 +128,32 @@ pub struct SyncModelPricesPayload {
     #[serde(default)]
     pub provider: Option<String>,
     #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
     pub dry_run: bool,
     #[serde(default)]
     pub force: bool,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct SyncSingleModelPricePayload {
+    #[serde(default)]
+    pub override_manual: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SingleModelSyncOutcome {
+    Synced,
+    ManualProtected,
+    Missing,
+    StaleMarked,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct SingleModelPriceSyncResponse {
+    pub outcome: SingleModelSyncOutcome,
+    pub price: ModelPriceView,
 }
 
 pub async fn upsert_model_price(
@@ -92,14 +195,25 @@ pub async fn upsert_model_price(
         .await;
         return Err(e);
     }
-    // 校验 provider 存在
-    if !app_state
-        .providers
-        .provider_exists(&payload.provider)
-        .await
-        .map_err(GatewayError::Db)?
+    if let Err(ge) = ensure_provider_exists(&app_state, &payload.provider).await {
+        let code = ge.status_code().as_u16();
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            "/admin/model-prices",
+            "model_price_upsert",
+            Some(payload.model.clone()),
+            Some(payload.provider.clone()),
+            provided_token.as_deref(),
+            code,
+            Some(ge.to_string()),
+        )
+        .await;
+        return Err(ge);
+    }
+    if let Err(ge) = ensure_cached_model_exists(&app_state, &payload.provider, &payload.model).await
     {
-        let ge = GatewayError::NotFound(format!("provider '{}' not found", payload.provider));
         let code = ge.status_code().as_u16();
         log_simple_request(
             &app_state,
@@ -114,55 +228,14 @@ pub async fn upsert_model_price(
             Some(ge.to_string()),
         )
         .await;
-        let _ = app_state
-            .log_store
-            .log_provider_op(ProviderOpLog {
-                id: None,
-                timestamp: start_time,
-                operation: "model_price_upsert".into(),
-                provider: Some(payload.provider.clone()),
-                details: Some("provider not found".into()),
-            })
-            .await;
         return Err(ge);
     }
-    // 校验 model 存在于缓存（按 provider 范围）
-    let models =
-        crate::server::model_cache::get_cached_models_for_provider(&app_state, &payload.provider)
-            .await
-            .map_err(GatewayError::Db)?;
-    let exists = models.iter().any(|m| m.id == payload.model);
-    if !exists {
-        let ge = GatewayError::NotFound(format!(
-            "model '{}' not found under provider '{}'",
-            payload.model, payload.provider
-        ));
-        let code = ge.status_code().as_u16();
-        log_simple_request(
-            &app_state,
-            start_time,
-            "POST",
-            "/admin/model-prices",
-            "model_price_upsert",
-            Some(payload.model.clone()),
-            Some(payload.provider.clone()),
-            provided_token.as_deref(),
-            code,
-            Some(ge.to_string()),
-        )
-        .await;
-        let _ = app_state
-            .log_store
-            .log_provider_op(ProviderOpLog {
-                id: None,
-                timestamp: start_time,
-                operation: "model_price_upsert".into(),
-                provider: Some(payload.provider.clone()),
-                details: Some("model not found".into()),
-            })
-            .await;
-        return Err(ge);
-    }
+    validate_non_negative_price("prompt_price_per_million", payload.prompt_price_per_million)?;
+    validate_non_negative_price(
+        "completion_price_per_million",
+        payload.completion_price_per_million,
+    )?;
+    let normalized_currency = normalize_price_currency(payload.currency.as_deref())?;
     let normalized_types = model_types::normalize_model_types(
         payload.model_type.as_deref(),
         payload.model_types.as_deref(),
@@ -181,7 +254,7 @@ pub async fn upsert_model_price(
             model: payload.model.clone(),
             prompt_price_per_million: payload.prompt_price_per_million,
             completion_price_per_million: payload.completion_price_per_million,
-            currency: payload.currency.clone(),
+            currency: normalized_currency.clone(),
             model_type: storage_model_type.clone(),
             source,
             status,
@@ -203,7 +276,7 @@ pub async fn upsert_model_price(
                     "model": payload.model,
                     "prompt_price_per_million": payload.prompt_price_per_million,
                     "completion_price_per_million": payload.completion_price_per_million,
-                    "currency": payload.currency,
+                    "currency": normalized_currency,
                     "model_type": storage_model_type,
                     "model_types": normalized_types,
                     "source": source,
@@ -230,7 +303,7 @@ pub async fn upsert_model_price(
     .await;
     Ok((
         axum::http::StatusCode::OK,
-        Json(serde_json::json!({ "success": true })),
+        Json(load_model_price_view(&app_state, &payload.provider, &payload.model).await?),
     )
         .into_response())
 }
@@ -278,6 +351,8 @@ pub async fn sync_model_prices(
         &app_state,
         PricingSyncRequest {
             provider: payload.provider.clone(),
+            model: payload.model.clone(),
+            override_manual: false,
             dry_run: payload.dry_run,
             force: payload.force,
         },
@@ -339,6 +414,90 @@ pub async fn sync_model_prices(
             Err(err)
         }
     }
+}
+
+pub async fn sync_single_model_price(
+    Path((provider, model)): Path<(String, String)>,
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<SyncSingleModelPricePayload>,
+) -> Result<Json<SingleModelPriceSyncResponse>, GatewayError> {
+    let start_time = Utc::now();
+    let provided_token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
+    if let Err(e) = require_superadmin(&headers, &app_state).await {
+        let code = e.status_code().as_u16();
+        log_simple_request(
+            &app_state,
+            start_time,
+            "POST",
+            &format!("/admin/model-prices/{}/{}/sync", provider, model),
+            "model_price_sync_single",
+            Some(model.clone()),
+            Some(provider.clone()),
+            provided_token.as_deref(),
+            code,
+            Some("auth failed".into()),
+        )
+        .await;
+        return Err(e);
+    }
+    ensure_provider_exists(&app_state, &provider).await?;
+    ensure_cached_model_exists(&app_state, &provider, &model).await?;
+
+    let report = crate::server::pricing_sync::sync_model_prices(
+        &app_state,
+        PricingSyncRequest {
+            provider: Some(provider.clone()),
+            model: Some(model.clone()),
+            override_manual: payload.override_manual,
+            dry_run: false,
+            force: true,
+        },
+    )
+    .await?;
+
+    let view = load_model_price_view(&app_state, &provider, &model).await?;
+    let outcome = if report.manual_protected > 0 {
+        SingleModelSyncOutcome::ManualProtected
+    } else if report.synced > 0 {
+        SingleModelSyncOutcome::Synced
+    } else if report.stale_marked > 0 {
+        SingleModelSyncOutcome::StaleMarked
+    } else {
+        SingleModelSyncOutcome::Missing
+    };
+    let response = SingleModelPriceSyncResponse {
+        outcome,
+        price: view,
+    };
+    log_simple_request(
+        &app_state,
+        start_time,
+        "POST",
+        &format!("/admin/model-prices/{}/{}/sync", provider, model),
+        "model_price_sync_single",
+        Some(model.clone()),
+        Some(provider.clone()),
+        provided_token.as_deref(),
+        200,
+        None,
+    )
+    .await;
+    let _ = app_state
+        .log_store
+        .log_provider_op(ProviderOpLog {
+            id: None,
+            timestamp: start_time,
+            operation: "model_price_sync_single".into(),
+            provider: Some(provider),
+            details: Some(serde_json::to_string(&response).unwrap_or_else(|_| "{}".into())),
+        })
+        .await;
+    Ok(Json(response))
 }
 
 #[derive(Debug, Deserialize)]
@@ -667,6 +826,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(payload.provider.as_deref(), Some("p_sync"));
+        assert_eq!(payload.model, None);
         assert!(!payload.dry_run);
         assert!(!payload.force);
     }
@@ -758,6 +918,7 @@ mod tests {
             headers,
             Json(SyncModelPricesPayload {
                 provider: Some("p_sync".into()),
+                model: None,
                 dry_run: true,
                 force: false,
             }),
@@ -774,5 +935,63 @@ mod tests {
             .await
             .unwrap();
         assert!(record.is_none());
+    }
+
+    #[tokio::test]
+    async fn admin_sync_single_model_returns_latest_view() {
+        let h = harness().await;
+        let headers = auth_headers(&h.token);
+
+        let Json(response) = sync_single_model_price(
+            Path(("p_sync".to_string(), "gpt-4o-mini".to_string())),
+            State(h.state.clone()),
+            headers,
+            Json(SyncSingleModelPricePayload::default()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.outcome, SingleModelSyncOutcome::Synced);
+        let view = response.price;
+        assert_eq!(view.provider, "p_sync");
+        assert_eq!(view.model, "gpt-4o-mini");
+        assert_eq!(view.source, Some(ModelPriceSource::Auto));
+        assert_eq!(view.status, ModelPriceStatus::Active);
+        assert_eq!(view.currency.as_deref(), Some("USD"));
+        assert!(view.synced_at.is_some());
+        assert!(view.expires_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn admin_sync_single_model_reports_manual_protected() {
+        let h = harness().await;
+        let headers = auth_headers(&h.token);
+
+        h.state
+            .log_store
+            .upsert_model_price(ModelPriceUpsert::manual(
+                "p_sync",
+                "gpt-4o-mini",
+                75.0,
+                75.0,
+                Some("USD".into()),
+                Some("chat".into()),
+            ))
+            .await
+            .unwrap();
+
+        let Json(response) = sync_single_model_price(
+            Path(("p_sync".to_string(), "gpt-4o-mini".to_string())),
+            State(h.state.clone()),
+            headers,
+            Json(SyncSingleModelPricePayload::default()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.outcome, SingleModelSyncOutcome::ManualProtected);
+        assert_eq!(response.price.source, Some(ModelPriceSource::Manual));
+        assert_eq!(response.price.prompt_price_per_million, Some(75.0));
+        assert_eq!(response.price.synced_at, None);
     }
 }

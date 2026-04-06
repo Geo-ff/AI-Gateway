@@ -14,6 +14,8 @@ use super::pricing::normalize_model_price_record;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PricingSyncRequest {
     pub provider: Option<String>,
+    pub model: Option<String>,
+    pub override_manual: bool,
     pub dry_run: bool,
     pub force: bool,
 }
@@ -396,7 +398,7 @@ async fn sync_provider_prices(
         }
     };
 
-    let normalized_prices =
+    let mut normalized_prices =
         match normalize_price_entries(app_state, provider, source_entries, now, expires_at).await {
             Ok(prices) => prices,
             Err(err) => {
@@ -405,6 +407,9 @@ async fn sync_provider_prices(
                 return result;
             }
         };
+    if let Some(model) = request.model.as_deref() {
+        normalized_prices.retain(|price| price.model == model);
+    }
     result.fetched = normalized_prices.len();
 
     let existing_prices = match app_state
@@ -430,7 +435,9 @@ async fn sync_provider_prices(
 
     for price in normalized_prices {
         match existing_by_model.get(&price.model).cloned() {
-            Some(record) if record.source == ModelPriceSource::Manual => {
+            Some(record)
+                if record.source == ModelPriceSource::Manual && !request.override_manual =>
+            {
                 result.manual_protected += 1;
             }
             Some(record) => {
@@ -469,6 +476,11 @@ async fn sync_provider_prices(
 
     for record in existing_by_model.into_values() {
         if record.source != ModelPriceSource::Auto || fetched_models.contains(&record.model) {
+            continue;
+        }
+        if let Some(model) = request.model.as_deref()
+            && record.model != model
+        {
             continue;
         }
 
@@ -772,6 +784,8 @@ mod tests {
             &h.state,
             PricingSyncRequest {
                 provider: Some("openai-provider".into()),
+                model: None,
+                override_manual: false,
                 dry_run: false,
                 force: false,
             },
@@ -820,6 +834,8 @@ mod tests {
             &h.state,
             PricingSyncRequest {
                 provider: Some("openai-provider".into()),
+                model: None,
+                override_manual: false,
                 dry_run: false,
                 force: false,
             },
@@ -851,6 +867,8 @@ mod tests {
             &h.state,
             PricingSyncRequest {
                 provider: Some("openai-provider".into()),
+                model: None,
+                override_manual: false,
                 dry_run: false,
                 force: false,
             },
@@ -891,6 +909,8 @@ mod tests {
             &h.state,
             PricingSyncRequest {
                 provider: Some("unsupported-provider".into()),
+                model: None,
+                override_manual: false,
                 dry_run: false,
                 force: false,
             },
@@ -936,6 +956,8 @@ mod tests {
             &h.state,
             PricingSyncRequest {
                 provider: Some("openai-provider".into()),
+                model: None,
+                override_manual: false,
                 dry_run: false,
                 force: false,
             },
@@ -993,5 +1015,140 @@ mod tests {
             assert_eq!(entry.prompt_price_per_million, prompt_price);
             assert_eq!(entry.completion_price_per_million, completion_price);
         }
+    }
+
+    #[tokio::test]
+    async fn sync_single_model_only_updates_requested_model() {
+        let h = harness().await;
+        h.state
+            .log_store
+            .upsert_model_price(ModelPriceUpsert {
+                provider: "openai-provider".into(),
+                model: "retired-model".into(),
+                prompt_price_per_million: 1.0,
+                completion_price_per_million: 2.0,
+                currency: Some("USD".into()),
+                model_type: Some("chat".into()),
+                source: ModelPriceSource::Auto,
+                status: ModelPriceStatus::Active,
+                synced_at: Some(Utc::now() - Duration::hours(5)),
+                expires_at: Some(Utc::now() + Duration::hours(5)),
+            })
+            .await
+            .unwrap();
+
+        let report = sync_model_prices(
+            &h.state,
+            PricingSyncRequest {
+                provider: Some("openai-provider".into()),
+                model: Some("gpt-4o-mini".into()),
+                override_manual: false,
+                dry_run: false,
+                force: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.refreshed + report.inserted, 1);
+        assert_eq!(report.stale_marked, 0);
+        let untouched = h
+            .state
+            .log_store
+            .get_model_price("openai-provider", "retired-model")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(untouched.status, ModelPriceStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn sync_single_model_marks_missing_auto_price_stale() {
+        let h = harness().await;
+        h.state
+            .log_store
+            .upsert_model_price(ModelPriceUpsert {
+                provider: "openai-provider".into(),
+                model: "unknown-model".into(),
+                prompt_price_per_million: 1.0,
+                completion_price_per_million: 2.0,
+                currency: Some("USD".into()),
+                model_type: Some("chat".into()),
+                source: ModelPriceSource::Auto,
+                status: ModelPriceStatus::Active,
+                synced_at: Some(Utc::now() - Duration::hours(5)),
+                expires_at: Some(Utc::now() + Duration::hours(5)),
+            })
+            .await
+            .unwrap();
+
+        let report = sync_model_prices(
+            &h.state,
+            PricingSyncRequest {
+                provider: Some("openai-provider".into()),
+                model: Some("unknown-model".into()),
+                override_manual: false,
+                dry_run: false,
+                force: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.synced, 0);
+        assert_eq!(report.stale_marked, 1);
+        let record = h
+            .state
+            .log_store
+            .get_model_price("openai-provider", "unknown-model")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.status, ModelPriceStatus::Stale);
+        assert_eq!(record.source, ModelPriceSource::Auto);
+    }
+
+    #[tokio::test]
+    async fn sync_single_model_can_override_manual_price() {
+        let h = harness().await;
+        h.state
+            .log_store
+            .upsert_model_price(ModelPriceUpsert::manual(
+                "openai-provider",
+                "gpt-4o-mini",
+                75.0,
+                75.0,
+                None,
+                Some("chat".into()),
+            ))
+            .await
+            .unwrap();
+
+        let report = sync_model_prices(
+            &h.state,
+            PricingSyncRequest {
+                provider: Some("openai-provider".into()),
+                model: Some("gpt-4o-mini".into()),
+                override_manual: true,
+                dry_run: false,
+                force: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.synced, 1);
+        assert_eq!(report.manual_protected, 0);
+        let record = h
+            .state
+            .log_store
+            .get_model_price("openai-provider", "gpt-4o-mini")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.source, ModelPriceSource::Auto);
+        assert_eq!(record.currency.as_deref(), Some("USD"));
+        assert_eq!(record.prompt_price_per_million, 0.15);
+        assert!(record.synced_at.is_some());
     }
 }
