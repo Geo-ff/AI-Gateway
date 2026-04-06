@@ -14,6 +14,7 @@ use crate::server::chat_request::GatewayChatCompletionRequest;
 use crate::server::model_redirect::{
     apply_model_redirects, apply_provider_model_redirects_to_parsed_model,
 };
+use crate::server::pricing::{missing_price_allowed_for_chat, resolve_model_pricing};
 use crate::server::provider_dispatch::select_provider_for_model;
 
 mod anthropic;
@@ -87,6 +88,7 @@ pub async fn stream_chat_completions(
         return Err(ge);
     }
 
+    let mut redirected_from_for_price: Option<String> = None;
     if let Some((from, to)) = apply_provider_model_redirects_to_parsed_model(
         &app_state,
         &selected.provider.name,
@@ -100,6 +102,7 @@ pub async fn stream_chat_completions(
             target_model = %to,
             "已应用 provider 维度模型重定向"
         );
+        redirected_from_for_price = Some(from.clone());
         request.model = if parsed_model.provider_name.is_some() {
             format!("{}/{}", selected.provider.name, parsed_model.model_name)
         } else {
@@ -297,12 +300,14 @@ pub async fn stream_chat_completions(
         .await;
         return Err(ge);
     }
-    let price = app_state
-        .log_store
-        .get_model_price(&selected.provider.name, &upstream_model_for_check)
-        .await
-        .map_err(GatewayError::Db)?;
-    if price.is_none() {
+    let resolved_pricing = resolve_model_pricing(
+        &app_state,
+        &selected.provider.name,
+        &upstream_model_for_check,
+        redirected_from_for_price.as_deref(),
+    )
+    .await?;
+    if !resolved_pricing.price_found && !missing_price_allowed_for_chat(&app_state) {
         let ge = GatewayError::Config("model price not set".into());
         let code = ge.status_code().as_u16();
         crate::server::request_logging::log_simple_request(
@@ -320,6 +325,15 @@ pub async fn stream_chat_completions(
         .await;
         return Err(ge);
     }
+    if !resolved_pricing.price_found {
+        tracing::warn!(
+            provider = %selected.provider.name,
+            model = %upstream_model_for_check,
+            pricing_mode = ?app_state.config.server.pricing_mode,
+            "missing model price; continuing without billing amount"
+        );
+    }
+    let billing_model = resolved_pricing.billing_model;
 
     if let Some(message) = runtime_streaming_unsupported_message(selected.provider.api_type) {
         return Err(GatewayError::Config(message));
@@ -329,7 +343,7 @@ pub async fn stream_chat_completions(
         crate::config::ProviderType::Anthropic => anthropic::stream_anthropic_chat(
             app_state.clone(),
             start_time,
-            upstream_req.model.clone(),
+            billing_model.clone(),
             requested_model.clone(),
             upstream_req.model.clone(),
             selected.provider.base_url.clone(),
@@ -344,7 +358,7 @@ pub async fn stream_chat_completions(
         crate::config::ProviderType::Zhipu => zhipu::stream_zhipu_chat(
             app_state.clone(),
             start_time,
-            upstream_req.model.clone(),
+            billing_model.clone(),
             requested_model.clone(),
             upstream_req.model.clone(),
             selected.provider.base_url.clone(),
@@ -359,7 +373,7 @@ pub async fn stream_chat_completions(
             native::stream_native_chat(
                 app_state.clone(),
                 start_time,
-                upstream_req.model.clone(),
+                billing_model.clone(),
                 requested_model.clone(),
                 upstream_req.model.clone(),
                 selected.provider.api_type,
@@ -377,7 +391,7 @@ pub async fn stream_chat_completions(
             openai::stream_openai_chat(
                 app_state.clone(),
                 start_time,
-                upstream_req.model.clone(),
+                billing_model.clone(),
                 requested_model.clone(),
                 upstream_req.model.clone(),
                 selected.provider.base_url.clone(),
@@ -396,7 +410,7 @@ pub async fn stream_chat_completions(
         | crate::config::ProviderType::VertexAI => native::stream_native_chat(
             app_state.clone(),
             start_time,
-            upstream_req.model.clone(),
+            billing_model.clone(),
             requested_model.clone(),
             upstream_req.model.clone(),
             selected.provider.api_type,
@@ -442,15 +456,23 @@ mod tests {
     use super::*;
     use crate::admin::{CreateTokenPayload, TokenStore};
     use crate::config::settings::{
-        BalanceStrategy, LoadBalancing, LoggingConfig, Provider, ProviderType, ServerConfig,
+        BalanceStrategy, LoadBalancing, LoggingConfig, PricingMode, Provider, ProviderConfig,
+        ProviderType, ServerConfig,
     };
     use crate::logging::DatabaseLogger;
     use crate::providers::openai::ChatCompletionRequest;
     use crate::server::login::LoginManager;
     use crate::users::{CreateUserPayload, UserRole, UserStatus, UserStore};
+    use axum::Json;
+    use axum::body::to_bytes;
     use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+    use axum::response::IntoResponse;
+    use axum::routing::post;
+    use axum::{Router, extract::State};
+    use serde_json::{Value, json};
     use std::sync::Arc;
     use tempfile::tempdir;
+    use tokio::net::TcpListener;
 
     fn test_settings(db_path: String) -> crate::config::Settings {
         crate::config::Settings {
@@ -463,6 +485,162 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    async fn spawn_mock_openai_stream_server() -> String {
+        async fn handler(headers: HeaderMap, Json(body): Json<Value>) -> axum::response::Response {
+            assert_eq!(
+                headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok()),
+                Some("Bearer mock-upstream-key")
+            );
+            assert_eq!(body["stream"], json!(true));
+
+            (
+                axum::http::StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                concat!(
+                    "data: {\"id\":\"stream-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"stream-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"mock stream ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":6,\"completion_tokens\":5,\"total_tokens\":11}}\n\n",
+                    "data: [DONE]\n\n"
+                ),
+            )
+                .into_response()
+        }
+
+        let app = Router::new().route("/v1/chat/completions", post(handler));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{addr}/v1")
+    }
+
+    async fn test_stream_app_state(
+        base_url: &str,
+        seed_price: bool,
+        pricing_mode: PricingMode,
+    ) -> (tempfile::TempDir, Arc<AppState>, String) {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("gateway.db");
+        let logger = Arc::new(
+            DatabaseLogger::new(db_path.to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+
+        let mut settings = test_settings(db_path.to_string_lossy().to_string());
+        settings.server.pricing_mode = pricing_mode;
+
+        logger
+            .insert_provider(&Provider {
+                name: "p1".into(),
+                display_name: None,
+                collection: crate::config::settings::DEFAULT_PROVIDER_COLLECTION.into(),
+                api_type: ProviderType::OpenAI,
+                api_type_raw: None,
+                base_url: base_url.into(),
+                api_keys: Vec::new(),
+                models_endpoint: None,
+                provider_config: ProviderConfig::default(),
+                enabled: true,
+                created_at: None,
+                updated_at: None,
+            })
+            .await
+            .unwrap();
+        logger
+            .add_provider_key(
+                "p1",
+                "mock-upstream-key",
+                &settings.logging.key_log_strategy,
+            )
+            .await
+            .unwrap();
+        if seed_price {
+            logger
+                .upsert_model_price("p1", "m1", 1.0, 1.0, Some("USD"), None)
+                .await
+                .unwrap();
+        }
+
+        let token = logger
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: None,
+                name: Some("stream-token".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+
+        let app_state = Arc::new(AppState {
+            config: settings,
+            load_balancer_state: Arc::new(crate::routing::LoadBalancerState::default()),
+            log_store: logger.clone(),
+            model_cache: logger.clone(),
+            providers: logger.clone(),
+            token_store: logger.clone(),
+            favorites_store: logger.clone(),
+            login_manager: Arc::new(LoginManager::new(logger.clone())),
+            user_store: logger.clone(),
+            refresh_token_store: logger.clone(),
+            password_reset_token_store: logger.clone(),
+            balance_store: logger.clone(),
+            subscription_store: logger.clone(),
+        });
+
+        (dir, app_state, token.token)
+    }
+
+    async fn invoke_stream_and_collect_text(
+        app_state: Arc<AppState>,
+        client_token: &str,
+        model: &str,
+    ) -> Result<String, crate::error::GatewayError> {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {client_token}")).unwrap(),
+        );
+
+        let req: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": model,
+            "messages": [{"role":"user","content":"hi"}],
+            "stream": true
+        }))
+        .unwrap();
+
+        let response = stream_chat_completions(
+            State(app_state),
+            headers,
+            Json(GatewayChatCompletionRequest {
+                request: req,
+                top_k: None,
+            }),
+        )
+        .await?;
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        Ok(String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    fn stream_data_lines(body: &str) -> Vec<&str> {
+        body.lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .collect()
     }
 
     #[test]
@@ -513,6 +691,50 @@ mod tests {
             runtime_streaming_unsupported_message(crate::config::ProviderType::XfSpark).is_none()
         );
         assert!(runtime_streaming_unsupported_message(crate::config::ProviderType::Yi).is_none());
+    }
+
+    #[tokio::test]
+    async fn missing_price_strict_mode_rejects_stream_chat() {
+        let base_url = spawn_mock_openai_stream_server().await;
+        let (_dir, app_state, token) =
+            test_stream_app_state(&base_url, false, PricingMode::Strict).await;
+
+        let err = invoke_stream_and_collect_text(app_state.clone(), &token, "m1")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("model price not set"));
+
+        let logs = app_state.log_store.get_recent_logs(5).await.unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].amount_spent, None);
+    }
+
+    #[tokio::test]
+    async fn missing_price_allow_missing_allows_stream_chat_without_amount() {
+        let base_url = spawn_mock_openai_stream_server().await;
+        let (_dir, app_state, token) =
+            test_stream_app_state(&base_url, false, PricingMode::AllowMissing).await;
+
+        let body = invoke_stream_and_collect_text(app_state.clone(), &token, "m1")
+            .await
+            .unwrap();
+        assert_eq!(stream_data_lines(&body).last().copied(), Some("[DONE]"));
+        assert!(body.contains("mock stream ok"));
+
+        let updated = app_state
+            .token_store
+            .get_token(&token)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.amount_spent, 0.0);
+        assert_eq!(updated.total_tokens_spent, 11);
+
+        let logs = app_state.log_store.get_recent_logs(5).await.unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].status_code, 200);
+        assert_eq!(logs[0].amount_spent, None);
+        assert_eq!(logs[0].total_tokens, Some(11));
     }
 
     #[tokio::test]

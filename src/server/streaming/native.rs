@@ -15,15 +15,15 @@ use crate::config::settings::ProviderConfig;
 use crate::error::GatewayError;
 use crate::providers::{
     adapters::{
-        aws_claude_error_message, aws_claude_finish_reason, aws_sigv4_headers,
-        azure_error_message, azure_openai_chat_completions_url, baidu_access_token,
-        baidu_ernie_chat_url, baidu_error_response, baidu_requires_error,
-        build_aws_claude_payload, build_baidu_ernie_payload, build_cohere_payload,
-        build_gemini_payload, classify_aws_claude_error, classify_azure_error,
-        classify_cohere_error, classify_gemini_error, classify_vertex_error,
-        cohere_error_message, cohere_finish_reason, gemini_error_message,
-        gemini_finish_reason, gemini_generate_content_url, gateway_error_from_normalized,
-        vertex_access_token, vertex_error_message, vertex_stream_generate_content_url,
+        aws_claude_error_message, aws_claude_finish_reason, aws_sigv4_headers, azure_error_message,
+        azure_openai_chat_completions_url, baidu_access_token, baidu_ernie_chat_url,
+        baidu_error_response, baidu_requires_error, build_aws_claude_payload,
+        build_baidu_ernie_payload, build_cohere_payload, build_gemini_payload,
+        classify_aws_claude_error, classify_azure_error, classify_cohere_error,
+        classify_gemini_error, classify_vertex_error, cohere_error_message, cohere_finish_reason,
+        gateway_error_from_normalized, gemini_error_message, gemini_finish_reason,
+        gemini_generate_content_url, vertex_access_token, vertex_error_message,
+        vertex_stream_generate_content_url,
     },
     openai::{ChatCompletionRequest, Usage},
 };
@@ -327,7 +327,11 @@ impl AwsEventStreamDecoder {
     }
 }
 
-fn usage_from_counts(prompt_tokens: u64, completion_tokens: u64, total_tokens: Option<u64>) -> Usage {
+fn usage_from_counts(
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: Option<u64>,
+) -> Usage {
     Usage {
         prompt_tokens: prompt_tokens as u32,
         completion_tokens: completion_tokens as u32,
@@ -487,10 +491,13 @@ fn parse_generate_content_response(
 }
 
 fn parse_cohere_event(event_name: &str, data: &str) -> Result<Vec<NormalizedStreamEvent>, String> {
-    let value: Value = serde_json::from_str(data)
-        .map_err(|err| format!("Cohere 流式事件解析失败：{err}"))?;
+    let value: Value =
+        serde_json::from_str(data).map_err(|err| format!("Cohere 流式事件解析失败：{err}"))?;
     let event_name = if event_name.is_empty() {
-        value.get("type").and_then(Value::as_str).unwrap_or_default()
+        value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
     } else {
         event_name
     };
@@ -521,13 +528,17 @@ fn parse_cohere_event(event_name: &str, data: &str) -> Result<Vec<NormalizedStre
                 ));
             }
 
-            if let Some(usage) = value.get("delta" ).and_then(|delta| delta.get("usage")) {
+            if let Some(usage) = value.get("delta").and_then(|delta| delta.get("usage")) {
                 let tokens = usage.get("tokens");
                 let billed_units = usage.get("billed_units");
                 let prompt = usage
                     .get("input_tokens")
                     .and_then(Value::as_u64)
-                    .or_else(|| tokens.and_then(|value| value.get("input_tokens")).and_then(Value::as_u64))
+                    .or_else(|| {
+                        tokens
+                            .and_then(|value| value.get("input_tokens"))
+                            .and_then(Value::as_u64)
+                    })
                     .or_else(|| {
                         billed_units
                             .and_then(|value| value.get("input_tokens"))
@@ -537,7 +548,11 @@ fn parse_cohere_event(event_name: &str, data: &str) -> Result<Vec<NormalizedStre
                 let completion = usage
                     .get("output_tokens")
                     .and_then(Value::as_u64)
-                    .or_else(|| tokens.and_then(|value| value.get("output_tokens")).and_then(Value::as_u64))
+                    .or_else(|| {
+                        tokens
+                            .and_then(|value| value.get("output_tokens"))
+                            .and_then(Value::as_u64)
+                    })
                     .or_else(|| {
                         billed_units
                             .and_then(|value| value.get("output_tokens"))
@@ -567,8 +582,8 @@ fn parse_cohere_event(event_name: &str, data: &str) -> Result<Vec<NormalizedStre
 }
 
 fn parse_baidu_ernie_chunk(data: &str) -> Result<Vec<NormalizedStreamEvent>, String> {
-    let value: Value = serde_json::from_str(data)
-        .map_err(|err| format!("百度文心旧版流式响应解析失败：{err}"))?;
+    let value: Value =
+        serde_json::from_str(data).map_err(|err| format!("百度文心旧版流式响应解析失败：{err}"))?;
     if value.get("error_code").is_some() || value.get("error").is_some() {
         let bytes = serde_json::to_vec(&value)
             .map_err(|err| format!("百度文心旧版错误响应编码失败：{err}"))?;
@@ -626,8 +641,8 @@ fn parse_baidu_ernie_chunk(data: &str) -> Result<Vec<NormalizedStreamEvent>, Str
 }
 
 fn parse_xf_spark_chunk(data: &str) -> Result<Vec<NormalizedStreamEvent>, String> {
-    let value: Value = serde_json::from_str(data)
-        .map_err(|err| format!("讯飞星火流式响应解析失败：{err}"))?;
+    let value: Value =
+        serde_json::from_str(data).map_err(|err| format!("讯飞星火流式响应解析失败：{err}"))?;
 
     if let Some(code) = value.get("code").and_then(Value::as_i64)
         && code != 0
@@ -636,7 +651,9 @@ fn parse_xf_spark_chunk(data: &str) -> Result<Vec<NormalizedStreamEvent>, String
             .get("message")
             .and_then(Value::as_str)
             .unwrap_or("讯飞星火流式请求失败");
-        return Err(format!("讯飞星火流式请求失败：code={code}, message={message}"));
+        return Err(format!(
+            "讯飞星火流式请求失败：code={code}, message={message}"
+        ));
     }
 
     let mut events = Vec::new();
@@ -699,7 +716,10 @@ fn parse_bedrock_event(value: &Value) -> Result<Vec<NormalizedStreamEvent>, Stri
         .get("contentBlockDelta")
         .and_then(|event| event.get("delta"))
     {
-        if let Some(text) = delta.get("text").and_then(Value::as_str).filter(|text| !text.is_empty())
+        if let Some(text) = delta
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
         {
             events.push(NormalizedStreamEvent::TextDelta(text.to_string()));
         }
@@ -742,9 +762,9 @@ fn parse_bedrock_event(value: &Value) -> Result<Vec<NormalizedStreamEvent>, Stri
     }
 
     if let Some((error_key, error_value)) = value.as_object().and_then(|object| {
-        object.iter().find(|(key, _)| {
-            key.ends_with("Exception") || key.eq_ignore_ascii_case("error")
-        })
+        object
+            .iter()
+            .find(|(key, _)| key.ends_with("Exception") || key.eq_ignore_ascii_case("error"))
     }) {
         let message = error_value
             .get("message")
@@ -786,8 +806,9 @@ pub async fn stream_native_chat(
     let client = crate::http_client::client_for_url(&base_url)?;
     let response = match provider_type {
         ProviderType::AzureOpenAI => {
-            let base = Url::parse(&base_url)
-                .map_err(|err| GatewayError::Config(format!("Azure OpenAI base_url 无效：{err}")))?;
+            let base = Url::parse(&base_url).map_err(|err| {
+                GatewayError::Config(format!("Azure OpenAI base_url 无效：{err}"))
+            })?;
             let url = azure_openai_chat_completions_url(&base, &provider_config).map_err(
                 |(_, detail)| {
                     GatewayError::Config(
@@ -820,8 +841,9 @@ pub async fn stream_native_chat(
             response
         }
         ProviderType::GoogleGemini => {
-            let base = Url::parse(&base_url)
-                .map_err(|err| GatewayError::Config(format!("Google Gemini base_url 无效：{err}")))?;
+            let base = Url::parse(&base_url).map_err(|err| {
+                GatewayError::Config(format!("Google Gemini base_url 无效：{err}"))
+            })?;
             let url = gemini_generate_content_url(
                 &base,
                 &provider_config,
@@ -830,9 +852,7 @@ pub async fn stream_native_chat(
                 &api_key,
             )
             .map_err(|(_, detail)| {
-                GatewayError::Config(
-                    detail.unwrap_or_else(|| "Google Gemini 配置不完整。".into()),
-                )
+                GatewayError::Config(detail.unwrap_or_else(|| "Google Gemini 配置不完整。".into()))
             })?;
             let payload = build_gemini_payload(&upstream_req)?;
             let response = client
@@ -856,12 +876,13 @@ pub async fn stream_native_chat(
         ProviderType::VertexAI => {
             let base = Url::parse(&base_url)
                 .map_err(|err| GatewayError::Config(format!("Vertex AI base_url 无效：{err}")))?;
-            let url = vertex_stream_generate_content_url(&base, &provider_config, &upstream_req.model)
-                .map_err(|(_, detail)| {
-                    GatewayError::Config(
-                        detail.unwrap_or_else(|| "Vertex AI 配置不完整。".into()),
-                    )
-                })?;
+            let url =
+                vertex_stream_generate_content_url(&base, &provider_config, &upstream_req.model)
+                    .map_err(|(_, detail)| {
+                        GatewayError::Config(
+                            detail.unwrap_or_else(|| "Vertex AI 配置不完整。".into()),
+                        )
+                    })?;
             let access_token = vertex_access_token(&provider_config).map_err(|(_, detail)| {
                 GatewayError::Config(
                     detail.unwrap_or_else(|| "Vertex AI Access Token 配置无效。".into()),
@@ -872,8 +893,9 @@ pub async fn stream_native_chat(
                 .post(&url)
                 .header(
                     reqwest::header::AUTHORIZATION,
-                    HeaderValue::from_str(&format!("Bearer {access_token}"))
-                        .map_err(|err| GatewayError::Config(format!("Vertex AI Token 无效：{err}")))?,
+                    HeaderValue::from_str(&format!("Bearer {access_token}")).map_err(|err| {
+                        GatewayError::Config(format!("Vertex AI Token 无效：{err}"))
+                    })?,
                 )
                 .header("Content-Type", "application/json")
                 .json(&payload)
@@ -916,8 +938,9 @@ pub async fn stream_native_chat(
             response
         }
         ProviderType::BaiduErnie => {
-            let base = Url::parse(&base_url)
-                .map_err(|err| GatewayError::Config(format!("百度文心旧版 base_url 无效：{err}")))?;
+            let base = Url::parse(&base_url).map_err(|err| {
+                GatewayError::Config(format!("百度文心旧版 base_url 无效：{err}"))
+            })?;
             let access_token = baidu_access_token(Some(&base), &provider_config)
                 .await
                 .map_err(|(_, detail)| {
@@ -1063,7 +1086,8 @@ pub async fn stream_native_chat(
                 let mut json_decoder = JsonObjectStreamDecoder::default();
                 let mut stream = response.bytes_stream();
                 while let Some(item) = stream.next().await {
-                    let chunk = item.map_err(|err| format!("{provider_label} 流式读取失败：{err}"))?;
+                    let chunk =
+                        item.map_err(|err| format!("{provider_label} 流式读取失败：{err}"))?;
                     let text = String::from_utf8_lossy(&chunk).to_string();
 
                     if is_sse {
@@ -1076,14 +1100,23 @@ pub async fn stream_native_chat(
                                 return Ok(());
                             }
                             let events = parse_generate_content_response(data, provider_label)?;
-                            if !handle_normalized_events(&mut emitter, &usage_cell_for_task, events)? {
+                            if !handle_normalized_events(
+                                &mut emitter,
+                                &usage_cell_for_task,
+                                events,
+                            )? {
                                 return Ok(());
                             }
                         }
                     } else {
                         for fragment in json_decoder.push(&text) {
-                            let events = parse_generate_content_response(&fragment, provider_label)?;
-                            if !handle_normalized_events(&mut emitter, &usage_cell_for_task, events)? {
+                            let events =
+                                parse_generate_content_response(&fragment, provider_label)?;
+                            if !handle_normalized_events(
+                                &mut emitter,
+                                &usage_cell_for_task,
+                                events,
+                            )? {
                                 return Ok(());
                             }
                         }
@@ -1116,7 +1149,8 @@ pub async fn stream_native_chat(
                 while let Some(item) = stream.next().await {
                     let chunk = item.map_err(|err| format!("百度文心旧版流式读取失败：{err}"))?;
                     if baidu_requires_error(&chunk) {
-                        let (error_type, detail) = baidu_error_response(reqwest::StatusCode::OK, &chunk);
+                        let (error_type, detail) =
+                            baidu_error_response(reqwest::StatusCode::OK, &chunk);
                         return Err(detail.unwrap_or_else(|| error_type));
                     }
                     let text = String::from_utf8_lossy(&chunk).to_string();
@@ -1129,14 +1163,22 @@ pub async fn stream_native_chat(
                                 return Ok(());
                             }
                             let events = parse_baidu_ernie_chunk(data)?;
-                            if !handle_normalized_events(&mut emitter, &usage_cell_for_task, events)? {
+                            if !handle_normalized_events(
+                                &mut emitter,
+                                &usage_cell_for_task,
+                                events,
+                            )? {
                                 return Ok(());
                             }
                         }
                     } else {
                         for fragment in json_decoder.push(&text) {
                             let events = parse_baidu_ernie_chunk(&fragment)?;
-                            if !handle_normalized_events(&mut emitter, &usage_cell_for_task, events)? {
+                            if !handle_normalized_events(
+                                &mut emitter,
+                                &usage_cell_for_task,
+                                events,
+                            )? {
                                 return Ok(());
                             }
                         }
@@ -1178,9 +1220,8 @@ pub async fn stream_native_chat(
                         if frame.is_empty() {
                             continue;
                         }
-                        let value: Value = serde_json::from_slice(&frame).map_err(|err| {
-                            format!("AWS Claude EventStream 载荷解析失败：{err}")
-                        })?;
+                        let value: Value = serde_json::from_slice(&frame)
+                            .map_err(|err| format!("AWS Claude EventStream 载荷解析失败：{err}"))?;
                         let events = parse_bedrock_event(&value)?;
                         if !handle_normalized_events(&mut emitter, &usage_cell_for_task, events)? {
                             return Ok(());

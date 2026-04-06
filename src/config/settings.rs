@@ -825,6 +825,8 @@ pub struct ServerConfig {
     pub port: u16,
     #[serde(default)]
     pub admin_secret: Option<String>,
+    #[serde(default)]
+    pub pricing_mode: PricingMode,
 }
 
 impl Default for ServerConfig {
@@ -833,7 +835,28 @@ impl Default for ServerConfig {
             host: "0.0.0.0".to_string(),
             port: 8000,
             admin_secret: None,
+            pricing_mode: PricingMode::default(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PricingMode {
+    #[default]
+    Strict,
+    AllowMissing,
+    AdminTestOnly,
+}
+
+impl PricingMode {
+    pub fn allows_missing_price_for_chat(self) -> bool {
+        matches!(self, Self::AllowMissing)
+    }
+
+    #[allow(dead_code)]
+    pub fn allows_missing_price_for_admin_test(self) -> bool {
+        matches!(self, Self::AllowMissing | Self::AdminTestOnly)
     }
 }
 
@@ -921,5 +944,33 @@ impl Settings {
         Err(GatewayError::Config(
             "Configuration file not found. Please create custom-config.toml or config.toml".into(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod pricing_mode_tests {
+    use super::{PricingMode, ServerConfig};
+
+    #[test]
+    fn pricing_mode_defaults_to_strict() {
+        let config = ServerConfig::default();
+        assert_eq!(config.pricing_mode, PricingMode::Strict);
+        assert!(!config.pricing_mode.allows_missing_price_for_chat());
+        assert!(!config.pricing_mode.allows_missing_price_for_admin_test());
+    }
+
+    #[test]
+    fn pricing_mode_deserializes_allow_missing() {
+        let config: ServerConfig = toml::from_str(
+            r#"
+host = "127.0.0.1"
+port = 8080
+pricing_mode = "allow_missing"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.pricing_mode, PricingMode::AllowMissing);
+        assert!(config.pricing_mode.allows_missing_price_for_chat());
     }
 }

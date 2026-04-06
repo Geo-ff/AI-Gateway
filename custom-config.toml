@@ -22,6 +22,11 @@ strategy = "round_robin"
 host = "0.0.0.0"
 # HTTP 服务监听端口
 port = 8080
+# 模型价格校验模式：
+# - "strict"：缺少模型价格时拒绝聊天请求（默认，适合正式计费）
+# - "allow_missing"：缺少模型价格时允许请求继续，但日志/统计不会伪造金额
+# - "admin_test_only"：为后续管理端测试场景预留；当前聊天主链路仍按 strict 处理
+# pricing_mode = "strict"
 # 可选：管理员 HTTP 访问密钥（例如用于保护敏感管理接口），为空表示不启用
 # admin_secret = "your-admin-secret"
 

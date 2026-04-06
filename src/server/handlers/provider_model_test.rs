@@ -710,8 +710,14 @@ mod tests {
     async fn manual_model_priority_provider_skips_auto_discovery() {
         let cases = [
             (ProviderType::MiniMax, "https://api.minimax.io/v1"),
-            (ProviderType::BaiduErnieV2, "https://qianfan.baidubce.com/v2"),
-            (ProviderType::XfSpark, "https://spark-api-open.xf-yun.com/v1"),
+            (
+                ProviderType::BaiduErnieV2,
+                "https://qianfan.baidubce.com/v2",
+            ),
+            (
+                ProviderType::XfSpark,
+                "https://spark-api-open.xf-yun.com/v1",
+            ),
             (ProviderType::ThreeSixtyZhinao, "https://api.360.cn/v1"),
             (ProviderType::StepFun, "https://api.stepfun.com/v1"),
         ];
