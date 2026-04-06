@@ -742,6 +742,36 @@ mod tests {
             )
             .await
             .unwrap();
+        logger
+            .insert_provider(&Provider {
+                name: "p_sync_moonshot".into(),
+                display_name: Some("Moonshot Sync Provider".into()),
+                collection: DEFAULT_PROVIDER_COLLECTION.into(),
+                api_type: ProviderType::Moonshot,
+                api_type_raw: None,
+                base_url: "https://api.moonshot.cn/v1".into(),
+                api_keys: Vec::new(),
+                models_endpoint: None,
+                provider_config: ProviderConfig::default(),
+                enabled: true,
+                created_at: None,
+                updated_at: None,
+            })
+            .await
+            .unwrap();
+        logger
+            .cache_models(
+                "p_sync_moonshot",
+                &[Model {
+                    id: "kimi-k2-0711-preview".into(),
+                    object: "model".into(),
+                    created: 0,
+                    owned_by: "moonshot".into(),
+                    display_name: None,
+                }],
+            )
+            .await
+            .unwrap();
 
         let fingerprint = "test-fp".to_string();
         let now = Utc::now();
@@ -958,6 +988,36 @@ mod tests {
         assert_eq!(view.source, Some(ModelPriceSource::Auto));
         assert_eq!(view.status, ModelPriceStatus::Active);
         assert_eq!(view.currency.as_deref(), Some("USD"));
+        assert!(view.synced_at.is_some());
+        assert!(view.expires_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn admin_sync_single_model_supports_moonshot_provider() {
+        let h = harness().await;
+        let headers = auth_headers(&h.token);
+
+        let Json(response) = sync_single_model_price(
+            Path((
+                "p_sync_moonshot".to_string(),
+                "kimi-k2-0711-preview".to_string(),
+            )),
+            State(h.state.clone()),
+            headers,
+            Json(SyncSingleModelPricePayload::default()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.outcome, SingleModelSyncOutcome::Synced);
+        let view = response.price;
+        assert_eq!(view.provider, "p_sync_moonshot");
+        assert_eq!(view.model, "kimi-k2-0711-preview");
+        assert_eq!(view.source, Some(ModelPriceSource::Auto));
+        assert_eq!(view.status, ModelPriceStatus::Active);
+        assert_eq!(view.currency.as_deref(), Some("CNY"));
+        assert_eq!(view.prompt_price_per_million, Some(4.0));
+        assert_eq!(view.completion_price_per_million, Some(16.0));
         assert!(view.synced_at.is_some());
         assert!(view.expires_at.is_some());
     }

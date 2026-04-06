@@ -1,6 +1,7 @@
 /target
 .DS_Store
 .env
+.playwright-cli/
 scripts/smoke_p0_p1.sh
 .gitignore
 scripts/_smoke/smoke_20260111T143645Z_117341.md

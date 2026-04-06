@@ -268,6 +268,41 @@ const ALIBABA_QWEN_PRICE_SOURCE: &[StaticPriceDefinition] = &[
         currency: "CNY",
         model_type: "chat",
     },
+    StaticPriceDefinition {
+        model: "qwen-plus",
+        prompt_price_per_million: 2.0,
+        completion_price_per_million: 12.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "qwen-plus-latest",
+        prompt_price_per_million: 2.0,
+        completion_price_per_million: 12.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "qwen-plus-2025-12-01",
+        prompt_price_per_million: 2.0,
+        completion_price_per_million: 12.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "qwen-flash",
+        prompt_price_per_million: 0.15,
+        completion_price_per_million: 1.5,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "qwen-flash-2025-07-28",
+        prompt_price_per_million: 0.15,
+        completion_price_per_million: 1.5,
+        currency: "CNY",
+        model_type: "chat",
+    },
 ];
 
 const TENCENT_HUNYUAN_PRICE_SOURCE: &[StaticPriceDefinition] = &[
@@ -310,6 +345,89 @@ const TENCENT_HUNYUAN_PRICE_SOURCE: &[StaticPriceDefinition] = &[
         model: "hunyuan-a13b",
         prompt_price_per_million: 0.5,
         completion_price_per_million: 2.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+];
+
+const MOONSHOT_PRICE_SOURCE: &[StaticPriceDefinition] = &[
+    StaticPriceDefinition {
+        model: "kimi-k2.5",
+        prompt_price_per_million: 4.0,
+        completion_price_per_million: 21.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "kimi-k2-0905-preview",
+        prompt_price_per_million: 4.0,
+        completion_price_per_million: 16.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "kimi-k2-0711-preview",
+        prompt_price_per_million: 4.0,
+        completion_price_per_million: 16.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "kimi-k2-turbo-preview",
+        prompt_price_per_million: 8.0,
+        completion_price_per_million: 58.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "kimi-k2-thinking",
+        prompt_price_per_million: 4.0,
+        completion_price_per_million: 16.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "kimi-k2-thinking-turbo",
+        prompt_price_per_million: 8.0,
+        completion_price_per_million: 58.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "moonshot-v1-8k",
+        prompt_price_per_million: 2.0,
+        completion_price_per_million: 10.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "moonshot-v1-32k",
+        prompt_price_per_million: 5.0,
+        completion_price_per_million: 20.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "moonshot-v1-128k",
+        prompt_price_per_million: 10.0,
+        completion_price_per_million: 30.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+];
+
+const DOUBAO_PRICE_SOURCE: &[StaticPriceDefinition] = &[
+    StaticPriceDefinition {
+        model: "doubao-seed-2.0-pro",
+        prompt_price_per_million: 3.2,
+        completion_price_per_million: 16.0,
+        currency: "CNY",
+        model_type: "chat",
+    },
+    StaticPriceDefinition {
+        model: "doubao-seed-2.0-lite",
+        prompt_price_per_million: 0.6,
+        completion_price_per_million: 3.6,
         currency: "CNY",
         model_type: "chat",
     },
@@ -526,6 +644,8 @@ fn fetch_price_source(provider: &Provider) -> Result<&'static [StaticPriceDefini
         ProviderType::DeepSeek => Ok(DEEPSEEK_PRICE_SOURCE),
         ProviderType::AlibabaQwen => Ok(ALIBABA_QWEN_PRICE_SOURCE),
         ProviderType::TencentHunyuan => Ok(TENCENT_HUNYUAN_PRICE_SOURCE),
+        ProviderType::Moonshot => Ok(MOONSHOT_PRICE_SOURCE),
+        ProviderType::Doubao => Ok(DOUBAO_PRICE_SOURCE),
         other => Err(format!(
             "provider '{}' with api_type '{}' is not supported by the built-in pricing sync source",
             provider.name,
@@ -708,6 +828,40 @@ mod tests {
             })
             .await
             .unwrap();
+        logger
+            .insert_provider(&Provider {
+                name: "moonshot-provider".into(),
+                display_name: Some("Moonshot Provider".into()),
+                collection: DEFAULT_PROVIDER_COLLECTION.into(),
+                api_type: ProviderType::Moonshot,
+                api_type_raw: None,
+                base_url: "https://api.moonshot.cn/v1".into(),
+                api_keys: Vec::new(),
+                models_endpoint: None,
+                provider_config: ProviderConfig::default(),
+                enabled: true,
+                created_at: None,
+                updated_at: None,
+            })
+            .await
+            .unwrap();
+        logger
+            .insert_provider(&Provider {
+                name: "doubao-provider".into(),
+                display_name: Some("Doubao Provider".into()),
+                collection: DEFAULT_PROVIDER_COLLECTION.into(),
+                api_type: ProviderType::Doubao,
+                api_type_raw: None,
+                base_url: "https://ark.cn-beijing.volces.com/api/v3".into(),
+                api_keys: Vec::new(),
+                models_endpoint: None,
+                provider_config: ProviderConfig::default(),
+                enabled: true,
+                created_at: None,
+                updated_at: None,
+            })
+            .await
+            .unwrap();
 
         logger
             .cache_models(
@@ -739,6 +893,32 @@ mod tests {
                     object: "model".into(),
                     created: 0,
                     owned_by: "openai".into(),
+                    display_name: None,
+                }],
+            )
+            .await
+            .unwrap();
+        logger
+            .cache_models(
+                "moonshot-provider",
+                &[Model {
+                    id: "kimi-k2-0711-preview".into(),
+                    object: "model".into(),
+                    created: 0,
+                    owned_by: "moonshot".into(),
+                    display_name: None,
+                }],
+            )
+            .await
+            .unwrap();
+        logger
+            .cache_models(
+                "doubao-provider",
+                &[Model {
+                    id: "doubao-seed-2.0-pro".into(),
+                    object: "model".into(),
+                    created: 0,
+                    owned_by: "doubao".into(),
                     display_name: None,
                 }],
             )
@@ -991,6 +1171,20 @@ mod tests {
             (ProviderType::DeepSeek, "deepseek-chat", "USD", 0.28, 0.42),
             (ProviderType::AlibabaQwen, "qwen3-max", "CNY", 2.5, 10.0),
             (ProviderType::TencentHunyuan, "Hunyuan-T1", "CNY", 1.0, 4.0),
+            (
+                ProviderType::Moonshot,
+                "kimi-k2-0711-preview",
+                "CNY",
+                4.0,
+                16.0,
+            ),
+            (
+                ProviderType::Doubao,
+                "doubao-seed-2.0-pro",
+                "CNY",
+                3.2,
+                16.0,
+            ),
         ];
 
         for (api_type, model, currency, prompt_price, completion_price) in providers {
@@ -1106,6 +1300,70 @@ mod tests {
             .unwrap();
         assert_eq!(record.status, ModelPriceStatus::Stale);
         assert_eq!(record.source, ModelPriceSource::Auto);
+    }
+
+    #[tokio::test]
+    async fn sync_inserts_moonshot_price_for_cached_model() {
+        let h = harness().await;
+
+        let report = sync_model_prices(
+            &h.state,
+            PricingSyncRequest {
+                provider: Some("moonshot-provider".into()),
+                model: None,
+                override_manual: false,
+                dry_run: false,
+                force: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.inserted, 1);
+        let record = h
+            .state
+            .log_store
+            .get_model_price("moonshot-provider", "kimi-k2-0711-preview")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.source, ModelPriceSource::Auto);
+        assert_eq!(record.status, ModelPriceStatus::Active);
+        assert_eq!(record.currency.as_deref(), Some("CNY"));
+        assert_eq!(record.prompt_price_per_million, 4.0);
+        assert_eq!(record.completion_price_per_million, 16.0);
+    }
+
+    #[tokio::test]
+    async fn sync_inserts_doubao_price_for_cached_model() {
+        let h = harness().await;
+
+        let report = sync_model_prices(
+            &h.state,
+            PricingSyncRequest {
+                provider: Some("doubao-provider".into()),
+                model: None,
+                override_manual: false,
+                dry_run: false,
+                force: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.inserted, 1);
+        let record = h
+            .state
+            .log_store
+            .get_model_price("doubao-provider", "doubao-seed-2.0-pro")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.source, ModelPriceSource::Auto);
+        assert_eq!(record.status, ModelPriceStatus::Active);
+        assert_eq!(record.currency.as_deref(), Some("CNY"));
+        assert_eq!(record.prompt_price_per_million, 3.2);
+        assert_eq!(record.completion_price_per_million, 16.0);
     }
 
     #[tokio::test]
