@@ -218,7 +218,10 @@ fn sse_chat_completion_to_json(bytes: &[u8]) -> Result<Vec<u8>, GatewayError> {
     let mut usage: Option<Value> = None;
 
     fn usage_missing(value: &Option<Value>) -> bool {
-        value.as_ref().is_none_or(Value::is_null)
+        match value.as_ref() {
+            None => true,
+            Some(inner) => inner.is_null(),
+        }
     }
 
     fn collect_text_fragments(value: &Value) -> Vec<String> {
@@ -397,18 +400,18 @@ fn sse_chat_completion_to_json(bytes: &[u8]) -> Result<Vec<u8>, GatewayError> {
                         .and_then(|x| x.as_str())
                         .map(|s| s.to_string());
                 }
-                if content.is_empty()
-                    && let Some(message_content) = message.get("content")
-                {
-                    append_fragments(&mut content, collect_text_fragments(message_content));
+                if content.is_empty() {
+                    if let Some(message_content) = message.get("content") {
+                        append_fragments(&mut content, collect_text_fragments(message_content));
+                    }
                 }
                 if reasoning.is_empty() {
-                    if let Some(r) = message
+                    let reasoning_text = message
                         .get("reasoning_content")
                         .and_then(|x| x.as_str())
                         .or_else(|| message.get("reasoning").and_then(|x| x.as_str()))
-                        .or_else(|| message.get("thinking").and_then(|x| x.as_str()))
-                    {
+                        .or_else(|| message.get("thinking").and_then(|x| x.as_str()));
+                    if let Some(r) = reasoning_text {
                         reasoning = r.to_string();
                     }
                 }

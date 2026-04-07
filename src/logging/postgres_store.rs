@@ -7,7 +7,9 @@ use tokio_postgres::{Client, NoTls, Row};
 use crate::config::settings::{KeyLogStrategy, Provider, ProviderConfig, ProviderType};
 use crate::error::GatewayError;
 use crate::logging::time::{parse_datetime_string, to_beijing_string, to_iso8601_utc_string};
-use crate::logging::types::{ProviderOpLog, RequestLogDetailRecord, StoredCompareRun};
+use crate::logging::types::{
+    ProviderOpLog, RequestLogDetailRecord, StoredCompareRun, StoredRequestLabSource,
+};
 use crate::logging::{
     CachedModel, ModelPriceRecord, ModelPriceSource, ModelPriceStatus, ModelPriceUpsert,
     ProviderKeyStatsAgg, RequestLog,
@@ -367,6 +369,33 @@ impl PgLogStore {
         let _ = client
             .execute(
                 "CREATE INDEX IF NOT EXISTS compare_runs_user_id_created_at_idx ON compare_runs (user_id, created_at)",
+                &[],
+            )
+            .await;
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS request_lab_sources (
+                user_id TEXT NOT NULL,
+                source_request_id BIGINT NOT NULL,
+                requested_model TEXT,
+                effective_model TEXT,
+                provider TEXT,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                status_code INTEGER NOT NULL,
+                source_timestamp TEXT NOT NULL,
+                added_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, source_request_id)
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| {
+                GatewayError::Config(format!("Failed to init request_lab_sources: {}", e))
+            })?;
+        let _ = client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS request_lab_sources_user_id_added_at_idx ON request_lab_sources (user_id, added_at)",
                 &[],
             )
             .await;
@@ -1127,6 +1156,121 @@ impl RequestLogStore for PgLogStore {
                 created_at: pg_row_datetime_or_now(&row, 3),
                 result_json: pg_row_string(&row, 4),
             }))
+        })
+    }
+
+    fn upsert_request_lab_source<'a>(
+        &'a self,
+        source: StoredRequestLabSource,
+    ) -> BoxFuture<'a, rusqlite::Result<StoredRequestLabSource>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            client
+                .execute(
+                    "INSERT INTO request_lab_sources (
+                        user_id, source_request_id, requested_model, effective_model, provider,
+                        method, path, status_code, source_timestamp, added_at
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                    ON CONFLICT (user_id, source_request_id) DO UPDATE SET
+                        requested_model = EXCLUDED.requested_model,
+                        effective_model = EXCLUDED.effective_model,
+                        provider = EXCLUDED.provider,
+                        method = EXCLUDED.method,
+                        path = EXCLUDED.path,
+                        status_code = EXCLUDED.status_code,
+                        source_timestamp = EXCLUDED.source_timestamp",
+                    &[
+                        &source.user_id,
+                        &source.source_request_id,
+                        &source.requested_model,
+                        &source.effective_model,
+                        &source.provider,
+                        &source.method,
+                        &source.path,
+                        &i32::from(source.status_code),
+                        &to_beijing_string(&source.source_timestamp),
+                        &to_beijing_string(&source.added_at),
+                    ],
+                )
+                .await
+                .map_err(pg_err)?;
+
+            let row = client
+                .query_one(
+                    "SELECT user_id, source_request_id, requested_model, effective_model, provider,
+                            method, path, status_code, source_timestamp, added_at
+                     FROM request_lab_sources
+                     WHERE user_id = $1 AND source_request_id = $2
+                     LIMIT 1",
+                    &[&source.user_id, &source.source_request_id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(StoredRequestLabSource {
+                user_id: pg_row_string(&row, 0),
+                source_request_id: pg_row_i64_or(&row, 1, 0),
+                requested_model: pg_row_opt_string(&row, 2),
+                effective_model: pg_row_opt_string(&row, 3),
+                provider: pg_row_opt_string(&row, 4),
+                method: pg_row_string(&row, 5),
+                path: pg_row_string(&row, 6),
+                status_code: pg_row_i64_or(&row, 7, 0) as u16,
+                source_timestamp: pg_row_datetime_or_now(&row, 8),
+                added_at: pg_row_datetime_or_now(&row, 9),
+            })
+        })
+    }
+
+    fn list_request_lab_sources<'a>(
+        &'a self,
+        user_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<StoredRequestLabSource>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let rows = client
+                .query(
+                    "SELECT user_id, source_request_id, requested_model, effective_model, provider,
+                            method, path, status_code, source_timestamp, added_at
+                     FROM request_lab_sources
+                     WHERE user_id = $1
+                     ORDER BY added_at DESC, source_request_id DESC",
+                    &[&user_id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(rows
+                .into_iter()
+                .map(|row| StoredRequestLabSource {
+                    user_id: pg_row_string(&row, 0),
+                    source_request_id: pg_row_i64_or(&row, 1, 0),
+                    requested_model: pg_row_opt_string(&row, 2),
+                    effective_model: pg_row_opt_string(&row, 3),
+                    provider: pg_row_opt_string(&row, 4),
+                    method: pg_row_string(&row, 5),
+                    path: pg_row_string(&row, 6),
+                    status_code: pg_row_i64_or(&row, 7, 0) as u16,
+                    source_timestamp: pg_row_datetime_or_now(&row, 8),
+                    added_at: pg_row_datetime_or_now(&row, 9),
+                })
+                .collect())
+        })
+    }
+
+    fn delete_request_lab_source<'a>(
+        &'a self,
+        user_id: &'a str,
+        source_request_id: i64,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let affected = client
+                .execute(
+                    "DELETE FROM request_lab_sources WHERE user_id = $1 AND source_request_id = $2",
+                    &[&user_id, &source_request_id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(affected > 0)
         })
     }
 

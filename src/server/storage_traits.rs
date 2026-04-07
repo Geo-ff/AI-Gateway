@@ -4,6 +4,7 @@ use std::pin::Pin;
 use crate::config::settings::{KeyLogStrategy, Provider};
 use crate::logging::types::{
     ModelPriceRecord, ModelPriceUpsert, ProviderOpLog, RequestLogDetailRecord, StoredCompareRun,
+    StoredRequestLabSource,
 };
 use crate::logging::{CachedModel, DatabaseLogger, ProviderKeyStatsAgg, RequestLog};
 use crate::providers::openai::Model;
@@ -96,6 +97,19 @@ pub trait RequestLogStore: Send + Sync {
         &'a self,
         id: &'a str,
     ) -> BoxFuture<'a, rusqlite::Result<Option<StoredCompareRun>>>;
+    fn upsert_request_lab_source<'a>(
+        &'a self,
+        source: StoredRequestLabSource,
+    ) -> BoxFuture<'a, rusqlite::Result<StoredRequestLabSource>>;
+    fn list_request_lab_sources<'a>(
+        &'a self,
+        user_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<StoredRequestLabSource>>>;
+    fn delete_request_lab_source<'a>(
+        &'a self,
+        user_id: &'a str,
+        source_request_id: i64,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>>;
     #[allow(dead_code)]
     fn sum_total_tokens_by_client_token<'a>(
         &'a self,
@@ -494,6 +508,31 @@ impl RequestLogStore for DatabaseLogger {
         id: &'a str,
     ) -> BoxFuture<'a, rusqlite::Result<Option<StoredCompareRun>>> {
         Box::pin(async move { self.get_compare_run(id).await })
+    }
+
+    fn upsert_request_lab_source<'a>(
+        &'a self,
+        source: StoredRequestLabSource,
+    ) -> BoxFuture<'a, rusqlite::Result<StoredRequestLabSource>> {
+        Box::pin(async move { self.upsert_request_lab_source(source).await })
+    }
+
+    fn list_request_lab_sources<'a>(
+        &'a self,
+        user_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<StoredRequestLabSource>>> {
+        Box::pin(async move { self.list_request_lab_sources(user_id).await })
+    }
+
+    fn delete_request_lab_source<'a>(
+        &'a self,
+        user_id: &'a str,
+        source_request_id: i64,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            self.delete_request_lab_source(user_id, source_request_id)
+                .await
+        })
     }
 
     fn sum_total_tokens_by_client_token<'a>(

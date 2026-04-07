@@ -82,6 +82,20 @@ pub struct StoredCompareRun {
     pub result_json: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredRequestLabSource {
+    pub user_id: String,
+    pub source_request_id: i64,
+    pub requested_model: Option<String>,
+    pub effective_model: Option<String>,
+    pub provider: Option<String>,
+    pub method: String,
+    pub path: String,
+    pub status_code: u16,
+    pub source_timestamp: DateTime<Utc>,
+    pub added_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderKeyStatsAgg {
     pub api_key: String,

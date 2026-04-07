@@ -3,6 +3,7 @@ use crate::logging::time::{
 };
 use crate::logging::types::{
     ProviderKeyStatsAgg, RequestLog, RequestLogDetailRecord, StoredCompareRun,
+    StoredRequestLabSource,
 };
 use crate::server::storage_traits::{
     AdminPublicKeyRecord, LoginCodeRecord, TuiSessionRecord, WebSessionRecord,
@@ -963,6 +964,26 @@ impl DatabaseLogger {
             "CREATE INDEX IF NOT EXISTS compare_runs_user_id_created_at_idx ON compare_runs(user_id, created_at)",
             [],
         );
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS request_lab_sources (
+                user_id TEXT NOT NULL,
+                source_request_id INTEGER NOT NULL,
+                requested_model TEXT,
+                effective_model TEXT,
+                provider TEXT,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                status_code INTEGER NOT NULL,
+                source_timestamp TEXT NOT NULL,
+                added_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, source_request_id)
+            )",
+            [],
+        )?;
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS request_lab_sources_user_id_added_at_idx ON request_lab_sources(user_id, added_at)",
+            [],
+        );
         // Pricing table for models
         conn.execute(
             "CREATE TABLE IF NOT EXISTS model_prices (
@@ -1405,6 +1426,113 @@ impl DatabaseLogger {
             })
         })
         .optional()
+    }
+
+    pub async fn upsert_request_lab_source(
+        &self,
+        source: StoredRequestLabSource,
+    ) -> Result<StoredRequestLabSource> {
+        let conn = self.connection.lock().await;
+        conn.execute(
+            "INSERT INTO request_lab_sources (
+                user_id, source_request_id, requested_model, effective_model, provider,
+                method, path, status_code, source_timestamp, added_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ON CONFLICT(user_id, source_request_id) DO UPDATE SET
+                requested_model = excluded.requested_model,
+                effective_model = excluded.effective_model,
+                provider = excluded.provider,
+                method = excluded.method,
+                path = excluded.path,
+                status_code = excluded.status_code,
+                source_timestamp = excluded.source_timestamp",
+            rusqlite::params![
+                &source.user_id,
+                &source.source_request_id,
+                &source.requested_model,
+                &source.effective_model,
+                &source.provider,
+                &source.method,
+                &source.path,
+                i64::from(source.status_code),
+                to_beijing_string(&source.source_timestamp),
+                to_beijing_string(&source.added_at),
+            ],
+        )?;
+
+        let mut stmt = conn.prepare(
+            "SELECT user_id, source_request_id, requested_model, effective_model, provider,
+                    method, path, status_code, source_timestamp, added_at
+             FROM request_lab_sources
+             WHERE user_id = ?1 AND source_request_id = ?2
+             LIMIT 1",
+        )?;
+        stmt.query_row(
+            rusqlite::params![source.user_id, source.source_request_id],
+            |row| {
+                let source_timestamp: String = row.get(8)?;
+                let added_at: String = row.get(9)?;
+                Ok(StoredRequestLabSource {
+                    user_id: row.get(0)?,
+                    source_request_id: row.get(1)?,
+                    requested_model: row.get(2)?,
+                    effective_model: row.get(3)?,
+                    provider: row.get(4)?,
+                    method: row.get(5)?,
+                    path: row.get(6)?,
+                    status_code: row.get::<_, i64>(7)? as u16,
+                    source_timestamp: parse_beijing_string(&source_timestamp)
+                        .unwrap_or_else(|_| chrono::Utc::now()),
+                    added_at: parse_beijing_string(&added_at)
+                        .unwrap_or_else(|_| chrono::Utc::now()),
+                })
+            },
+        )
+    }
+
+    pub async fn list_request_lab_sources(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<StoredRequestLabSource>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT user_id, source_request_id, requested_model, effective_model, provider,
+                    method, path, status_code, source_timestamp, added_at
+             FROM request_lab_sources
+             WHERE user_id = ?1
+             ORDER BY added_at DESC, source_request_id DESC",
+        )?;
+        let rows = stmt.query_map([user_id], |row| {
+            let source_timestamp: String = row.get(8)?;
+            let added_at: String = row.get(9)?;
+            Ok(StoredRequestLabSource {
+                user_id: row.get(0)?,
+                source_request_id: row.get(1)?,
+                requested_model: row.get(2)?,
+                effective_model: row.get(3)?,
+                provider: row.get(4)?,
+                method: row.get(5)?,
+                path: row.get(6)?,
+                status_code: row.get::<_, i64>(7)? as u16,
+                source_timestamp: parse_beijing_string(&source_timestamp)
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+                added_at: parse_beijing_string(&added_at).unwrap_or_else(|_| chrono::Utc::now()),
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub async fn delete_request_lab_source(
+        &self,
+        user_id: &str,
+        source_request_id: i64,
+    ) -> Result<bool> {
+        let conn = self.connection.lock().await;
+        let affected = conn.execute(
+            "DELETE FROM request_lab_sources WHERE user_id = ?1 AND source_request_id = ?2",
+            rusqlite::params![user_id, source_request_id],
+        )?;
+        Ok(affected > 0)
     }
 
     #[allow(dead_code)]

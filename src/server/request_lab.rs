@@ -15,6 +15,7 @@ use crate::error::GatewayError;
 use crate::logging::RequestLog;
 use crate::logging::types::{
     REQ_TYPE_CHAT_COMPARE, REQ_TYPE_CHAT_REPLAY, RequestLogDetailRecord, StoredCompareRun,
+    StoredRequestLabSource,
 };
 use crate::providers::openai::ChatCompletionRequest;
 use crate::providers::openai::types::RawAndTypedChatCompletion;
@@ -61,6 +62,30 @@ pub struct CompareRequest {
     pub temperature: Option<serde_json::Value>,
     #[serde(default)]
     pub max_tokens: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AddRequestLabSourceRequest {
+    pub source_request_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RequestLabSourceResponse {
+    pub source_request_id: i64,
+    pub requested_model: Option<String>,
+    pub effective_model: Option<String>,
+    pub provider: Option<String>,
+    pub method: String,
+    pub path: String,
+    pub status: String,
+    pub status_code: u16,
+    pub source_timestamp: String,
+    pub added_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteRequestLabSourceResponse {
+    pub deleted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -334,6 +359,57 @@ fn detail_response(
         first_token_latency_ms: detail.as_ref().and_then(|item| item.first_token_latency_ms),
         error_message: log.error_message,
     })
+}
+
+fn ensure_request_can_be_source(
+    log: &RequestLog,
+    detail: Option<&RequestLogDetailRecord>,
+) -> Result<(), GatewayError> {
+    if !log.request_type.starts_with("chat_") {
+        return Err(GatewayError::Config("当前请求类型暂不支持加入实验".into()));
+    }
+    let detail =
+        detail.ok_or_else(|| GatewayError::Config("请求快照缺失，当前日志不可加入实验".into()))?;
+    let _ = snapshot_from_detail(detail)?;
+    Ok(())
+}
+
+fn stored_request_lab_source_from_log(
+    user_id: String,
+    log: &RequestLog,
+    added_at: DateTime<Utc>,
+) -> StoredRequestLabSource {
+    StoredRequestLabSource {
+        user_id,
+        source_request_id: log.id.unwrap_or_default(),
+        requested_model: log.requested_model.clone(),
+        effective_model: log.effective_model.clone().or_else(|| log.model.clone()),
+        provider: log.provider.clone(),
+        method: log.method.clone(),
+        path: log.path.clone(),
+        status_code: log.status_code,
+        source_timestamp: log.timestamp,
+        added_at,
+    }
+}
+
+fn request_lab_source_response(source: StoredRequestLabSource) -> RequestLabSourceResponse {
+    RequestLabSourceResponse {
+        source_request_id: source.source_request_id,
+        requested_model: source.requested_model,
+        effective_model: source.effective_model,
+        provider: source.provider,
+        method: source.method,
+        path: source.path,
+        status: if source.status_code < 400 {
+            "success".to_string()
+        } else {
+            "failed".to_string()
+        },
+        status_code: source.status_code,
+        source_timestamp: source.source_timestamp.to_rfc3339(),
+        added_at: source.added_at.to_rfc3339(),
+    }
 }
 
 pub async fn execute_logged_chat_request(
@@ -640,6 +716,57 @@ pub async fn replay_my_request(
     Ok(Json(replay_response(request_id, requested_model, &result)))
 }
 
+pub async fn add_request_lab_source(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<AddRequestLabSourceRequest>,
+) -> Result<Json<RequestLabSourceResponse>, GatewayError> {
+    let claims = require_user(&headers)?;
+    let (log, detail, _) =
+        load_request_log_for_user(&app_state, &claims, payload.source_request_id).await?;
+    ensure_request_can_be_source(&log, detail.as_ref())?;
+
+    let stored = app_state
+        .log_store
+        .upsert_request_lab_source(stored_request_lab_source_from_log(
+            claims.sub,
+            &log,
+            Utc::now(),
+        ))
+        .await
+        .map_err(GatewayError::Db)?;
+    Ok(Json(request_lab_source_response(stored)))
+}
+
+pub async fn list_request_lab_sources(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<RequestLabSourceResponse>>, GatewayError> {
+    let claims = require_user(&headers)?;
+    let items = app_state
+        .log_store
+        .list_request_lab_sources(&claims.sub)
+        .await
+        .map_err(GatewayError::Db)?;
+    Ok(Json(
+        items.into_iter().map(request_lab_source_response).collect(),
+    ))
+}
+
+pub async fn delete_request_lab_source(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(source_request_id): Path<i64>,
+) -> Result<Json<DeleteRequestLabSourceResponse>, GatewayError> {
+    let claims = require_user(&headers)?;
+    let deleted = app_state
+        .log_store
+        .delete_request_lab_source(&claims.sub, source_request_id)
+        .await
+        .map_err(GatewayError::Db)?;
+    Ok(Json(DeleteRequestLabSourceResponse { deleted }))
+}
+
 pub async fn create_compare(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -651,10 +778,10 @@ pub async fn create_compare(
             "模型对比仅支持选择 2 到 3 个模型".into(),
         ));
     }
-    let (_, detail, token) =
+    let (log, detail, token) =
         load_request_log_for_user(&app_state, &claims, payload.source_request_id).await?;
-    let detail =
-        detail.ok_or_else(|| GatewayError::Config("请求快照缺失，当前日志不可加入实验".into()))?;
+    ensure_request_can_be_source(&log, detail.as_ref())?;
+    let detail = detail.expect("validated source detail must exist");
     let token =
         token.ok_or_else(|| GatewayError::Config("当前请求缺少可用令牌，无法加入实验".into()))?;
     let snapshot = snapshot_from_detail(&detail)?;

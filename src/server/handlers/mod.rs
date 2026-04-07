@@ -261,6 +261,15 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/me/token/usage", get(me_token_info::my_token_usage))
         .route("/me/logs/requests", get(me_logs::list_my_request_logs))
         .route(
+            "/me/request-lab/sources",
+            get(crate::server::request_lab::list_request_lab_sources)
+                .post(crate::server::request_lab::add_request_lab_source),
+        )
+        .route(
+            "/me/request-lab/sources/{id}",
+            delete(crate::server::request_lab::delete_request_lab_source),
+        )
+        .route(
             "/me/requests/{id}",
             get(crate::server::request_lab::get_my_request_detail),
         )

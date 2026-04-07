@@ -50,3 +50,13 @@ docs/request-lab/03-request-lab-compare.svg
 docs/request-lab/04-request-trace-drawer.svg
 docs/request-lab/05-request-lab-dialogs.svg
 docs/request-lab/06-request-lab-components.svg
+docs/cost-center/README.md
+.gitignore
+docs/cost-center/07-request-detail-budget-extension.svg
+docs/cost-center/06-request-lab-compare-cost-minimal.svg
+docs/cost-center/05-cost-center-components.svg
+.gitignore
+docs/cost-center/04-request-lab-cost-sync.svg
+docs/cost-center/03-budget-events.svg
+docs/cost-center/02-budget-rule-drawer.svg
+docs/cost-center/01-cost-center-main.svg
