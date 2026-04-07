@@ -96,6 +96,22 @@ pub struct StoredRequestLabSource {
     pub added_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredRequestLabSnapshot {
+    pub id: String,
+    pub user_id: String,
+    pub source_request_id: i64,
+    pub compare_run_id: String,
+    pub note: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub snapshot_json: String,
+    pub source_requested_model: Option<String>,
+    pub source_effective_model: Option<String>,
+    pub models: Vec<String>,
+    pub success_count: u32,
+    pub failure_count: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderKeyStatsAgg {
     pub api_key: String,

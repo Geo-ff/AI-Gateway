@@ -547,6 +547,96 @@ components:
           items:
             $ref: '#/components/schemas/CompareItemResponse'
 
+    CreateRequestLabSnapshotRequest:
+      type: object
+      required:
+        - source_request_id
+        - compare_run_id
+      properties:
+        source_request_id:
+          type: integer
+          format: int64
+        compare_run_id:
+          type: string
+        note:
+          type: string
+          nullable: true
+
+    RequestLabSnapshotItemsSummary:
+      type: object
+      properties:
+        success_count:
+          type: integer
+        failure_count:
+          type: integer
+        total_count:
+          type: integer
+
+    RequestLabSnapshotListItemResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        note:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        source_request_id:
+          type: integer
+          format: int64
+        source_requested_model:
+          type: string
+          nullable: true
+        source_effective_model:
+          type: string
+          nullable: true
+        models:
+          type: array
+          items:
+            type: string
+        items:
+          $ref: '#/components/schemas/RequestLabSnapshotItemsSummary'
+
+    RequestLabSnapshotDetailResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        note:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        source_request_id:
+          type: integer
+          format: int64
+        compare_run_id:
+          type: string
+        source_requested_model:
+          type: string
+          nullable: true
+        source_effective_model:
+          type: string
+          nullable: true
+        models:
+          type: array
+          items:
+            type: string
+        items:
+          $ref: '#/components/schemas/RequestLabSnapshotItemsSummary'
+        snapshot_json:
+          type: object
+          additionalProperties: true
+
+    DeleteRequestLabSnapshotResponse:
+      type: object
+      properties:
+        deleted:
+          type: boolean
+
     OperationLogEntry:
       type: object
       properties:
@@ -3309,6 +3399,160 @@ paths:
                 $ref: '#/components/schemas/Error'
         '404':
           description: 对比记录不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /me/request-lab/snapshots:
+    get:
+      summary: 获取请求实验室历史快照列表
+      operationId: listRequestLabSnapshots
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: keyword
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 关键字搜索（备注 / 来源模型 / 对比模型）
+        - name: compare_run_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 按 compare run 精确过滤，用于判断某次对比是否已保存
+        - name: sort
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+          description: 创建时间排序，默认 desc
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RequestLabSnapshotListItemResponse'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      summary: 保存请求实验室历史快照
+      operationId: createRequestLabSnapshot
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRequestLabSnapshotRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestLabSnapshotDetailResponse'
+        '400':
+          description: 参数非法、对比结果与来源请求不匹配
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 无权保存该对比结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对比记录不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /me/request-lab/snapshots/{id}:
+    get:
+      summary: 获取请求实验室历史快照详情
+      operationId: getRequestLabSnapshot
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestLabSnapshotDetailResponse'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 无权访问该历史快照
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 历史快照不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: 删除请求实验室历史快照
+      operationId: deleteRequestLabSnapshot
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteRequestLabSnapshotResponse'
+        '401':
+          description: 未登录/Token 无效/过期
           content:
             application/json:
               schema:

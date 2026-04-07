@@ -3,7 +3,7 @@ use crate::logging::time::{
 };
 use crate::logging::types::{
     ProviderKeyStatsAgg, RequestLog, RequestLogDetailRecord, StoredCompareRun,
-    StoredRequestLabSource,
+    StoredRequestLabSnapshot, StoredRequestLabSource,
 };
 use crate::server::storage_traits::{
     AdminPublicKeyRecord, LoginCodeRecord, TuiSessionRecord, WebSessionRecord,
@@ -984,6 +984,49 @@ impl DatabaseLogger {
             "CREATE INDEX IF NOT EXISTS request_lab_sources_user_id_added_at_idx ON request_lab_sources(user_id, added_at)",
             [],
         );
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS request_lab_snapshots (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                source_request_id INTEGER NOT NULL,
+                compare_run_id TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                source_requested_model TEXT,
+                source_effective_model TEXT,
+                models_json TEXT NOT NULL,
+                success_count INTEGER NOT NULL DEFAULT 0,
+                failure_count INTEGER NOT NULL DEFAULT 0
+            )",
+            [],
+        )?;
+        let _ = conn.execute(
+            "DELETE FROM request_lab_snapshots AS current
+             WHERE EXISTS (
+                 SELECT 1
+                 FROM request_lab_snapshots AS newer
+                 WHERE newer.user_id = current.user_id
+                   AND newer.compare_run_id = current.compare_run_id
+                   AND (
+                       newer.created_at > current.created_at
+                       OR (newer.created_at = current.created_at AND newer.rowid > current.rowid)
+                   )
+             )",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS request_lab_snapshots_user_id_created_at_idx ON request_lab_snapshots(user_id, created_at)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS request_lab_snapshots_user_id_compare_run_id_idx ON request_lab_snapshots(user_id, compare_run_id)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS request_lab_snapshots_user_id_compare_run_uidx ON request_lab_snapshots(user_id, compare_run_id)",
+            [],
+        );
         // Pricing table for models
         conn.execute(
             "CREATE TABLE IF NOT EXISTS model_prices (
@@ -1531,6 +1574,156 @@ impl DatabaseLogger {
         let affected = conn.execute(
             "DELETE FROM request_lab_sources WHERE user_id = ?1 AND source_request_id = ?2",
             rusqlite::params![user_id, source_request_id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    pub async fn save_request_lab_snapshot(&self, snapshot: StoredRequestLabSnapshot) -> Result<()> {
+        let conn = self.connection.lock().await;
+        conn.execute(
+            "INSERT INTO request_lab_snapshots (
+                id, user_id, source_request_id, compare_run_id, note, created_at,
+                snapshot_json, source_requested_model, source_effective_model,
+                models_json, success_count, failure_count
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            ON CONFLICT(user_id, compare_run_id) DO UPDATE SET
+                source_request_id = excluded.source_request_id,
+                note = excluded.note,
+                snapshot_json = excluded.snapshot_json,
+                source_requested_model = excluded.source_requested_model,
+                source_effective_model = excluded.source_effective_model,
+                models_json = excluded.models_json,
+                success_count = excluded.success_count,
+                failure_count = excluded.failure_count",
+            rusqlite::params![
+                snapshot.id,
+                snapshot.user_id,
+                snapshot.source_request_id,
+                snapshot.compare_run_id,
+                snapshot.note,
+                to_beijing_string(&snapshot.created_at),
+                snapshot.snapshot_json,
+                snapshot.source_requested_model,
+                snapshot.source_effective_model,
+                serde_json::to_string(&snapshot.models).unwrap_or_else(|_| "[]".to_string()),
+                i64::from(snapshot.success_count),
+                i64::from(snapshot.failure_count),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub async fn list_request_lab_snapshots(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<StoredRequestLabSnapshot>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, source_request_id, compare_run_id, note, created_at,
+                    snapshot_json, source_requested_model, source_effective_model,
+                    models_json, success_count, failure_count
+             FROM request_lab_snapshots
+             WHERE user_id = ?1
+             ORDER BY created_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([user_id], |row| {
+            let created_at: String = row.get(5)?;
+            let models_json: String = row.get(9)?;
+            Ok(StoredRequestLabSnapshot {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                source_request_id: row.get(2)?,
+                compare_run_id: row.get(3)?,
+                note: row.get(4)?,
+                created_at: parse_beijing_string(&created_at)
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+                snapshot_json: row.get(6)?,
+                source_requested_model: row.get(7)?,
+                source_effective_model: row.get(8)?,
+                models: serde_json::from_str(&models_json).unwrap_or_default(),
+                success_count: row.get::<_, i64>(10)? as u32,
+                failure_count: row.get::<_, i64>(11)? as u32,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub async fn get_request_lab_snapshot(
+        &self,
+        id: &str,
+    ) -> Result<Option<StoredRequestLabSnapshot>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, source_request_id, compare_run_id, note, created_at,
+                    snapshot_json, source_requested_model, source_effective_model,
+                    models_json, success_count, failure_count
+             FROM request_lab_snapshots
+             WHERE id = ?1
+             LIMIT 1",
+        )?;
+        stmt.query_row([id], |row| {
+            let created_at: String = row.get(5)?;
+            let models_json: String = row.get(9)?;
+            Ok(StoredRequestLabSnapshot {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                source_request_id: row.get(2)?,
+                compare_run_id: row.get(3)?,
+                note: row.get(4)?,
+                created_at: parse_beijing_string(&created_at)
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+                snapshot_json: row.get(6)?,
+                source_requested_model: row.get(7)?,
+                source_effective_model: row.get(8)?,
+                models: serde_json::from_str(&models_json).unwrap_or_default(),
+                success_count: row.get::<_, i64>(10)? as u32,
+                failure_count: row.get::<_, i64>(11)? as u32,
+            })
+        })
+        .optional()
+    }
+
+    pub async fn get_request_lab_snapshot_by_compare_run(
+        &self,
+        user_id: &str,
+        compare_run_id: &str,
+    ) -> Result<Option<StoredRequestLabSnapshot>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, source_request_id, compare_run_id, note, created_at,
+                    snapshot_json, source_requested_model, source_effective_model,
+                    models_json, success_count, failure_count
+             FROM request_lab_snapshots
+             WHERE user_id = ?1 AND compare_run_id = ?2
+             LIMIT 1",
+        )?;
+        stmt.query_row(rusqlite::params![user_id, compare_run_id], |row| {
+            let created_at: String = row.get(5)?;
+            let models_json: String = row.get(9)?;
+            Ok(StoredRequestLabSnapshot {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                source_request_id: row.get(2)?,
+                compare_run_id: row.get(3)?,
+                note: row.get(4)?,
+                created_at: parse_beijing_string(&created_at)
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+                snapshot_json: row.get(6)?,
+                source_requested_model: row.get(7)?,
+                source_effective_model: row.get(8)?,
+                models: serde_json::from_str(&models_json).unwrap_or_default(),
+                success_count: row.get::<_, i64>(10)? as u32,
+                failure_count: row.get::<_, i64>(11)? as u32,
+            })
+        })
+        .optional()
+    }
+
+    pub async fn delete_request_lab_snapshot(&self, user_id: &str, id: &str) -> Result<bool> {
+        let conn = self.connection.lock().await;
+        let affected = conn.execute(
+            "DELETE FROM request_lab_snapshots WHERE user_id = ?1 AND id = ?2",
+            rusqlite::params![user_id, id],
         )?;
         Ok(affected > 0)
     }

@@ -8,7 +8,8 @@ use crate::config::settings::{KeyLogStrategy, Provider, ProviderConfig, Provider
 use crate::error::GatewayError;
 use crate::logging::time::{parse_datetime_string, to_beijing_string, to_iso8601_utc_string};
 use crate::logging::types::{
-    ProviderOpLog, RequestLogDetailRecord, StoredCompareRun, StoredRequestLabSource,
+    ProviderOpLog, RequestLogDetailRecord, StoredCompareRun, StoredRequestLabSnapshot,
+    StoredRequestLabSource,
 };
 use crate::logging::{
     CachedModel, ModelPriceRecord, ModelPriceSource, ModelPriceStatus, ModelPriceUpsert,
@@ -396,6 +397,59 @@ impl PgLogStore {
         let _ = client
             .execute(
                 "CREATE INDEX IF NOT EXISTS request_lab_sources_user_id_added_at_idx ON request_lab_sources (user_id, added_at)",
+                &[],
+            )
+            .await;
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS request_lab_snapshots (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                source_request_id BIGINT NOT NULL,
+                compare_run_id TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                source_requested_model TEXT,
+                source_effective_model TEXT,
+                models_json TEXT NOT NULL,
+                success_count INTEGER NOT NULL DEFAULT 0,
+                failure_count INTEGER NOT NULL DEFAULT 0
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| {
+                GatewayError::Config(format!("Failed to init request_lab_snapshots: {}", e))
+            })?;
+        let _ = client
+            .execute(
+                r#"DELETE FROM request_lab_snapshots AS current
+                USING request_lab_snapshots AS newer
+                WHERE current.user_id = newer.user_id
+                  AND current.compare_run_id = newer.compare_run_id
+                  AND (
+                      current.created_at < newer.created_at
+                      OR (current.created_at = newer.created_at AND current.id < newer.id)
+                  )"#,
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS request_lab_snapshots_user_id_created_at_idx ON request_lab_snapshots (user_id, created_at)",
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS request_lab_snapshots_user_id_compare_run_id_idx ON request_lab_snapshots (user_id, compare_run_id)",
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS request_lab_snapshots_user_id_compare_run_uidx ON request_lab_snapshots (user_id, compare_run_id)",
                 &[],
             )
             .await;
@@ -1267,6 +1321,187 @@ impl RequestLogStore for PgLogStore {
                 .execute(
                     "DELETE FROM request_lab_sources WHERE user_id = $1 AND source_request_id = $2",
                     &[&user_id, &source_request_id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(affected > 0)
+        })
+    }
+
+    fn save_request_lab_snapshot<'a>(
+        &'a self,
+        snapshot: StoredRequestLabSnapshot,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let models_json =
+                serde_json::to_string(&snapshot.models).unwrap_or_else(|_| "[]".to_string());
+            client
+                .execute(
+                    "INSERT INTO request_lab_snapshots (
+                        id, user_id, source_request_id, compare_run_id, note, created_at,
+                        snapshot_json, source_requested_model, source_effective_model,
+                        models_json, success_count, failure_count
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                    ON CONFLICT (user_id, compare_run_id) DO UPDATE SET
+                        source_request_id = EXCLUDED.source_request_id,
+                        note = EXCLUDED.note,
+                        snapshot_json = EXCLUDED.snapshot_json,
+                        source_requested_model = EXCLUDED.source_requested_model,
+                        source_effective_model = EXCLUDED.source_effective_model,
+                        models_json = EXCLUDED.models_json,
+                        success_count = EXCLUDED.success_count,
+                        failure_count = EXCLUDED.failure_count",
+                    &[
+                        &snapshot.id,
+                        &snapshot.user_id,
+                        &snapshot.source_request_id,
+                        &snapshot.compare_run_id,
+                        &snapshot.note,
+                        &to_beijing_string(&snapshot.created_at),
+                        &snapshot.snapshot_json,
+                        &snapshot.source_requested_model,
+                        &snapshot.source_effective_model,
+                        &models_json,
+                        &(snapshot.success_count as i32),
+                        &(snapshot.failure_count as i32),
+                    ],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(())
+        })
+    }
+
+    fn list_request_lab_snapshots<'a>(
+        &'a self,
+        user_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<StoredRequestLabSnapshot>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let rows = client
+                .query(
+                    "SELECT id, user_id, source_request_id, compare_run_id, note, created_at,
+                            snapshot_json, source_requested_model, source_effective_model,
+                            models_json, success_count, failure_count
+                     FROM request_lab_snapshots
+                     WHERE user_id = $1
+                     ORDER BY created_at DESC, id DESC",
+                    &[&user_id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(rows
+                .into_iter()
+                .map(|row| StoredRequestLabSnapshot {
+                    id: pg_row_string(&row, 0),
+                    user_id: pg_row_string(&row, 1),
+                    source_request_id: pg_row_i64_or(&row, 2, 0),
+                    compare_run_id: pg_row_string(&row, 3),
+                    note: pg_row_opt_string(&row, 4),
+                    created_at: pg_row_datetime_or_now(&row, 5),
+                    snapshot_json: pg_row_string(&row, 6),
+                    source_requested_model: pg_row_opt_string(&row, 7),
+                    source_effective_model: pg_row_opt_string(&row, 8),
+                    models: serde_json::from_str(
+                        &row.try_get::<usize, String>(9).unwrap_or_else(|_| "[]".to_string()),
+                    )
+                    .unwrap_or_default(),
+                    success_count: pg_row_i64_or(&row, 10, 0) as u32,
+                    failure_count: pg_row_i64_or(&row, 11, 0) as u32,
+                })
+                .collect())
+        })
+    }
+
+    fn get_request_lab_snapshot<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<StoredRequestLabSnapshot>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "SELECT id, user_id, source_request_id, compare_run_id, note, created_at,
+                            snapshot_json, source_requested_model, source_effective_model,
+                            models_json, success_count, failure_count
+                     FROM request_lab_snapshots
+                     WHERE id = $1
+                     LIMIT 1",
+                    &[&id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(row.map(|row| StoredRequestLabSnapshot {
+                id: pg_row_string(&row, 0),
+                user_id: pg_row_string(&row, 1),
+                source_request_id: pg_row_i64_or(&row, 2, 0),
+                compare_run_id: pg_row_string(&row, 3),
+                note: pg_row_opt_string(&row, 4),
+                created_at: pg_row_datetime_or_now(&row, 5),
+                snapshot_json: pg_row_string(&row, 6),
+                source_requested_model: pg_row_opt_string(&row, 7),
+                source_effective_model: pg_row_opt_string(&row, 8),
+                models: serde_json::from_str(
+                    &row.try_get::<usize, String>(9).unwrap_or_else(|_| "[]".to_string()),
+                )
+                .unwrap_or_default(),
+                success_count: pg_row_i64_or(&row, 10, 0) as u32,
+                failure_count: pg_row_i64_or(&row, 11, 0) as u32,
+            }))
+        })
+    }
+
+    fn get_request_lab_snapshot_by_compare_run<'a>(
+        &'a self,
+        user_id: &'a str,
+        compare_run_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<StoredRequestLabSnapshot>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "SELECT id, user_id, source_request_id, compare_run_id, note, created_at,
+                            snapshot_json, source_requested_model, source_effective_model,
+                            models_json, success_count, failure_count
+                     FROM request_lab_snapshots
+                     WHERE user_id = $1 AND compare_run_id = $2
+                     LIMIT 1",
+                    &[&user_id, &compare_run_id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(row.map(|row| StoredRequestLabSnapshot {
+                id: pg_row_string(&row, 0),
+                user_id: pg_row_string(&row, 1),
+                source_request_id: pg_row_i64_or(&row, 2, 0),
+                compare_run_id: pg_row_string(&row, 3),
+                note: pg_row_opt_string(&row, 4),
+                created_at: pg_row_datetime_or_now(&row, 5),
+                snapshot_json: pg_row_string(&row, 6),
+                source_requested_model: pg_row_opt_string(&row, 7),
+                source_effective_model: pg_row_opt_string(&row, 8),
+                models: serde_json::from_str(
+                    &row.try_get::<usize, String>(9).unwrap_or_else(|_| "[]".to_string()),
+                )
+                .unwrap_or_default(),
+                success_count: pg_row_i64_or(&row, 10, 0) as u32,
+                failure_count: pg_row_i64_or(&row, 11, 0) as u32,
+            }))
+        })
+    }
+
+    fn delete_request_lab_snapshot<'a>(
+        &'a self,
+        user_id: &'a str,
+        id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let affected = client
+                .execute(
+                    "DELETE FROM request_lab_snapshots WHERE user_id = $1 AND id = $2",
+                    &[&user_id, &id],
                 )
                 .await
                 .map_err(pg_err)?;

@@ -270,6 +270,16 @@ pub fn routes() -> Router<Arc<AppState>> {
             delete(crate::server::request_lab::delete_request_lab_source),
         )
         .route(
+            "/me/request-lab/snapshots",
+            get(crate::server::request_lab::list_request_lab_snapshots)
+                .post(crate::server::request_lab::create_request_lab_snapshot),
+        )
+        .route(
+            "/me/request-lab/snapshots/{id}",
+            get(crate::server::request_lab::get_request_lab_snapshot)
+                .delete(crate::server::request_lab::delete_request_lab_snapshot),
+        )
+        .route(
             "/me/requests/{id}",
             get(crate::server::request_lab::get_my_request_detail),
         )

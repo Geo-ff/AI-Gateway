@@ -4,7 +4,7 @@ use std::pin::Pin;
 use crate::config::settings::{KeyLogStrategy, Provider};
 use crate::logging::types::{
     ModelPriceRecord, ModelPriceUpsert, ProviderOpLog, RequestLogDetailRecord, StoredCompareRun,
-    StoredRequestLabSource,
+    StoredRequestLabSnapshot, StoredRequestLabSource,
 };
 use crate::logging::{CachedModel, DatabaseLogger, ProviderKeyStatsAgg, RequestLog};
 use crate::providers::openai::Model;
@@ -109,6 +109,28 @@ pub trait RequestLogStore: Send + Sync {
         &'a self,
         user_id: &'a str,
         source_request_id: i64,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>>;
+    fn save_request_lab_snapshot<'a>(
+        &'a self,
+        snapshot: StoredRequestLabSnapshot,
+    ) -> BoxFuture<'a, rusqlite::Result<()>>;
+    fn list_request_lab_snapshots<'a>(
+        &'a self,
+        user_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<StoredRequestLabSnapshot>>>;
+    fn get_request_lab_snapshot<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<StoredRequestLabSnapshot>>>;
+    fn get_request_lab_snapshot_by_compare_run<'a>(
+        &'a self,
+        user_id: &'a str,
+        compare_run_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<StoredRequestLabSnapshot>>>;
+    fn delete_request_lab_snapshot<'a>(
+        &'a self,
+        user_id: &'a str,
+        id: &'a str,
     ) -> BoxFuture<'a, rusqlite::Result<bool>>;
     #[allow(dead_code)]
     fn sum_total_tokens_by_client_token<'a>(
@@ -533,6 +555,46 @@ impl RequestLogStore for DatabaseLogger {
             self.delete_request_lab_source(user_id, source_request_id)
                 .await
         })
+    }
+
+    fn save_request_lab_snapshot<'a>(
+        &'a self,
+        snapshot: StoredRequestLabSnapshot,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move { self.save_request_lab_snapshot(snapshot).await })
+    }
+
+    fn list_request_lab_snapshots<'a>(
+        &'a self,
+        user_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<StoredRequestLabSnapshot>>> {
+        Box::pin(async move { self.list_request_lab_snapshots(user_id).await })
+    }
+
+    fn get_request_lab_snapshot<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<StoredRequestLabSnapshot>>> {
+        Box::pin(async move { self.get_request_lab_snapshot(id).await })
+    }
+
+    fn get_request_lab_snapshot_by_compare_run<'a>(
+        &'a self,
+        user_id: &'a str,
+        compare_run_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<StoredRequestLabSnapshot>>> {
+        Box::pin(async move {
+            self.get_request_lab_snapshot_by_compare_run(user_id, compare_run_id)
+                .await
+        })
+    }
+
+    fn delete_request_lab_snapshot<'a>(
+        &'a self,
+        user_id: &'a str,
+        id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move { self.delete_request_lab_snapshot(user_id, id).await })
     }
 
     fn sum_total_tokens_by_client_token<'a>(

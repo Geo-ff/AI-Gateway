@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
 };
 use chrono::{DateTime, Utc};
@@ -15,7 +15,7 @@ use crate::error::GatewayError;
 use crate::logging::RequestLog;
 use crate::logging::types::{
     REQ_TYPE_CHAT_COMPARE, REQ_TYPE_CHAT_REPLAY, RequestLogDetailRecord, StoredCompareRun,
-    StoredRequestLabSource,
+    StoredRequestLabSnapshot, StoredRequestLabSource,
 };
 use crate::providers::openai::ChatCompletionRequest;
 use crate::providers::openai::types::RawAndTypedChatCompletion;
@@ -85,6 +85,81 @@ pub struct RequestLabSourceResponse {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DeleteRequestLabSourceResponse {
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateRequestLabSnapshotRequest {
+    pub source_request_id: i64,
+    pub compare_run_id: String,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ListRequestLabSnapshotsQuery {
+    #[serde(default)]
+    pub keyword: Option<String>,
+    #[serde(default)]
+    pub sort: Option<String>,
+    #[serde(default)]
+    pub compare_run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestLabSnapshotItemsSummary {
+    pub success_count: u32,
+    pub failure_count: u32,
+    pub total_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestLabSnapshotSourcePayload {
+    pub source_request_id: i64,
+    pub requested_model: Option<String>,
+    pub effective_model: Option<String>,
+    pub provider: Option<String>,
+    pub method: String,
+    pub path: String,
+    pub status: String,
+    pub status_code: u16,
+    pub source_timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestLabSnapshotPayload {
+    pub compare: CompareResponse,
+    pub source: RequestLabSnapshotSourcePayload,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RequestLabSnapshotListItemResponse {
+    pub id: String,
+    pub note: Option<String>,
+    pub created_at: String,
+    pub source_request_id: i64,
+    pub source_requested_model: Option<String>,
+    pub source_effective_model: Option<String>,
+    pub models: Vec<String>,
+    pub items: RequestLabSnapshotItemsSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RequestLabSnapshotDetailResponse {
+    pub id: String,
+    pub note: Option<String>,
+    pub created_at: String,
+    pub source_request_id: i64,
+    pub compare_run_id: String,
+    pub source_requested_model: Option<String>,
+    pub source_effective_model: Option<String>,
+    pub models: Vec<String>,
+    pub items: RequestLabSnapshotItemsSummary,
+    pub snapshot_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteRequestLabSnapshotResponse {
     pub deleted: bool,
 }
 
@@ -410,6 +485,118 @@ fn request_lab_source_response(source: StoredRequestLabSource) -> RequestLabSour
         source_timestamp: source.source_timestamp.to_rfc3339(),
         added_at: source.added_at.to_rfc3339(),
     }
+}
+
+fn request_status(status_code: u16) -> String {
+    if status_code < 400 {
+        "success".to_string()
+    } else {
+        "failed".to_string()
+    }
+}
+
+fn normalize_snapshot_note(note: Option<String>) -> Option<String> {
+    note.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
+fn snapshot_items_summary(items: &[CompareItemResponse]) -> RequestLabSnapshotItemsSummary {
+    let success_count = items.iter().filter(|item| item.status == "success").count() as u32;
+    let failure_count = items.len() as u32 - success_count;
+    RequestLabSnapshotItemsSummary {
+        success_count,
+        failure_count,
+        total_count: items.len() as u32,
+    }
+}
+
+fn request_lab_snapshot_source_payload(log: &RequestLog) -> RequestLabSnapshotSourcePayload {
+    RequestLabSnapshotSourcePayload {
+        source_request_id: log.id.unwrap_or_default(),
+        requested_model: log.requested_model.clone(),
+        effective_model: log.effective_model.clone().or_else(|| log.model.clone()),
+        provider: log.provider.clone(),
+        method: log.method.clone(),
+        path: log.path.clone(),
+        status: request_status(log.status_code),
+        status_code: log.status_code,
+        source_timestamp: log.timestamp.to_rfc3339(),
+    }
+}
+
+fn request_lab_snapshot_list_item_response(
+    snapshot: &StoredRequestLabSnapshot,
+) -> RequestLabSnapshotListItemResponse {
+    RequestLabSnapshotListItemResponse {
+        id: snapshot.id.clone(),
+        note: snapshot.note.clone(),
+        created_at: snapshot.created_at.to_rfc3339(),
+        source_request_id: snapshot.source_request_id,
+        source_requested_model: snapshot.source_requested_model.clone(),
+        source_effective_model: snapshot.source_effective_model.clone(),
+        models: snapshot.models.clone(),
+        items: RequestLabSnapshotItemsSummary {
+            success_count: snapshot.success_count,
+            failure_count: snapshot.failure_count,
+            total_count: snapshot.success_count + snapshot.failure_count,
+        },
+    }
+}
+
+fn request_lab_snapshot_detail_response(
+    snapshot: StoredRequestLabSnapshot,
+) -> Result<RequestLabSnapshotDetailResponse, GatewayError> {
+    let snapshot_json = serde_json::from_str(&snapshot.snapshot_json)
+        .map_err(|_| GatewayError::Config("历史快照已损坏".into()))?;
+    Ok(RequestLabSnapshotDetailResponse {
+        id: snapshot.id,
+        note: snapshot.note,
+        created_at: snapshot.created_at.to_rfc3339(),
+        source_request_id: snapshot.source_request_id,
+        compare_run_id: snapshot.compare_run_id,
+        source_requested_model: snapshot.source_requested_model,
+        source_effective_model: snapshot.source_effective_model,
+        models: snapshot.models,
+        items: RequestLabSnapshotItemsSummary {
+            success_count: snapshot.success_count,
+            failure_count: snapshot.failure_count,
+            total_count: snapshot.success_count + snapshot.failure_count,
+        },
+        snapshot_json,
+    })
+}
+
+fn snapshot_matches_keyword(snapshot: &StoredRequestLabSnapshot, keyword: &str) -> bool {
+    let keyword = keyword.trim().to_lowercase();
+    if keyword.is_empty() {
+        return true;
+    }
+
+    snapshot
+        .note
+        .as_deref()
+        .map(|value| value.to_lowercase().contains(&keyword))
+        .unwrap_or(false)
+        || snapshot
+            .source_requested_model
+            .as_deref()
+            .map(|value| value.to_lowercase().contains(&keyword))
+            .unwrap_or(false)
+        || snapshot
+            .source_effective_model
+            .as_deref()
+            .map(|value| value.to_lowercase().contains(&keyword))
+            .unwrap_or(false)
+        || snapshot
+            .models
+            .iter()
+            .any(|value| value.to_lowercase().contains(&keyword))
 }
 
 pub async fn execute_logged_chat_request(
@@ -767,6 +954,149 @@ pub async fn delete_request_lab_source(
     Ok(Json(DeleteRequestLabSourceResponse { deleted }))
 }
 
+pub async fn create_request_lab_snapshot(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<CreateRequestLabSnapshotRequest>,
+) -> Result<Json<RequestLabSnapshotDetailResponse>, GatewayError> {
+    let claims = require_user(&headers)?;
+    let compare_run = app_state
+        .log_store
+        .get_compare_run(&payload.compare_run_id)
+        .await
+        .map_err(GatewayError::Db)?
+        .ok_or_else(|| GatewayError::NotFound("对比记录不存在".into()))?;
+    if compare_run.user_id != claims.sub && !is_superadmin(&claims) {
+        return Err(GatewayError::Forbidden("无权保存该对比结果".into()));
+    }
+    if compare_run.source_request_id != payload.source_request_id {
+        return Err(GatewayError::Config("快照来源请求与对比结果不匹配".into()));
+    }
+
+    let compare: CompareResponse = serde_json::from_str(&compare_run.result_json)
+        .map_err(|_| GatewayError::Config("对比记录已损坏".into()))?;
+    let (log, detail, _) =
+        load_request_log_for_user(&app_state, &claims, payload.source_request_id).await?;
+    ensure_request_can_be_source(&log, detail.as_ref())?;
+
+    let created_at = Utc::now();
+    let items_summary = snapshot_items_summary(&compare.items);
+    let source_payload = request_lab_snapshot_source_payload(&log);
+    let snapshot_payload = RequestLabSnapshotPayload {
+        compare,
+        source: source_payload,
+    };
+    let existing = app_state
+        .log_store
+        .get_request_lab_snapshot_by_compare_run(&claims.sub, &payload.compare_run_id)
+        .await
+        .map_err(GatewayError::Db)?;
+    let stored = StoredRequestLabSnapshot {
+        id: existing
+            .as_ref()
+            .map(|snapshot| snapshot.id.clone())
+            .unwrap_or_else(|| format!("snap_{}", Uuid::new_v4().simple())),
+        user_id: claims.sub,
+        source_request_id: payload.source_request_id,
+        compare_run_id: payload.compare_run_id,
+        note: normalize_snapshot_note(payload.note),
+        created_at: existing
+            .as_ref()
+            .map(|snapshot| snapshot.created_at)
+            .unwrap_or(created_at),
+        snapshot_json: serde_json::to_string(&snapshot_payload)?,
+        source_requested_model: log.requested_model.clone(),
+        source_effective_model: log.effective_model.clone().or_else(|| log.model.clone()),
+        models: snapshot_payload
+            .compare
+            .items
+            .iter()
+            .map(|item| item.model.clone())
+            .collect(),
+        success_count: items_summary.success_count,
+        failure_count: items_summary.failure_count,
+    };
+
+    app_state
+        .log_store
+        .save_request_lab_snapshot(stored.clone())
+        .await
+        .map_err(GatewayError::Db)?;
+    let persisted = app_state
+        .log_store
+        .get_request_lab_snapshot_by_compare_run(&stored.user_id, &stored.compare_run_id)
+        .await
+        .map_err(GatewayError::Db)?
+        .unwrap_or(stored);
+    Ok(Json(request_lab_snapshot_detail_response(persisted)?))
+}
+
+pub async fn list_request_lab_snapshots(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<ListRequestLabSnapshotsQuery>,
+) -> Result<Json<Vec<RequestLabSnapshotListItemResponse>>, GatewayError> {
+    let claims = require_user(&headers)?;
+    let mut snapshots = app_state
+        .log_store
+        .list_request_lab_snapshots(&claims.sub)
+        .await
+        .map_err(GatewayError::Db)?;
+
+    if let Some(compare_run_id) = query.compare_run_id.as_deref() {
+        snapshots.retain(|snapshot| snapshot.compare_run_id == compare_run_id);
+    }
+
+    if let Some(keyword) = query.keyword.as_deref() {
+        snapshots.retain(|snapshot| snapshot_matches_keyword(snapshot, keyword));
+    }
+
+    let sort_order = query.sort.as_deref().unwrap_or("desc");
+    snapshots.sort_by(|left, right| left.created_at.cmp(&right.created_at).then(left.id.cmp(&right.id)));
+    if sort_order != "asc" {
+        snapshots.reverse();
+    }
+
+    Ok(Json(
+        snapshots
+            .iter()
+            .map(request_lab_snapshot_list_item_response)
+            .collect(),
+    ))
+}
+
+pub async fn get_request_lab_snapshot(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(snapshot_id): Path<String>,
+) -> Result<Json<RequestLabSnapshotDetailResponse>, GatewayError> {
+    let claims = require_user(&headers)?;
+    let snapshot = app_state
+        .log_store
+        .get_request_lab_snapshot(&snapshot_id)
+        .await
+        .map_err(GatewayError::Db)?
+        .ok_or_else(|| GatewayError::NotFound("历史快照不存在".into()))?;
+    if snapshot.user_id != claims.sub && !is_superadmin(&claims) {
+        return Err(GatewayError::Forbidden("无权访问该历史快照".into()));
+    }
+    Ok(Json(request_lab_snapshot_detail_response(snapshot)?))
+}
+
+pub async fn delete_request_lab_snapshot(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(snapshot_id): Path<String>,
+) -> Result<Json<DeleteRequestLabSnapshotResponse>, GatewayError> {
+    let claims = require_user(&headers)?;
+    let deleted = app_state
+        .log_store
+        .delete_request_lab_snapshot(&claims.sub, &snapshot_id)
+        .await
+        .map_err(GatewayError::Db)?;
+    Ok(Json(DeleteRequestLabSnapshotResponse { deleted }))
+}
+
 pub async fn create_compare(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -970,8 +1300,16 @@ pub async fn get_compare(
 
 #[cfg(test)]
 mod tests {
-    use super::{ReplayOverrideInput, ReplayableRequestSnapshot, request_from_snapshot};
+    use super::{
+        ReplayOverrideInput, ReplayableRequestSnapshot, request_from_snapshot,
+        snapshot_matches_keyword,
+    };
+    use crate::logging::DatabaseLogger;
+    use crate::logging::types::{StoredCompareRun, StoredRequestLabSnapshot};
+    use crate::server::storage_traits::RequestLogStore;
+    use chrono::Utc;
     use serde_json::json;
+    use tempfile::tempdir;
 
     #[test]
     fn request_snapshot_applies_model_and_sampling_overrides() {
@@ -1014,5 +1352,172 @@ mod tests {
 
         let err = request_from_snapshot(&snapshot, &ReplayOverrideInput::default()).unwrap_err();
         assert!(err.to_string().contains("暂不支持回放"));
+    }
+
+    #[test]
+    fn snapshot_keyword_matches_note_and_models() {
+        let snapshot = StoredRequestLabSnapshot {
+            id: "snap_1".into(),
+            user_id: "u1".into(),
+            source_request_id: 1,
+            compare_run_id: "cmp_1".into(),
+            note: Some("验证 gpt-4.1 与 claude".into()),
+            created_at: Utc::now(),
+            snapshot_json: "{}".into(),
+            source_requested_model: Some("openai/gpt-4o-mini".into()),
+            source_effective_model: Some("openai/gpt-4o-mini".into()),
+            models: vec!["openai/gpt-4.1-mini".into(), "anthropic/claude-3.7-sonnet".into()],
+            success_count: 1,
+            failure_count: 1,
+        };
+
+        assert!(snapshot_matches_keyword(&snapshot, "claude"));
+        assert!(snapshot_matches_keyword(&snapshot, "验证"));
+        assert!(!snapshot_matches_keyword(&snapshot, "gemini"));
+    }
+
+    #[tokio::test]
+    async fn snapshot_storage_roundtrip_preserves_compare_run() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = DatabaseLogger::new(db_path.to_str().unwrap()).await.unwrap();
+        let created_at = Utc::now();
+
+        RequestLogStore::save_compare_run(
+            &db,
+            StoredCompareRun {
+                id: "cmp_1".into(),
+                user_id: "u1".into(),
+                source_request_id: 42,
+                created_at,
+                result_json: json!({
+                    "id": "cmp_1",
+                    "source_request_id": 42,
+                    "created_at": created_at.to_rfc3339(),
+                    "items": []
+                })
+                .to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let snapshot = StoredRequestLabSnapshot {
+            id: "snap_1".into(),
+            user_id: "u1".into(),
+            source_request_id: 42,
+            compare_run_id: "cmp_1".into(),
+            note: Some("第一次保存".into()),
+            created_at,
+            snapshot_json: json!({
+                "compare": {
+                    "id": "cmp_1",
+                    "source_request_id": 42,
+                    "created_at": created_at.to_rfc3339(),
+                    "items": []
+                },
+                "source": {
+                    "source_request_id": 42
+                }
+            })
+            .to_string(),
+            source_requested_model: Some("openai/gpt-4o-mini".into()),
+            source_effective_model: Some("openai/gpt-4o-mini".into()),
+            models: vec!["openai/gpt-4.1-mini".into(), "anthropic/claude-3.7-sonnet".into()],
+            success_count: 1,
+            failure_count: 1,
+        };
+
+        RequestLogStore::save_request_lab_snapshot(&db, snapshot.clone())
+            .await
+            .unwrap();
+
+        let listed = RequestLogStore::list_request_lab_snapshots(&db, "u1")
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, snapshot.id);
+
+        let stored = RequestLogStore::get_request_lab_snapshot(&db, "snap_1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.compare_run_id, "cmp_1");
+        assert_eq!(stored.models.len(), 2);
+
+        let deleted = RequestLogStore::delete_request_lab_snapshot(&db, "u1", "snap_1")
+            .await
+            .unwrap();
+        assert!(deleted);
+        assert!(RequestLogStore::list_request_lab_snapshots(&db, "u1")
+            .await
+            .unwrap()
+            .is_empty());
+
+        let compare_run = RequestLogStore::get_compare_run(&db, "cmp_1")
+            .await
+            .unwrap();
+        assert!(compare_run.is_some());
+    }
+
+    #[tokio::test]
+    async fn snapshot_storage_is_idempotent_per_compare_run() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = DatabaseLogger::new(db_path.to_str().unwrap()).await.unwrap();
+        let created_at = Utc::now();
+
+        let first = StoredRequestLabSnapshot {
+            id: "snap_a".into(),
+            user_id: "u1".into(),
+            source_request_id: 7,
+            compare_run_id: "cmp_same".into(),
+            note: Some("第一次备注".into()),
+            created_at,
+            snapshot_json: "{}".into(),
+            source_requested_model: Some("openai/gpt-4o-mini".into()),
+            source_effective_model: Some("openai/gpt-4o-mini".into()),
+            models: vec!["openai/gpt-4.1-mini".into()],
+            success_count: 1,
+            failure_count: 0,
+        };
+        let second = StoredRequestLabSnapshot {
+            id: "snap_b".into(),
+            user_id: "u1".into(),
+            source_request_id: 7,
+            compare_run_id: "cmp_same".into(),
+            note: Some("更新后的备注".into()),
+            created_at,
+            snapshot_json: "{}".into(),
+            source_requested_model: Some("openai/gpt-4o-mini".into()),
+            source_effective_model: Some("openai/gpt-4o-mini".into()),
+            models: vec!["openai/gpt-4.1-mini".into(), "anthropic/claude-3.7-sonnet".into()],
+            success_count: 2,
+            failure_count: 0,
+        };
+
+        RequestLogStore::save_request_lab_snapshot(&db, first)
+            .await
+            .unwrap();
+        RequestLogStore::save_request_lab_snapshot(&db, second)
+            .await
+            .unwrap();
+
+        let listed = RequestLogStore::list_request_lab_snapshots(&db, "u1")
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "snap_a");
+        assert_eq!(listed[0].note.as_deref(), Some("更新后的备注"));
+        assert_eq!(listed[0].models.len(), 2);
+
+        let by_compare = RequestLogStore::get_request_lab_snapshot_by_compare_run(
+            &db,
+            "u1",
+            "cmp_same",
+        )
+        .await
+        .unwrap();
+        assert!(by_compare.is_some());
     }
 }
