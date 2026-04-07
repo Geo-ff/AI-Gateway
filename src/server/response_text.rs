@@ -113,10 +113,7 @@ fn extract_from_typed(typed: &ChatCompletionResponse) -> Option<String> {
         .and_then(normalize_whitespace)
 }
 
-pub(crate) fn extract_response_text(
-    raw: &Value,
-    typed: &ChatCompletionResponse,
-) -> Option<String> {
+pub(crate) fn extract_response_text(raw: &Value, typed: &ChatCompletionResponse) -> Option<String> {
     extract_from_choices(raw)
         .or_else(|| extract_from_output(raw))
         .or_else(|| extract_from_top_level_message(raw))
@@ -125,7 +122,11 @@ pub(crate) fn extract_response_text(
 
 pub(crate) fn response_summary(dual: &RawAndTypedChatCompletion, max_len: usize) -> Option<String> {
     extract_response_text(&dual.raw, &dual.typed)
-        .or_else(|| serde_json::to_string(&dual.raw).ok().and_then(normalize_whitespace))
+        .or_else(|| {
+            serde_json::to_string(&dual.raw)
+                .ok()
+                .and_then(normalize_whitespace)
+        })
         .map(|text| truncate(text, max_len))
 }
 
@@ -177,7 +178,10 @@ mod tests {
             }]
         }));
 
-        assert_eq!(extract_response_text(&dual.raw, &dual.typed).as_deref(), Some("hello"));
+        assert_eq!(
+            extract_response_text(&dual.raw, &dual.typed).as_deref(),
+            Some("hello")
+        );
     }
 
     #[test]

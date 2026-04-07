@@ -90,10 +90,8 @@ pub trait RequestLogStore: Send + Sync {
         &'a self,
         request_log_id: i64,
     ) -> BoxFuture<'a, rusqlite::Result<Option<RequestLogDetailRecord>>>;
-    fn save_compare_run<'a>(
-        &'a self,
-        run: StoredCompareRun,
-    ) -> BoxFuture<'a, rusqlite::Result<()>>;
+    fn save_compare_run<'a>(&'a self, run: StoredCompareRun)
+    -> BoxFuture<'a, rusqlite::Result<()>>;
     fn get_compare_run<'a>(
         &'a self,
         id: &'a str,

@@ -4,6 +4,7 @@ use crate::providers::adapters::gateway_error_from_normalized;
 use super::types::{
     ChatCompletionRequest, ChatCompletionResponse, ModelListResponse, RawAndTypedChatCompletion,
 };
+use super::usage::usage_from_value;
 
 pub struct OpenAIProvider;
 
@@ -216,6 +217,10 @@ fn sse_chat_completion_to_json(bytes: &[u8]) -> Result<Vec<u8>, GatewayError> {
     let mut finish_reason: Option<String> = None;
     let mut usage: Option<Value> = None;
 
+    fn usage_missing(value: &Option<Value>) -> bool {
+        value.as_ref().is_none_or(Value::is_null)
+    }
+
     fn collect_text_fragments(value: &Value) -> Vec<String> {
         match value {
             Value::Null => Vec::new(),
@@ -287,11 +292,14 @@ fn sse_chat_completion_to_json(bytes: &[u8]) -> Result<Vec<u8>, GatewayError> {
         if created.is_none() {
             created = v.get("created").and_then(|x| x.as_u64());
         }
-        if usage.is_none() {
+        if usage_missing(&usage) {
             usage = v.get("usage").cloned();
         }
-        if usage.is_none() {
-            usage = v.get("response").and_then(|response| response.get("usage")).cloned();
+        if usage_missing(&usage) {
+            usage = v
+                .get("response")
+                .and_then(|response| response.get("usage"))
+                .cloned();
         }
 
         if v.get("object").and_then(|x| x.as_str()) == Some("response") {
@@ -312,7 +320,7 @@ fn sse_chat_completion_to_json(bytes: &[u8]) -> Result<Vec<u8>, GatewayError> {
                 if created.is_none() {
                     created = response.get("created").and_then(|x| x.as_u64());
                 }
-                if usage.is_none() {
+                if usage_missing(&usage) {
                     usage = response.get("usage").cloned();
                 }
             }
@@ -345,7 +353,7 @@ fn sse_chat_completion_to_json(bytes: &[u8]) -> Result<Vec<u8>, GatewayError> {
                 if created.is_none() {
                     created = response.get("created").and_then(|x| x.as_u64());
                 }
-                if usage.is_none() {
+                if usage_missing(&usage) {
                     usage = response.get("usage").cloned();
                 }
             }
@@ -487,42 +495,12 @@ fn fallback_response_from_bytes(bytes: &[u8]) -> Result<ChatCompletionResponse, 
         .to_string();
 
     // usage（宽松）
-    let usage = v.get("usage").map(|u| oai::CompletionUsage {
-        prompt_tokens: u
-            .get("prompt_tokens")
-            .and_then(|x| x.as_u64())
-            .map(|x| x as u32)
-            .unwrap_or(0),
-        completion_tokens: u
-            .get("completion_tokens")
-            .and_then(|x| x.as_u64())
-            .map(|x| x as u32)
-            .unwrap_or(0),
-        total_tokens: u
-            .get("total_tokens")
-            .and_then(|x| x.as_u64())
-            .map(|x| x as u32)
-            .unwrap_or(0),
-        prompt_tokens_details: u
-            .get("prompt_tokens_details")
-            .map(|d| oai::PromptTokensDetails {
-                cached_tokens: d
-                    .get("cached_tokens")
-                    .and_then(|x| x.as_u64())
-                    .map(|x| x as u32),
-                audio_tokens: None,
-            }),
-        completion_tokens_details: u.get("completion_tokens_details").map(|d| {
-            oai::CompletionTokensDetails {
-                reasoning_tokens: d
-                    .get("reasoning_tokens")
-                    .and_then(|x| x.as_u64())
-                    .map(|x| x as u32),
-                audio_tokens: None,
-                accepted_prediction_tokens: None,
-                rejected_prediction_tokens: None,
-            }
-        }),
+    let usage = usage_from_value(&v).map(|usage| oai::CompletionUsage {
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
+        prompt_tokens_details: usage.prompt_tokens_details,
+        completion_tokens_details: usage.completion_tokens_details,
     });
 
     // choices（尽力而为，保留 reasoning_content 等扩展字段）
@@ -547,36 +525,34 @@ fn fallback_response_from_bytes(bytes: &[u8]) -> Result<ChatCompletionResponse, 
                 .get("role")
                 .and_then(|x| x.as_str())
                 .unwrap_or("assistant");
-            let content = msg.get("content").and_then(|value| {
-                match value {
-                    serde_json::Value::String(text) => Some(text.clone()),
-                    serde_json::Value::Array(parts) => {
-                        let mut out = Vec::new();
-                        for part in parts {
-                            if let Some(text) = part
-                                .get("text")
-                                .and_then(|text| text.as_str())
-                                .or_else(|| part.get("content").and_then(|text| text.as_str()))
-                            {
-                                let trimmed = text.trim();
-                                if !trimmed.is_empty() {
-                                    out.push(trimmed.to_string());
-                                }
+            let content = msg.get("content").and_then(|value| match value {
+                serde_json::Value::String(text) => Some(text.clone()),
+                serde_json::Value::Array(parts) => {
+                    let mut out = Vec::new();
+                    for part in parts {
+                        if let Some(text) = part
+                            .get("text")
+                            .and_then(|text| text.as_str())
+                            .or_else(|| part.get("content").and_then(|text| text.as_str()))
+                        {
+                            let trimmed = text.trim();
+                            if !trimmed.is_empty() {
+                                out.push(trimmed.to_string());
                             }
                         }
-                        if out.is_empty() {
-                            None
-                        } else {
-                            Some(out.join("\n\n"))
-                        }
                     }
-                    serde_json::Value::Object(object) => object
-                        .get("text")
-                        .and_then(|text| text.as_str())
-                        .or_else(|| object.get("content").and_then(|text| text.as_str()))
-                        .map(str::to_string),
-                    _ => None,
+                    if out.is_empty() {
+                        None
+                    } else {
+                        Some(out.join("\n\n"))
+                    }
                 }
+                serde_json::Value::Object(object) => object
+                    .get("text")
+                    .and_then(|text| text.as_str())
+                    .or_else(|| object.get("content").and_then(|text| text.as_str()))
+                    .map(str::to_string),
+                _ => None,
             });
             // tool_calls（若存在）
             let tool_calls = msg
@@ -677,6 +653,22 @@ mod tests {
     }
 
     #[test]
+    fn streaming_chunks_upgrade_null_usage_to_final_usage_object() {
+        let sse = br#"data: {"id":"resp_123","object":"chat.completion.chunk","created":1,"model":"gpt-5.4","choices":[{"index":0,"delta":{"role":"assistant","content":"he"},"finish_reason":null}],"usage":null}
+
+data: {"id":"resp_123","object":"chat.completion.chunk","created":1,"model":"gpt-5.4","choices":[{"index":0,"delta":{"content":"llo"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":12,"total_tokens":22}}
+
+data: [DONE]
+"#;
+        let out = sse_chat_completion_to_json(sse).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["choices"][0]["message"]["content"], "hello");
+        assert_eq!(v["usage"]["prompt_tokens"], 10);
+        assert_eq!(v["usage"]["completion_tokens"], 12);
+        assert_eq!(v["usage"]["total_tokens"], 22);
+    }
+
+    #[test]
     fn chat_chunk_content_array_is_aggregated() {
         let sse = b"data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt\",\"choices\":[{\"index\":0,\"delta\":{\"content\":[{\"type\":\"output_text\",\"text\":\"world\"}]},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n";
         let out = sse_chat_completion_to_json(sse).unwrap();
@@ -715,7 +707,11 @@ mod tests {
                 "finish_reason": "stop"
             }]
         });
-        let typed = fallback_response_from_bytes(serde_json::to_string(&raw).unwrap().as_bytes()).unwrap();
-        assert_eq!(typed.choices[0].message.content.as_deref(), Some("hello\n\nworld"));
+        let typed =
+            fallback_response_from_bytes(serde_json::to_string(&raw).unwrap().as_bytes()).unwrap();
+        assert_eq!(
+            typed.choices[0].message.content.as_deref(),
+            Some("hello\n\nworld")
+        );
     }
 }

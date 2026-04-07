@@ -4,6 +4,7 @@ use crate::error::GatewayError;
 use crate::logging::RequestLog;
 use crate::logging::types::{REQ_TYPE_CHAT_ONCE, RequestLogDetailRecord};
 use crate::providers::openai::types::RawAndTypedChatCompletion;
+use crate::providers::openai::usage::resolved_usage;
 use crate::server::AppState;
 use crate::server::response_text;
 use crate::server::util::mask_key;
@@ -52,12 +53,15 @@ pub async fn log_chat_request(
     // 统计与日志关联使用稳定脱敏值，避免明文泄露
     let api_key = Some(mask_key(api_key_raw));
     let client_token_id = client_token.map(client_token_id_for_token);
+    let usage = response
+        .as_ref()
+        .ok()
+        .and_then(|dual| resolved_usage(&dual.raw, &dual.typed));
 
     // 计算本次消耗金额（仅当有价格与 usage 可用，且有 Client Token）
     let amount_spent: Option<f64> = match response {
-        Ok(dual) => {
-            let usage = dual.typed.usage.as_ref();
-            if let (Some(u), Some(_tok)) = (usage, client_token) {
+        Ok(_) => {
+            if let (Some(u), Some(_tok)) = (usage.as_ref(), client_token) {
                 match app_state
                     .log_store
                     .get_model_price(provider_name, billing_model)
@@ -103,31 +107,20 @@ pub async fn log_chat_request(
         amount_spent,
         status_code: if response.is_ok() { 200 } else { 500 },
         response_time_ms,
-        prompt_tokens: response
-            .as_ref()
-            .ok()
-            .and_then(|r| r.typed.usage.as_ref().map(|u| u.prompt_tokens)),
-        completion_tokens: response
-            .as_ref()
-            .ok()
-            .and_then(|r| r.typed.usage.as_ref().map(|u| u.completion_tokens)),
-        total_tokens: response
-            .as_ref()
-            .ok()
-            .and_then(|r| r.typed.usage.as_ref().map(|u| u.total_tokens)),
-        cached_tokens: response.as_ref().ok().and_then(|r| {
-            r.typed.usage.as_ref().and_then(|u| {
-                u.prompt_tokens_details
-                    .as_ref()
-                    .and_then(|d| d.cached_tokens)
-            })
+        prompt_tokens: usage.as_ref().map(|usage| usage.prompt_tokens),
+        completion_tokens: usage.as_ref().map(|usage| usage.completion_tokens),
+        total_tokens: usage.as_ref().map(|usage| usage.total_tokens),
+        cached_tokens: usage.as_ref().and_then(|usage| {
+            usage
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|details| details.cached_tokens)
         }),
-        reasoning_tokens: response.as_ref().ok().and_then(|r| {
-            r.typed.usage.as_ref().and_then(|u| {
-                u.completion_tokens_details
-                    .as_ref()
-                    .and_then(|d| d.reasoning_tokens)
-            })
+        reasoning_tokens: usage.as_ref().and_then(|usage| {
+            usage
+                .completion_tokens_details
+                .as_ref()
+                .and_then(|details| details.reasoning_tokens)
         }),
         error_message: response.as_ref().err().map(|e| e.to_string()),
     };
@@ -145,13 +138,19 @@ pub async fn log_chat_request(
             request_log_id,
             request_payload_snapshot: context.request_payload_snapshot,
             response_preview: response_preview(response),
-            upstream_status: context.upstream_status.or(Some(if response.is_ok() { 200 } else { 500 })),
+            upstream_status: context.upstream_status.or(Some(if response.is_ok() {
+                200
+            } else {
+                500
+            })),
             fallback_triggered: context.fallback_triggered,
             fallback_reason: context.fallback_reason,
             selected_provider: context
                 .selected_provider
                 .or_else(|| Some(provider_name.to_string())),
-            selected_key_id: context.selected_key_id.or_else(|| Some(mask_key(api_key_raw))),
+            selected_key_id: context
+                .selected_key_id
+                .or_else(|| Some(mask_key(api_key_raw))),
             first_token_latency_ms: context.first_token_latency_ms,
         };
         if let Err(e) = app_state.log_store.upsert_request_log_detail(detail).await {
@@ -170,9 +169,7 @@ pub async fn log_chat_request(
 
         // 2) update token usage counters + compute tokens used for subscription billing
         let mut tokens_used: Option<i64> = None;
-        if let Ok(r) = response
-            && let Some(u) = r.typed.usage.as_ref()
-        {
+        if let Some(u) = usage.as_ref() {
             let prompt = u.prompt_tokens as i64;
             let completion = u.completion_tokens as i64;
             let total = u.total_tokens as i64;
@@ -552,5 +549,136 @@ mod tests {
         assert_eq!(txs[0].kind.as_str(), "spend");
         assert!(txs[0].amount < 0.0);
         assert!(approx_eq(txs[0].amount, -2.0, 1e-12));
+    }
+
+    #[tokio::test]
+    async fn log_chat_request_uses_raw_input_output_usage_when_typed_is_empty() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("gateway.db");
+        let logger = Arc::new(
+            DatabaseLogger::new(db_path.to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+
+        let settings = crate::config::Settings {
+            load_balancing: LoadBalancing {
+                strategy: BalanceStrategy::FirstAvailable,
+            },
+            server: ServerConfig::default(),
+            logging: LoggingConfig {
+                database_path: db_path.to_string_lossy().to_string(),
+                ..LoggingConfig::default()
+            },
+        };
+
+        let app_state = AppState {
+            config: settings,
+            load_balancer_state: Arc::new(crate::routing::LoadBalancerState::default()),
+            log_store: logger.clone(),
+            model_cache: logger.clone(),
+            providers: logger.clone(),
+            token_store: logger.clone(),
+            favorites_store: logger.clone(),
+            login_manager: Arc::new(LoginManager::new(logger.clone())),
+            user_store: logger.clone(),
+            refresh_token_store: logger.clone(),
+            password_reset_token_store: logger.clone(),
+            balance_store: logger.clone(),
+            subscription_store: logger.clone(),
+        };
+
+        logger
+            .upsert_model_price(crate::logging::ModelPriceUpsert::manual(
+                "p1",
+                "gpt-5.4",
+                2.0,
+                4.0,
+                Some("USD".into()),
+                None,
+            ))
+            .await
+            .unwrap();
+
+        let created = logger
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: None,
+                name: Some("t1".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+
+        let raw = serde_json::json!({
+            "id": "resp_123",
+            "object": "response",
+            "created": 0,
+            "model": "gpt-5.4",
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": "hello"
+                }]
+            }],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 12
+            }
+        });
+        let typed: async_openai::types::CreateChatCompletionResponse =
+            serde_json::from_value(serde_json::json!({
+                "id": "resp_123",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.4",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": null},
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0
+                }
+            }))
+            .unwrap();
+        let dual = RawAndTypedChatCompletion { typed, raw };
+
+        log_chat_request(
+            &app_state,
+            Utc::now(),
+            "gpt-5.4",
+            "gpt-5.4",
+            "gpt-5.4",
+            "p1",
+            "sk-test",
+            Some(created.token.as_str()),
+            &Ok(dual),
+            ChatLogContext::default(),
+        )
+        .await;
+
+        let updated = logger.get_token(&created.token).await.unwrap().unwrap();
+        assert_eq!(updated.prompt_tokens_spent, 10);
+        assert_eq!(updated.completion_tokens_spent, 12);
+        assert_eq!(updated.total_tokens_spent, 22);
+
+        let logs = logger.get_request_logs(10, None).await.unwrap();
+        assert_eq!(logs[0].prompt_tokens, Some(10));
+        assert_eq!(logs[0].completion_tokens, Some(12));
+        assert_eq!(logs[0].total_tokens, Some(22));
     }
 }

@@ -11,12 +11,12 @@ use crate::error::GatewayError;
 use crate::providers::adapters::runtime_streaming_unsupported_message;
 use crate::server::AppState;
 use crate::server::chat_request::GatewayChatCompletionRequest;
-use crate::server::request_lab::build_request_payload_snapshot;
 use crate::server::model_redirect::{
     apply_model_redirects, apply_provider_model_redirects_to_parsed_model,
 };
 use crate::server::pricing::{missing_price_allowed_for_chat, resolve_model_pricing};
 use crate::server::provider_dispatch::select_provider_for_model;
+use crate::server::request_lab::build_request_payload_snapshot;
 
 mod anthropic;
 mod common;

@@ -1356,9 +1356,7 @@ impl DatabaseLogger {
                 request_payload_snapshot: row.get(1)?,
                 response_preview: row.get(2)?,
                 upstream_status: row.get(3)?,
-                fallback_triggered: row
-                    .get::<_, Option<i64>>(4)?
-                    .map(|value| value != 0),
+                fallback_triggered: row.get::<_, Option<i64>>(4)?.map(|value| value != 0),
                 fallback_reason: row.get(5)?,
                 selected_provider: row.get(6)?,
                 selected_key_id: row.get(7)?,

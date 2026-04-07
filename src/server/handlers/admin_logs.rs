@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use super::auth::{AdminIdentity, require_superadmin};
 use crate::error::GatewayError;
-use crate::logging::types::RequestLogDetailRecord;
 use crate::logging::types::RequestLog;
+use crate::logging::types::RequestLogDetailRecord;
 use crate::server::AppState;
 use crate::server::model_display::format_model_display_name;
 use crate::server::request_logging::log_simple_request;

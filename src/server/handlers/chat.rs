@@ -8,10 +8,10 @@ use chrono::Utc;
 use std::sync::Arc;
 
 use crate::error::GatewayError;
+use crate::server::AppState;
 use crate::server::chat_request::GatewayChatCompletionRequest;
 use crate::server::request_lab::{build_request_payload_snapshot, execute_logged_chat_request};
 use crate::server::streaming::stream_chat_completions;
-use crate::server::AppState;
 
 fn is_openai_error_payload(v: &serde_json::Value) -> bool {
     // OpenAI-style error payload is `{ "error": { ... } }` without `choices`.

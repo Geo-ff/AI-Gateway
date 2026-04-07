@@ -12,14 +12,17 @@ use uuid::Uuid;
 
 use crate::admin::ClientToken;
 use crate::error::GatewayError;
+use crate::logging::RequestLog;
 use crate::logging::types::{
     REQ_TYPE_CHAT_COMPARE, REQ_TYPE_CHAT_REPLAY, RequestLogDetailRecord, StoredCompareRun,
 };
-use crate::logging::RequestLog;
 use crate::providers::openai::ChatCompletionRequest;
 use crate::providers::openai::types::RawAndTypedChatCompletion;
+use crate::providers::openai::usage::resolved_usage;
 use crate::server::AppState;
-use crate::server::handlers::auth::{AccessTokenClaims, AdminIdentity, require_superadmin, require_user};
+use crate::server::handlers::auth::{
+    AccessTokenClaims, AdminIdentity, require_superadmin, require_user,
+};
 use crate::server::model_redirect::{
     apply_model_redirects, apply_provider_model_redirects_to_parsed_model,
 };
@@ -27,8 +30,10 @@ use crate::server::pricing::{missing_price_allowed_for_chat, resolve_model_prici
 use crate::server::provider_dispatch::{
     call_provider_with_parsed_model, select_provider_for_model,
 };
+use crate::server::request_logging::{
+    ChatLogContext, LoggedChatRequest, log_chat_request, log_simple_request,
+};
 use crate::server::response_text;
-use crate::server::request_logging::{ChatLogContext, LoggedChatRequest, log_chat_request, log_simple_request};
 use crate::users::UserRole;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,9 +169,13 @@ pub fn build_request_payload_snapshot(
     Ok(serde_json::to_string(&snapshot)?)
 }
 
-fn snapshot_from_detail(detail: &RequestLogDetailRecord) -> Result<ReplayableRequestSnapshot, GatewayError> {
+fn snapshot_from_detail(
+    detail: &RequestLogDetailRecord,
+) -> Result<ReplayableRequestSnapshot, GatewayError> {
     let Some(raw) = detail.request_payload_snapshot.as_deref() else {
-        return Err(GatewayError::Config("请求快照缺失，当前日志不可回放".into()));
+        return Err(GatewayError::Config(
+            "请求快照缺失，当前日志不可回放".into(),
+        ));
     };
     serde_json::from_str(raw)
         .map_err(|_| GatewayError::Config("请求快照已损坏，当前日志不可回放".into()))
@@ -185,7 +194,10 @@ fn request_from_snapshot(
     };
     request_obj.insert("stream".to_string(), serde_json::Value::Bool(false));
     if let Some(model) = overrides.model.as_ref() {
-        request_obj.insert("model".to_string(), serde_json::Value::String(model.clone()));
+        request_obj.insert(
+            "model".to_string(),
+            serde_json::Value::String(model.clone()),
+        );
     }
     if let Some(temperature) = overrides.temperature.clone() {
         request_obj.insert("temperature".to_string(), temperature);
@@ -219,7 +231,14 @@ async fn load_request_log_for_user(
     app_state: &AppState,
     claims: &AccessTokenClaims,
     request_id: i64,
-) -> Result<(RequestLog, Option<RequestLogDetailRecord>, Option<ClientToken>), GatewayError> {
+) -> Result<
+    (
+        RequestLog,
+        Option<RequestLogDetailRecord>,
+        Option<ClientToken>,
+    ),
+    GatewayError,
+> {
     let log = app_state
         .log_store
         .get_request_log_by_id(request_id)
@@ -295,13 +314,23 @@ fn detail_response(
         },
         status_code: log.status_code,
         response_time_ms: log.response_time_ms,
-        request_payload_snapshot: detail_snapshot.map(|snapshot: ReplayableRequestSnapshot| serde_json::to_value(snapshot).unwrap_or(serde_json::Value::Null)),
-        response_preview: detail.as_ref().and_then(|item| item.response_preview.clone()),
+        request_payload_snapshot: detail_snapshot.map(|snapshot: ReplayableRequestSnapshot| {
+            serde_json::to_value(snapshot).unwrap_or(serde_json::Value::Null)
+        }),
+        response_preview: detail
+            .as_ref()
+            .and_then(|item| item.response_preview.clone()),
         upstream_status: detail.as_ref().and_then(|item| item.upstream_status),
         fallback_triggered: detail.as_ref().and_then(|item| item.fallback_triggered),
-        fallback_reason: detail.as_ref().and_then(|item| item.fallback_reason.clone()),
-        selected_provider: detail.as_ref().and_then(|item| item.selected_provider.clone()),
-        selected_key_id: detail.as_ref().and_then(|item| item.selected_key_id.clone()),
+        fallback_reason: detail
+            .as_ref()
+            .and_then(|item| item.fallback_reason.clone()),
+        selected_provider: detail
+            .as_ref()
+            .and_then(|item| item.selected_provider.clone()),
+        selected_key_id: detail
+            .as_ref()
+            .and_then(|item| item.selected_key_id.clone()),
         first_token_latency_ms: detail.as_ref().and_then(|item| item.first_token_latency_ms),
         error_message: log.error_message,
     })
@@ -343,7 +372,10 @@ pub async fn execute_logged_chat_request(
         let user = app_state.user_store.get_user(user_id).await?;
         let balance = user.as_ref().map(|item| item.balance).unwrap_or(0.0);
         if balance <= 0.0 {
-            let _ = app_state.token_store.set_enabled_for_user(user_id, false).await;
+            let _ = app_state
+                .token_store
+                .set_enabled_for_user(user_id, false)
+                .await;
             return Err(GatewayError::Config(
                 "余额不足：密钥已失效；充值/订阅后需手动启用密钥".into(),
             ));
@@ -352,7 +384,10 @@ pub async fn execute_logged_chat_request(
 
     if !token.enabled {
         if let Some(max_amount) = token.max_amount
-            && let Ok(spent) = app_state.log_store.sum_spent_amount_by_client_token(&token.id).await
+            && let Ok(spent) = app_state
+                .log_store
+                .sum_spent_amount_by_client_token(&token.id)
+                .await
             && spent >= max_amount
         {
             return Err(GatewayError::Config("token budget exceeded".into()));
@@ -383,13 +418,8 @@ pub async fn execute_logged_chat_request(
         return Err(GatewayError::Config("model is disabled".into()));
     }
 
-    let resolved_pricing = resolve_model_pricing(
-        app_state,
-        &selected.provider.name,
-        &upstream_model,
-        None,
-    )
-    .await?;
+    let resolved_pricing =
+        resolve_model_pricing(app_state, &selected.provider.name, &upstream_model, None).await?;
     if !resolved_pricing.price_found && !missing_price_allowed_for_chat(app_state) {
         return Err(GatewayError::Config("model price not set".into()));
     }
@@ -441,12 +471,18 @@ pub async fn execute_logged_chat_request(
         if let Some(max_amount) = updated.max_amount
             && updated.amount_spent > max_amount
         {
-            let _ = app_state.token_store.set_enabled(raw_client_token, false).await;
+            let _ = app_state
+                .token_store
+                .set_enabled(raw_client_token, false)
+                .await;
         }
         if let Some(max_tokens) = updated.max_tokens
             && updated.total_tokens_spent > max_tokens
         {
-            let _ = app_state.token_store.set_enabled(raw_client_token, false).await;
+            let _ = app_state
+                .token_store
+                .set_enabled(raw_client_token, false)
+                .await;
         }
     }
 
@@ -460,26 +496,33 @@ pub async fn execute_logged_chat_request(
     })
 }
 
-fn replay_response(source_request_id: i64, requested_model: String, result: &ExecutedChatRequest) -> ReplayResponse {
+fn replay_response(
+    source_request_id: i64,
+    requested_model: String,
+    result: &ExecutedChatRequest,
+) -> ReplayResponse {
     match &result.response {
-        Ok(dual) => ReplayResponse {
-            source_request_id,
-            request_id: result.logged.log_id,
-            requested_model,
-            effective_model: Some(result.effective_model.clone()),
-            provider: Some(result.provider_name.clone()),
-            output_summary: response_text::response_summary(dual, 1200),
-            response: Some(dual.raw.clone()),
-            response_time_ms: result.logged.response_time_ms,
-            input_tokens: dual.typed.usage.as_ref().map(|usage| usage.prompt_tokens),
-            output_tokens: dual.typed.usage.as_ref().map(|usage| usage.completion_tokens),
-            total_tokens: dual.typed.usage.as_ref().map(|usage| usage.total_tokens),
-            cost: result.logged.amount_spent,
-            status: "success".to_string(),
-            status_code: 200,
-            fallback_triggered: false,
-            error_message: None,
-        },
+        Ok(dual) => {
+            let usage = resolved_usage(&dual.raw, &dual.typed);
+            ReplayResponse {
+                source_request_id,
+                request_id: result.logged.log_id,
+                requested_model,
+                effective_model: Some(result.effective_model.clone()),
+                provider: Some(result.provider_name.clone()),
+                output_summary: response_text::response_summary(dual, 1200),
+                response: Some(dual.raw.clone()),
+                response_time_ms: result.logged.response_time_ms,
+                input_tokens: usage.as_ref().map(|usage| usage.prompt_tokens),
+                output_tokens: usage.as_ref().map(|usage| usage.completion_tokens),
+                total_tokens: usage.as_ref().map(|usage| usage.total_tokens),
+                cost: result.logged.amount_spent,
+                status: "success".to_string(),
+                status_code: 200,
+                fallback_triggered: false,
+                error_message: None,
+            }
+        }
         Err(err) => ReplayResponse {
             source_request_id,
             request_id: result.logged.log_id,
@@ -575,8 +618,10 @@ pub async fn replay_my_request(
     if !log.request_type.starts_with("chat_") {
         return Err(GatewayError::Config("当前请求类型暂不支持原样回放".into()));
     }
-    let detail = detail.ok_or_else(|| GatewayError::Config("请求快照缺失，当前日志不可回放".into()))?;
-    let token = token.ok_or_else(|| GatewayError::Config("当前请求缺少可用令牌，无法回放".into()))?;
+    let detail =
+        detail.ok_or_else(|| GatewayError::Config("请求快照缺失，当前日志不可回放".into()))?;
+    let token =
+        token.ok_or_else(|| GatewayError::Config("当前请求缺少可用令牌，无法回放".into()))?;
     let snapshot = snapshot_from_detail(&detail)?;
     let (request, top_k) = request_from_snapshot(&snapshot, &overrides)?;
     let requested_model = request.model.clone();
@@ -602,11 +647,16 @@ pub async fn create_compare(
 ) -> Result<Json<CompareResponse>, GatewayError> {
     let claims = require_user(&headers)?;
     if payload.models.len() < 2 || payload.models.len() > 3 {
-        return Err(GatewayError::Config("模型对比仅支持选择 2 到 3 个模型".into()));
+        return Err(GatewayError::Config(
+            "模型对比仅支持选择 2 到 3 个模型".into(),
+        ));
     }
-    let (_, detail, token) = load_request_log_for_user(&app_state, &claims, payload.source_request_id).await?;
-    let detail = detail.ok_or_else(|| GatewayError::Config("请求快照缺失，当前日志不可加入实验".into()))?;
-    let token = token.ok_or_else(|| GatewayError::Config("当前请求缺少可用令牌，无法加入实验".into()))?;
+    let (_, detail, token) =
+        load_request_log_for_user(&app_state, &claims, payload.source_request_id).await?;
+    let detail =
+        detail.ok_or_else(|| GatewayError::Config("请求快照缺失，当前日志不可加入实验".into()))?;
+    let token =
+        token.ok_or_else(|| GatewayError::Config("当前请求缺少可用令牌，无法加入实验".into()))?;
     let snapshot = snapshot_from_detail(&detail)?;
     let compare_id = format!("cmp_{}", Uuid::new_v4().simple());
     let created_at = Utc::now();
@@ -663,24 +713,29 @@ pub async fn create_compare(
                     .await;
                     let item = match executed {
                         Ok(executed) => match &executed.response {
-                            Ok(dual) => CompareItemResponse {
-                                request_id: executed.logged.log_id,
-                                model: requested_model.clone(),
-                                requested_model,
-                                effective_model: Some(executed.effective_model.clone()),
-                                provider: Some(executed.provider_name.clone()),
-                                output_summary: response_text::response_summary(dual, 1200),
-                                response: Some(dual.raw.clone()),
-                                response_time_ms: executed.logged.response_time_ms,
-                                input_tokens: dual.typed.usage.as_ref().map(|usage| usage.prompt_tokens),
-                                output_tokens: dual.typed.usage.as_ref().map(|usage| usage.completion_tokens),
-                                total_tokens: dual.typed.usage.as_ref().map(|usage| usage.total_tokens),
-                                cost: executed.logged.amount_spent,
-                                status: "success".to_string(),
-                                status_code: 200,
-                                fallback_triggered: false,
-                                error_message: None,
-                            },
+                            Ok(dual) => {
+                                let usage = resolved_usage(&dual.raw, &dual.typed);
+                                CompareItemResponse {
+                                    request_id: executed.logged.log_id,
+                                    model: requested_model.clone(),
+                                    requested_model,
+                                    effective_model: Some(executed.effective_model.clone()),
+                                    provider: Some(executed.provider_name.clone()),
+                                    output_summary: response_text::response_summary(dual, 1200),
+                                    response: Some(dual.raw.clone()),
+                                    response_time_ms: executed.logged.response_time_ms,
+                                    input_tokens: usage.as_ref().map(|usage| usage.prompt_tokens),
+                                    output_tokens: usage
+                                        .as_ref()
+                                        .map(|usage| usage.completion_tokens),
+                                    total_tokens: usage.as_ref().map(|usage| usage.total_tokens),
+                                    cost: executed.logged.amount_spent,
+                                    status: "success".to_string(),
+                                    status_code: 200,
+                                    fallback_triggered: false,
+                                    error_message: None,
+                                }
+                            }
                             Err(err) => CompareItemResponse {
                                 request_id: executed.logged.log_id,
                                 model: requested_model.clone(),

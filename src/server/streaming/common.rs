@@ -80,8 +80,15 @@ pub(super) async fn log_stream_error(
     };
     match app_state.log_store.log_request(log).await {
         Ok(log_id) => {
-            upsert_stream_log_detail(&app_state, log_id, &provider, api_key.as_deref(), 500, &context)
-                .await;
+            upsert_stream_log_detail(
+                &app_state,
+                log_id,
+                &provider,
+                api_key.as_deref(),
+                500,
+                &context,
+            )
+            .await;
         }
         Err(e) => {
             tracing::error!("Failed to log streaming error: {}", e);
@@ -169,8 +176,15 @@ pub(super) async fn log_stream_success(
     };
     match app_state.log_store.log_request(log).await {
         Ok(log_id) => {
-            upsert_stream_log_detail(&app_state, log_id, &provider, api_key.as_deref(), 200, &context)
-                .await;
+            upsert_stream_log_detail(
+                &app_state,
+                log_id,
+                &provider,
+                api_key.as_deref(),
+                200,
+                &context,
+            )
+            .await;
         }
         Err(e) => {
             tracing::error!("Failed to log streaming request: {}", e);
@@ -517,9 +531,16 @@ mod tests {
         )
         .await;
 
-        let logs = logger.get_logs_by_client_token(&token.id, 10).await.unwrap();
+        let logs = logger
+            .get_logs_by_client_token(&token.id, 10)
+            .await
+            .unwrap();
         let log_id = logs.first().and_then(|item| item.id).unwrap();
-        let detail = logger.get_request_log_detail(log_id).await.unwrap().unwrap();
+        let detail = logger
+            .get_request_log_detail(log_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(detail.request_payload_snapshot, Some(snapshot));
         assert_eq!(detail.selected_provider.as_deref(), Some("demo-provider"));
         assert_eq!(detail.upstream_status, Some(200));
