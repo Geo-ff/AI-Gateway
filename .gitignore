@@ -42,3 +42,11 @@ scripts/_biz/biz2_20260113T122657Z_e9bba5.md
 scripts/test_provider_key_strategy_and_stats.sh
 scripts/purge_recharge_logs_before.sh
 scripts/test_stage5_mock_providers.sh
+scripts/request_lab_smoke.sh
+.gitignore
+docs/request-lab/01-logs-entry-upgrade.svg
+docs/request-lab/02-request-lab-main.svg
+docs/request-lab/03-request-lab-compare.svg
+docs/request-lab/04-request-trace-drawer.svg
+docs/request-lab/05-request-lab-dialogs.svg
+docs/request-lab/06-request-lab-components.svg

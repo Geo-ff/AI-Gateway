@@ -11,6 +11,7 @@ use crate::error::GatewayError;
 use crate::providers::adapters::runtime_streaming_unsupported_message;
 use crate::server::AppState;
 use crate::server::chat_request::GatewayChatCompletionRequest;
+use crate::server::request_lab::build_request_payload_snapshot;
 use crate::server::model_redirect::{
     apply_model_redirects, apply_provider_model_redirects_to_parsed_model,
 };
@@ -33,6 +34,7 @@ pub async fn stream_chat_completions(
     Json(gateway_req): Json<GatewayChatCompletionRequest>,
 ) -> Result<Response, GatewayError> {
     let top_k = gateway_req.top_k;
+    let snapshot = build_request_payload_snapshot(&gateway_req.request, top_k)?;
     let mut request = gateway_req.request;
     if !request.stream.unwrap_or(false) {
         return Err(GatewayError::Config(
@@ -352,6 +354,9 @@ pub async fn stream_chat_completions(
             client_token.clone(),
             upstream_req,
             top_k,
+            common::StreamLogContext {
+                request_payload_snapshot: Some(snapshot.clone()),
+            },
         )
         .await
         .map(IntoResponse::into_response),
@@ -366,6 +371,9 @@ pub async fn stream_chat_completions(
             selected.api_key.clone(),
             client_token.clone(),
             upstream_req,
+            common::StreamLogContext {
+                request_payload_snapshot: Some(snapshot.clone()),
+            },
         )
         .await
         .map(IntoResponse::into_response),
@@ -383,6 +391,9 @@ pub async fn stream_chat_completions(
                 client_token.clone(),
                 upstream_req,
                 selected.provider.provider_config.clone(),
+                common::StreamLogContext {
+                    request_payload_snapshot: Some(snapshot.clone()),
+                },
             )
             .await
             .map(IntoResponse::into_response)
@@ -399,6 +410,9 @@ pub async fn stream_chat_completions(
                 selected.api_key.clone(),
                 client_token.clone(),
                 upstream_req,
+                common::StreamLogContext {
+                    request_payload_snapshot: Some(snapshot.clone()),
+                },
             )
             .await
             .map(IntoResponse::into_response)
@@ -420,6 +434,9 @@ pub async fn stream_chat_completions(
             client_token.clone(),
             upstream_req,
             selected.provider.provider_config.clone(),
+            common::StreamLogContext {
+                request_payload_snapshot: Some(snapshot),
+            },
         )
         .await
         .map(IntoResponse::into_response),

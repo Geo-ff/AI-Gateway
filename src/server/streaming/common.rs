@@ -4,9 +4,38 @@ use chrono::{DateTime, Utc};
 
 use crate::balance::BalanceTransactionKind;
 use crate::logging::RequestLog;
-use crate::logging::types::REQ_TYPE_CHAT_STREAM;
+use crate::logging::types::{REQ_TYPE_CHAT_STREAM, RequestLogDetailRecord};
 use crate::providers::openai::Usage;
 use crate::server::AppState;
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct StreamLogContext {
+    pub request_payload_snapshot: Option<String>,
+}
+
+async fn upsert_stream_log_detail(
+    app_state: &AppState,
+    request_log_id: i64,
+    provider: &str,
+    api_key: Option<&str>,
+    status_code: u16,
+    context: &StreamLogContext,
+) {
+    let detail = RequestLogDetailRecord {
+        request_log_id,
+        request_payload_snapshot: context.request_payload_snapshot.clone(),
+        response_preview: None,
+        upstream_status: Some(i64::from(status_code)),
+        fallback_triggered: None,
+        fallback_reason: None,
+        selected_provider: Some(provider.to_string()),
+        selected_key_id: api_key.map(str::to_string),
+        first_token_latency_ms: None,
+    };
+    if let Err(error) = app_state.log_store.upsert_request_log_detail(detail).await {
+        tracing::warn!("Failed to upsert streaming request log detail: {}", error);
+    }
+}
 
 // 统一的流式错误日志记录函数（KISS/DRY）
 pub(super) async fn log_stream_error(
@@ -19,6 +48,7 @@ pub(super) async fn log_stream_error(
     api_key: Option<String>,
     client_token: Option<String>,
     error_message: String,
+    context: StreamLogContext,
 ) {
     let end_time = Utc::now();
     let response_time_ms = (end_time - start_time).num_milliseconds();
@@ -34,8 +64,8 @@ pub(super) async fn log_stream_error(
         requested_model: Some(requested_model),
         effective_model: Some(effective_model),
         model: Some(billing_model),
-        provider: Some(provider),
-        api_key,
+        provider: Some(provider.clone()),
+        api_key: api_key.clone(),
         client_token: client_token_id,
         user_id: None,
         amount_spent: None,
@@ -48,8 +78,14 @@ pub(super) async fn log_stream_error(
         reasoning_tokens: None,
         error_message: Some(error_message),
     };
-    if let Err(e) = app_state.log_store.log_request(log).await {
-        tracing::error!("Failed to log streaming error: {}", e);
+    match app_state.log_store.log_request(log).await {
+        Ok(log_id) => {
+            upsert_stream_log_detail(&app_state, log_id, &provider, api_key.as_deref(), 500, &context)
+                .await;
+        }
+        Err(e) => {
+            tracing::error!("Failed to log streaming error: {}", e);
+        }
     }
 }
 
@@ -64,6 +100,7 @@ pub(super) async fn log_stream_success(
     api_key: Option<String>,
     client_token: Option<String>,
     usage: Option<Usage>,
+    context: StreamLogContext,
 ) {
     let end_time = Utc::now();
     let response_time_ms = (end_time - start_time).num_milliseconds();
@@ -116,8 +153,8 @@ pub(super) async fn log_stream_success(
         requested_model: Some(requested_model),
         effective_model: Some(effective_model),
         model: Some(billing_model),
-        provider: Some(provider),
-        api_key,
+        provider: Some(provider.clone()),
+        api_key: api_key.clone(),
         client_token: client_token_id,
         user_id: None,
         amount_spent,
@@ -130,8 +167,14 @@ pub(super) async fn log_stream_success(
         reasoning_tokens: reasoning,
         error_message: None,
     };
-    if let Err(e) = app_state.log_store.log_request(log).await {
-        tracing::error!("Failed to log streaming request: {}", e);
+    match app_state.log_store.log_request(log).await {
+        Ok(log_id) => {
+            upsert_stream_log_detail(&app_state, log_id, &provider, api_key.as_deref(), 200, &context)
+                .await;
+        }
+        Err(e) => {
+            tracing::error!("Failed to log streaming request: {}", e);
+        }
     }
 
     // 增量更新 client_tokens：金额与 tokens（仅当有 Client Token 时）
@@ -382,6 +425,7 @@ mod tests {
                 prompt_tokens_details: None,
                 completion_tokens_details: None,
             }),
+            StreamLogContext::default(),
         )
         .await;
 
@@ -392,5 +436,93 @@ mod tests {
         assert!(!txs.is_empty());
         assert_eq!(txs[0].kind.as_str(), "spend");
         assert!((txs[0].amount + 1000.0).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn stream_success_persists_request_snapshot_detail() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("gateway.db");
+        let logger = Arc::new(
+            DatabaseLogger::new(db_path.to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let settings = test_settings(db_path.to_string_lossy().to_string());
+
+        let app_state = Arc::new(AppState {
+            config: settings,
+            load_balancer_state: Arc::new(crate::routing::LoadBalancerState::default()),
+            log_store: logger.clone(),
+            model_cache: logger.clone(),
+            providers: logger.clone(),
+            token_store: logger.clone(),
+            favorites_store: logger.clone(),
+            login_manager: Arc::new(LoginManager::new(logger.clone())),
+            user_store: logger.clone(),
+            refresh_token_store: logger.clone(),
+            password_reset_token_store: logger.clone(),
+            balance_store: logger.clone(),
+            subscription_store: logger.clone(),
+        });
+
+        let token = logger
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: None,
+                name: Some("t1".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+
+        let snapshot = serde_json::json!({
+            "kind": "chat_completions",
+            "request": {
+                "model": "demo/model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true
+            }
+        })
+        .to_string();
+
+        log_stream_success(
+            app_state,
+            Utc::now(),
+            "demo/model".into(),
+            "demo/model".into(),
+            "demo/model".into(),
+            "demo-provider".into(),
+            Some("sk-d****cret".into()),
+            Some(token.token.clone()),
+            Some(Usage {
+                prompt_tokens: 1,
+                completion_tokens: 1,
+                total_tokens: 2,
+                prompt_tokens_details: None,
+                completion_tokens_details: None,
+            }),
+            StreamLogContext {
+                request_payload_snapshot: Some(snapshot.clone()),
+            },
+        )
+        .await;
+
+        let logs = logger.get_logs_by_client_token(&token.id, 10).await.unwrap();
+        let log_id = logs.first().and_then(|item| item.id).unwrap();
+        let detail = logger.get_request_log_detail(log_id).await.unwrap().unwrap();
+        assert_eq!(detail.request_payload_snapshot, Some(snapshot));
+        assert_eq!(detail.selected_provider.as_deref(), Some("demo-provider"));
+        assert_eq!(detail.upstream_status, Some(200));
+        assert_eq!(detail.selected_key_id.as_deref(), Some("sk-d****cret"));
     }
 }

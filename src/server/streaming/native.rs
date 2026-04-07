@@ -791,6 +791,7 @@ pub async fn stream_native_chat(
     client_token: Option<String>,
     mut upstream_req: ChatCompletionRequest,
     provider_config: ProviderConfig,
+    log_context: super::common::StreamLogContext,
 ) -> Result<Response, GatewayError> {
     let api_key_ref = Some(mask_key(&api_key));
     let usage_cell: Arc<Mutex<Option<Usage>>> = Arc::new(Mutex::new(None));
@@ -1248,6 +1249,7 @@ pub async fn stream_native_chat(
                         api_key_ref,
                         client_token_for_task,
                         usage_snapshot,
+                        log_context.clone(),
                     )
                     .await;
                 }
@@ -1265,6 +1267,7 @@ pub async fn stream_native_chat(
                         api_key_ref,
                         client_token_for_task,
                         message.clone(),
+                        log_context,
                     )
                     .await;
                 }

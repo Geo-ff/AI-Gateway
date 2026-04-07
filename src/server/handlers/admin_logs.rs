@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::auth::{AdminIdentity, require_superadmin};
 use crate::error::GatewayError;
+use crate::logging::types::RequestLogDetailRecord;
 use crate::logging::types::RequestLog;
 use crate::server::AppState;
 use crate::server::model_display::format_model_display_name;
@@ -82,6 +83,7 @@ pub struct RequestLogEntry {
     pub reasoning_tokens: Option<u32>,
     pub error_message: Option<String>,
     pub success: bool,
+    pub replayable: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -214,6 +216,13 @@ fn filter_logs<'a>(logs: &'a [RequestLog], query: &LogsQuery) -> Vec<&'a Request
         .collect()
 }
 
+fn is_replayable_detail(detail: Option<&RequestLogDetailRecord>) -> bool {
+    detail
+        .and_then(|item| item.request_payload_snapshot.as_deref())
+        .map(|snapshot| !snapshot.trim().is_empty())
+        .unwrap_or(false)
+}
+
 pub async fn list_request_logs(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -307,6 +316,27 @@ pub async fn list_request_logs(
             .into_iter()
             .map(|provider| (provider.name.clone(), provider))
             .collect();
+    let mut replayable_by_id: std::collections::HashMap<i64, bool> =
+        std::collections::HashMap::new();
+    for log in &filtered {
+        let replayable = if log.request_type.starts_with("chat_") {
+            if let Some(log_id) = log.id {
+                let detail = app_state
+                    .log_store
+                    .get_request_log_detail(log_id)
+                    .await
+                    .map_err(GatewayError::Db)?;
+                is_replayable_detail(detail.as_ref())
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if let Some(log_id) = log.id {
+            replayable_by_id.insert(log_id, replayable);
+        }
+    }
     let data: Vec<RequestLogEntry> = filtered
         .into_iter()
         .map(|log| {
@@ -374,6 +404,10 @@ pub async fn list_request_logs(
                 reasoning_tokens: log.reasoning_tokens,
                 error_message: log.error_message.clone(),
                 success: log.status_code < 400,
+                replayable: log
+                    .id
+                    .and_then(|log_id| replayable_by_id.get(&log_id).copied())
+                    .unwrap_or(false),
             }
         })
         .collect();
@@ -518,6 +552,7 @@ pub async fn list_chat_completion_logs(
                 reasoning_tokens: log.reasoning_tokens,
                 error_message: log.error_message.clone(),
                 success: log.status_code < 400,
+                replayable: false,
             }
         })
         .collect();

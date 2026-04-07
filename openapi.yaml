@@ -203,6 +203,9 @@ components:
           nullable: true
         success:
           type: boolean
+        replayable:
+          type: boolean
+          description: 当前日志是否具备最小可回放快照，可直接原样回放或加入实验
 
     RequestLogsResponse:
       type: object
@@ -273,6 +276,9 @@ components:
           nullable: true
         success:
           type: boolean
+        replayable:
+          type: boolean
+          description: 当前日志是否具备最小可回放快照，可直接原样回放或加入实验
 
     MyRequestLogsResponse:
       type: object
@@ -287,6 +293,259 @@ components:
           type: integer
           format: int64
           nullable: true
+
+    RequestPayloadSnapshot:
+      type: object
+      properties:
+        kind:
+          type: string
+        request:
+          type: object
+          additionalProperties: true
+        top_k:
+          type: integer
+          nullable: true
+
+    RequestDetailResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        timestamp:
+          type: string
+          format: date-time
+        requested_model:
+          type: string
+          nullable: true
+        effective_model:
+          type: string
+          nullable: true
+        provider:
+          type: string
+          nullable: true
+        api_key:
+          type: string
+          nullable: true
+        client_token_id:
+          type: string
+          nullable: true
+        client_token_name:
+          type: string
+          nullable: true
+        username:
+          type: string
+          nullable: true
+        request_type:
+          type: string
+        path:
+          type: string
+        method:
+          type: string
+        input_tokens:
+          type: integer
+          nullable: true
+        output_tokens:
+          type: integer
+          nullable: true
+        total_tokens:
+          type: integer
+          nullable: true
+        cost:
+          type: number
+          format: double
+          nullable: true
+        status:
+          type: string
+          enum: [success, failed]
+        status_code:
+          type: integer
+        response_time_ms:
+          type: integer
+          format: int64
+        request_payload_snapshot:
+          $ref: '#/components/schemas/RequestPayloadSnapshot'
+          nullable: true
+        response_preview:
+          type: string
+          nullable: true
+        upstream_status:
+          type: integer
+          format: int64
+          nullable: true
+        fallback_triggered:
+          type: boolean
+          nullable: true
+        fallback_reason:
+          type: string
+          nullable: true
+        selected_provider:
+          type: string
+          nullable: true
+        selected_key_id:
+          type: string
+          nullable: true
+        first_token_latency_ms:
+          type: integer
+          format: int64
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+
+    ReplayRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          nullable: true
+        temperature:
+          type: number
+          nullable: true
+        max_tokens:
+          type: integer
+          nullable: true
+
+    ReplayResponse:
+      type: object
+      properties:
+        source_request_id:
+          type: integer
+          format: int64
+        request_id:
+          type: integer
+          format: int64
+          nullable: true
+        requested_model:
+          type: string
+        effective_model:
+          type: string
+          nullable: true
+        provider:
+          type: string
+          nullable: true
+        output_summary:
+          type: string
+          nullable: true
+        response:
+          type: object
+          nullable: true
+          additionalProperties: true
+        response_time_ms:
+          type: integer
+          format: int64
+        input_tokens:
+          type: integer
+          nullable: true
+        output_tokens:
+          type: integer
+          nullable: true
+        total_tokens:
+          type: integer
+          nullable: true
+        cost:
+          type: number
+          format: double
+          nullable: true
+        status:
+          type: string
+          enum: [success, failed]
+        status_code:
+          type: integer
+        fallback_triggered:
+          type: boolean
+        error_message:
+          type: string
+          nullable: true
+
+    CompareRequest:
+      type: object
+      required:
+        - source_request_id
+        - models
+      properties:
+        source_request_id:
+          type: integer
+          format: int64
+        models:
+          type: array
+          minItems: 2
+          maxItems: 3
+          items:
+            type: string
+        temperature:
+          type: number
+          nullable: true
+        max_tokens:
+          type: integer
+          nullable: true
+
+    CompareItemResponse:
+      type: object
+      properties:
+        request_id:
+          type: integer
+          format: int64
+          nullable: true
+        model:
+          type: string
+        requested_model:
+          type: string
+        effective_model:
+          type: string
+          nullable: true
+        provider:
+          type: string
+          nullable: true
+        output_summary:
+          type: string
+          nullable: true
+        response:
+          type: object
+          nullable: true
+          additionalProperties: true
+        response_time_ms:
+          type: integer
+          format: int64
+        input_tokens:
+          type: integer
+          nullable: true
+        output_tokens:
+          type: integer
+          nullable: true
+        total_tokens:
+          type: integer
+          nullable: true
+        cost:
+          type: number
+          format: double
+          nullable: true
+        status:
+          type: string
+          enum: [success, failed]
+        status_code:
+          type: integer
+        fallback_triggered:
+          type: boolean
+        error_message:
+          type: string
+          nullable: true
+
+    CompareResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        source_request_id:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompareItemResponse'
 
     OperationLogEntry:
       type: object
@@ -2893,6 +3152,168 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /me/requests/{id}:
+    get:
+      summary: 获取我的请求明细
+      operationId: getMyRequestDetail
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestDetailResponse'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 无权访问该请求
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 请求不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /me/requests/{id}/replay:
+    post:
+      summary: 原样回放我的历史请求
+      operationId: replayMyRequest
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplayRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayResponse'
+        '400':
+          description: 快照缺失、请求不可回放、参数非法
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 无权访问该请求
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /me/compare:
+    post:
+      summary: 创建模型对比
+      operationId: createCompare
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompareRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompareResponse'
+        '400':
+          description: 快照缺失、模型不可用、参数非法
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /me/compare/{id}:
+    get:
+      summary: 获取模型对比结果
+      operationId: getCompare
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompareResponse'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 无权访问该对比结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 对比记录不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   # ==================== 管理员接口 ====================
   /admin/tokens:
     get:
@@ -4758,6 +5179,48 @@ paths:
                 $ref: '#/components/schemas/Error'
         '403':
           description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /admin/requests/{id}:
+    get:
+      summary: 获取管理员视角请求明细
+      operationId: getAdminRequestDetail
+      tags:
+        - Admin
+      security:
+        - AccessToken: []
+        - AdminTuiSessionToken: []
+        - AdminSessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestDetailResponse'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 权限不足
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 请求不存在
           content:
             application/json:
               schema:

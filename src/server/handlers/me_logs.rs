@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::auth::require_user;
 use crate::error::GatewayError;
+use crate::logging::types::RequestLogDetailRecord;
 use crate::logging::types::RequestLog;
 use crate::server::AppState;
 use crate::server::model_display::format_model_display_name;
@@ -53,6 +54,7 @@ pub struct MyRequestLogEntry {
     pub total_tokens: Option<u32>,
     pub error_message: Option<String>,
     pub success: bool,
+    pub replayable: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,6 +84,13 @@ fn normalize_status(status_code: u16) -> &'static str {
     } else {
         "failed"
     }
+}
+
+fn is_replayable_detail(detail: Option<&RequestLogDetailRecord>) -> bool {
+    detail
+        .and_then(|item| item.request_payload_snapshot.as_deref())
+        .map(|snapshot| !snapshot.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn matches_query(
@@ -206,6 +215,26 @@ pub async fn list_my_request_logs(
     }
 
     let next_cursor = out.last().and_then(|l| l.id).filter(|_| out.len() == limit);
+    let mut replayable_by_id: HashMap<i64, bool> = HashMap::new();
+    for log in &out {
+        let replayable = if log.request_type.starts_with("chat_") {
+            if let Some(log_id) = log.id {
+                let detail = app_state
+                    .log_store
+                    .get_request_log_detail(log_id)
+                    .await
+                    .map_err(GatewayError::Db)?;
+                is_replayable_detail(detail.as_ref())
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if let Some(log_id) = log.id {
+            replayable_by_id.insert(log_id, replayable);
+        }
+    }
 
     let data = out
         .into_iter()
@@ -249,6 +278,10 @@ pub async fn list_my_request_logs(
                 total_tokens: log.total_tokens,
                 error_message: log.error_message,
                 success: log.status_code < 400,
+                replayable: log
+                    .id
+                    .and_then(|log_id| replayable_by_id.get(&log_id).copied())
+                    .unwrap_or(false),
             }
         })
         .collect::<Vec<_>>();

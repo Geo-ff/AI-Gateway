@@ -2,11 +2,59 @@ use crate::admin::client_token_id_for_token;
 use crate::balance::BalanceTransactionKind;
 use crate::error::GatewayError;
 use crate::logging::RequestLog;
-use crate::logging::types::REQ_TYPE_CHAT_ONCE;
+use crate::logging::types::{REQ_TYPE_CHAT_ONCE, RequestLogDetailRecord};
 use crate::providers::openai::types::RawAndTypedChatCompletion;
 use crate::server::AppState;
 use crate::server::util::mask_key;
 use chrono::{DateTime, Utc};
+
+#[derive(Debug, Clone, Default)]
+pub struct ChatLogContext {
+    pub path: String,
+    pub request_type: String,
+    pub request_payload_snapshot: Option<String>,
+    pub upstream_status: Option<i64>,
+    pub fallback_triggered: Option<bool>,
+    pub fallback_reason: Option<String>,
+    pub selected_provider: Option<String>,
+    pub selected_key_id: Option<String>,
+    pub first_token_latency_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct LoggedChatRequest {
+    pub log_id: Option<i64>,
+    pub amount_spent: Option<f64>,
+    pub response_time_ms: i64,
+}
+
+fn response_preview(response: &Result<RawAndTypedChatCompletion, GatewayError>) -> Option<String> {
+    fn truncate(text: String, max_len: usize) -> String {
+        if text.chars().count() <= max_len {
+            return text;
+        }
+        text.chars().take(max_len).collect::<String>() + "…"
+    }
+
+    match response {
+        Ok(dual) => {
+            let content = dual
+                .raw
+                .get("choices")
+                .and_then(|v| v.as_array())
+                .and_then(|choices| choices.first())
+                .and_then(|choice| choice.get("message"))
+                .and_then(|message| message.get("content"));
+            let preview = match content {
+                Some(serde_json::Value::String(text)) => text.clone(),
+                Some(value) => serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
+                None => serde_json::to_string(&dual.raw).unwrap_or_else(|_| dual.raw.to_string()),
+            };
+            Some(truncate(preview, 1200))
+        }
+        Err(err) => Some(truncate(err.to_string(), 600)),
+    }
+}
 
 // 记录聊天请求日志（包含响应耗时和 token 使用情况）
 pub async fn log_chat_request(
@@ -19,7 +67,8 @@ pub async fn log_chat_request(
     api_key_raw: &str,
     client_token: Option<&str>,
     response: &Result<RawAndTypedChatCompletion, GatewayError>,
-) {
+    context: ChatLogContext,
+) -> LoggedChatRequest {
     let end_time = Utc::now();
     let response_time_ms = (end_time - start_time).num_milliseconds();
 
@@ -57,8 +106,16 @@ pub async fn log_chat_request(
         id: None,
         timestamp: start_time,
         method: "POST".to_string(),
-        path: "/v1/chat/completions".to_string(),
-        request_type: REQ_TYPE_CHAT_ONCE.to_string(),
+        path: if context.path.is_empty() {
+            "/v1/chat/completions".to_string()
+        } else {
+            context.path.clone()
+        },
+        request_type: if context.request_type.is_empty() {
+            REQ_TYPE_CHAT_ONCE.to_string()
+        } else {
+            context.request_type.clone()
+        },
         requested_model: Some(requested_model.to_string()),
         effective_model: Some(effective_model.to_string()),
         model: Some(billing_model.to_string()),
@@ -98,8 +155,31 @@ pub async fn log_chat_request(
         error_message: response.as_ref().err().map(|e| e.to_string()),
     };
 
-    if let Err(e) = app_state.log_store.log_request(log).await {
-        tracing::error!("Failed to log request: {}", e);
+    let log_id = match app_state.log_store.log_request(log).await {
+        Ok(id) => Some(id),
+        Err(e) => {
+            tracing::error!("Failed to log request: {}", e);
+            None
+        }
+    };
+
+    if let Some(request_log_id) = log_id {
+        let detail = RequestLogDetailRecord {
+            request_log_id,
+            request_payload_snapshot: context.request_payload_snapshot,
+            response_preview: response_preview(response),
+            upstream_status: context.upstream_status.or(Some(if response.is_ok() { 200 } else { 500 })),
+            fallback_triggered: context.fallback_triggered,
+            fallback_reason: context.fallback_reason,
+            selected_provider: context
+                .selected_provider
+                .or_else(|| Some(provider_name.to_string())),
+            selected_key_id: context.selected_key_id.or_else(|| Some(mask_key(api_key_raw))),
+            first_token_latency_ms: context.first_token_latency_ms,
+        };
+        if let Err(e) = app_state.log_store.upsert_request_log_detail(detail).await {
+            tracing::warn!("Failed to upsert request log detail: {}", e);
+        }
     }
 
     // 增量更新 client_tokens：金额与 tokens（仅当有 usage/金额 与 Client Token 时）
@@ -174,6 +254,12 @@ pub async fn log_chat_request(
                 }
             }
         }
+    }
+
+    LoggedChatRequest {
+        log_id,
+        amount_spent,
+        response_time_ms,
     }
 }
 
@@ -336,6 +422,7 @@ mod tests {
             "sk-test",
             Some(created.token.as_str()),
             &Ok(dual),
+            ChatLogContext::default(),
         )
         .await;
 
@@ -472,6 +559,7 @@ mod tests {
             "sk-test",
             Some(created.token.as_str()),
             &Ok(dual),
+            ChatLogContext::default(),
         )
         .await;
 

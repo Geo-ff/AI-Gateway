@@ -27,6 +27,7 @@ pub async fn stream_anthropic_chat(
     client_token: Option<String>,
     mut upstream_req: ChatCompletionRequest,
     top_k: Option<u32>,
+    log_context: super::common::StreamLogContext,
 ) -> Result<Response, GatewayError> {
     // Ensure we don't accidentally request upstream SSE.
     upstream_req.stream = Some(false);
@@ -124,6 +125,7 @@ pub async fn stream_anthropic_chat(
                             api_key,
                             ct,
                             usage,
+                            log_context.clone(),
                         )
                         .await;
                     }
@@ -151,6 +153,7 @@ pub async fn stream_anthropic_chat(
                             api_key,
                             ct,
                             msg,
+                            log_context.clone(),
                         )
                         .await;
                     }

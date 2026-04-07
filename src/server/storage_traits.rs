@@ -2,7 +2,9 @@ use std::future::Future;
 use std::pin::Pin;
 
 use crate::config::settings::{KeyLogStrategy, Provider};
-use crate::logging::types::{ModelPriceRecord, ModelPriceUpsert, ProviderOpLog};
+use crate::logging::types::{
+    ModelPriceRecord, ModelPriceUpsert, ProviderOpLog, RequestLogDetailRecord, StoredCompareRun,
+};
 use crate::logging::{CachedModel, DatabaseLogger, ProviderKeyStatsAgg, RequestLog};
 use crate::providers::openai::Model;
 use crate::routing::{KeyRotationStrategy, ProviderKeyEntry};
@@ -76,6 +78,26 @@ pub trait RequestLogStore: Send + Sync {
         limit: i32,
         cursor: Option<i64>,
     ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>>;
+    fn get_request_log_by_id<'a>(
+        &'a self,
+        id: i64,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<RequestLog>>>;
+    fn upsert_request_log_detail<'a>(
+        &'a self,
+        detail: RequestLogDetailRecord,
+    ) -> BoxFuture<'a, rusqlite::Result<()>>;
+    fn get_request_log_detail<'a>(
+        &'a self,
+        request_log_id: i64,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<RequestLogDetailRecord>>>;
+    fn save_compare_run<'a>(
+        &'a self,
+        run: StoredCompareRun,
+    ) -> BoxFuture<'a, rusqlite::Result<()>>;
+    fn get_compare_run<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<StoredCompareRun>>>;
     #[allow(dead_code)]
     fn sum_total_tokens_by_client_token<'a>(
         &'a self,
@@ -439,6 +461,41 @@ impl RequestLogStore for DatabaseLogger {
             self.get_logs_by_method_path(method, path, limit, cursor)
                 .await
         })
+    }
+
+    fn get_request_log_by_id<'a>(
+        &'a self,
+        id: i64,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<RequestLog>>> {
+        Box::pin(async move { self.get_request_log_by_id(id).await })
+    }
+
+    fn upsert_request_log_detail<'a>(
+        &'a self,
+        detail: RequestLogDetailRecord,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move { self.upsert_request_log_detail(detail).await })
+    }
+
+    fn get_request_log_detail<'a>(
+        &'a self,
+        request_log_id: i64,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<RequestLogDetailRecord>>> {
+        Box::pin(async move { self.get_request_log_detail(request_log_id).await })
+    }
+
+    fn save_compare_run<'a>(
+        &'a self,
+        run: StoredCompareRun,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move { self.save_compare_run(run).await })
+    }
+
+    fn get_compare_run<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<StoredCompareRun>>> {
+        Box::pin(async move { self.get_compare_run(id).await })
     }
 
     fn sum_total_tokens_by_client_token<'a>(

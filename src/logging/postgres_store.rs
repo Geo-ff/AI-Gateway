@@ -7,7 +7,7 @@ use tokio_postgres::{Client, NoTls, Row};
 use crate::config::settings::{KeyLogStrategy, Provider, ProviderConfig, ProviderType};
 use crate::error::GatewayError;
 use crate::logging::time::{parse_datetime_string, to_beijing_string, to_iso8601_utc_string};
-use crate::logging::types::ProviderOpLog;
+use crate::logging::types::{ProviderOpLog, RequestLogDetailRecord, StoredCompareRun};
 use crate::logging::{
     CachedModel, ModelPriceRecord, ModelPriceSource, ModelPriceStatus, ModelPriceUpsert,
     ProviderKeyStatsAgg, RequestLog,
@@ -214,7 +214,7 @@ impl PgLogStore {
         client
             .execute(
                 r#"CREATE TABLE IF NOT EXISTS request_logs (
-                id SERIAL PRIMARY KEY,
+                id BIGSERIAL PRIMARY KEY,
                 timestamp TEXT NOT NULL,
                 method TEXT NOT NULL,
                 path TEXT NOT NULL,
@@ -259,6 +259,114 @@ impl PgLogStore {
         let _ = client
             .execute(
                 "ALTER TABLE request_logs ADD COLUMN effective_model TEXT",
+                &[],
+            )
+            .await;
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS request_log_details (
+                request_log_id BIGINT PRIMARY KEY REFERENCES request_logs(id) ON DELETE CASCADE,
+                request_payload_snapshot TEXT,
+                response_preview TEXT,
+                upstream_status BIGINT,
+                fallback_triggered BOOLEAN,
+                fallback_reason TEXT,
+                selected_provider TEXT,
+                selected_key_id TEXT,
+                first_token_latency_ms BIGINT
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| {
+                GatewayError::Config(format!("Failed to init request_log_details: {}", e))
+            })?;
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS compare_runs (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                source_request_id BIGINT NOT NULL,
+                created_at TEXT NOT NULL,
+                result_json TEXT NOT NULL
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init compare_runs: {}", e)))?;
+        client
+            .batch_execute(
+                r#"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                          AND table_name = 'request_logs'
+                          AND column_name = 'id'
+                          AND data_type = 'integer'
+                    ) THEN
+                        ALTER TABLE request_logs
+                            ALTER COLUMN id TYPE BIGINT USING id::BIGINT;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                          AND table_name = 'request_log_details'
+                          AND column_name = 'request_log_id'
+                          AND data_type = 'integer'
+                    ) THEN
+                        ALTER TABLE request_log_details
+                            ALTER COLUMN request_log_id TYPE BIGINT USING request_log_id::BIGINT;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                          AND table_name = 'request_log_details'
+                          AND column_name = 'upstream_status'
+                          AND data_type = 'integer'
+                    ) THEN
+                        ALTER TABLE request_log_details
+                            ALTER COLUMN upstream_status TYPE BIGINT USING upstream_status::BIGINT;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                          AND table_name = 'request_log_details'
+                          AND column_name = 'first_token_latency_ms'
+                          AND data_type = 'integer'
+                    ) THEN
+                        ALTER TABLE request_log_details
+                            ALTER COLUMN first_token_latency_ms TYPE BIGINT USING first_token_latency_ms::BIGINT;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                          AND table_name = 'compare_runs'
+                          AND column_name = 'source_request_id'
+                          AND data_type = 'integer'
+                    ) THEN
+                        ALTER TABLE compare_runs
+                            ALTER COLUMN source_request_id TYPE BIGINT USING source_request_id::BIGINT;
+                    END IF;
+                END
+                $$;
+                "#,
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to migrate request_lab tables: {}", e)))?;
+        let _ = client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS compare_runs_user_id_created_at_idx ON compare_runs (user_id, created_at)",
                 &[],
             )
             .await;
@@ -764,15 +872,16 @@ impl RequestLogStore for PgLogStore {
     fn log_request<'a>(&'a self, log: RequestLog) -> BoxFuture<'a, rusqlite::Result<i64>> {
         Box::pin(async move {
             let client = self.pool.pick();
-            let res = client
-                .execute(
+            let row = client
+                .query_one(
                     "INSERT INTO request_logs (timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent)
-                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)",
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+                     RETURNING id",
                     &[&to_beijing_string(&log.timestamp), &log.method, &log.path, &log.request_type, &log.requested_model, &log.effective_model, &log.model, &log.provider, &log.api_key, &i32::from(log.status_code), &log.response_time_ms, &log.prompt_tokens.map(|v| v as i32), &log.completion_tokens.map(|v| v as i32), &log.total_tokens.map(|v| v as i32), &log.cached_tokens.map(|v| v as i32), &log.reasoning_tokens.map(|v| v as i32), &log.error_message, &log.client_token, &log.user_id, &log.amount_spent],
                 )
                 .await
                 .map_err(pg_err)?;
-            Ok(res as i64)
+            Ok(pg_row_i64_or(&row, 0, 0))
         })
     }
 
@@ -883,6 +992,141 @@ impl RequestLogStore for PgLogStore {
                     .map_err(pg_err)?
             };
             Ok(rows.into_iter().map(Self::row_to_request_log).collect())
+        })
+    }
+
+    fn get_request_log_by_id<'a>(
+        &'a self,
+        id: i64,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<RequestLog>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent FROM request_logs WHERE id = $1 LIMIT 1",
+                    &[&id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(row.map(Self::row_to_request_log))
+        })
+    }
+
+    fn upsert_request_log_detail<'a>(
+        &'a self,
+        detail: RequestLogDetailRecord,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            client
+                .execute(
+                    "INSERT INTO request_log_details (
+                        request_log_id, request_payload_snapshot, response_preview, upstream_status,
+                        fallback_triggered, fallback_reason, selected_provider, selected_key_id, first_token_latency_ms
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                    ON CONFLICT (request_log_id) DO UPDATE SET
+                        request_payload_snapshot = EXCLUDED.request_payload_snapshot,
+                        response_preview = EXCLUDED.response_preview,
+                        upstream_status = EXCLUDED.upstream_status,
+                        fallback_triggered = EXCLUDED.fallback_triggered,
+                        fallback_reason = EXCLUDED.fallback_reason,
+                        selected_provider = EXCLUDED.selected_provider,
+                        selected_key_id = EXCLUDED.selected_key_id,
+                        first_token_latency_ms = EXCLUDED.first_token_latency_ms",
+                    &[
+                        &detail.request_log_id,
+                        &detail.request_payload_snapshot,
+                        &detail.response_preview,
+                        &detail.upstream_status,
+                        &detail.fallback_triggered,
+                        &detail.fallback_reason,
+                        &detail.selected_provider,
+                        &detail.selected_key_id,
+                        &detail.first_token_latency_ms,
+                    ],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(())
+        })
+    }
+
+    fn get_request_log_detail<'a>(
+        &'a self,
+        request_log_id: i64,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<RequestLogDetailRecord>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "SELECT request_log_id, request_payload_snapshot, response_preview, upstream_status, fallback_triggered, fallback_reason, selected_provider, selected_key_id, first_token_latency_ms FROM request_log_details WHERE request_log_id = $1 LIMIT 1",
+                    &[&request_log_id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(row.map(|row| RequestLogDetailRecord {
+                request_log_id: pg_row_i64_or(&row, 0, 0),
+                request_payload_snapshot: pg_row_opt_string(&row, 1),
+                response_preview: pg_row_opt_string(&row, 2),
+                upstream_status: pg_row_i64(&row, 3),
+                fallback_triggered: row.try_get::<usize, Option<bool>>(4).ok().flatten(),
+                fallback_reason: pg_row_opt_string(&row, 5),
+                selected_provider: pg_row_opt_string(&row, 6),
+                selected_key_id: pg_row_opt_string(&row, 7),
+                first_token_latency_ms: pg_row_i64(&row, 8),
+            }))
+        })
+    }
+
+    fn save_compare_run<'a>(
+        &'a self,
+        run: StoredCompareRun,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            client
+                .execute(
+                    "INSERT INTO compare_runs (id, user_id, source_request_id, created_at, result_json)
+                     VALUES ($1,$2,$3,$4,$5)
+                     ON CONFLICT (id) DO UPDATE SET
+                        user_id = EXCLUDED.user_id,
+                        source_request_id = EXCLUDED.source_request_id,
+                        created_at = EXCLUDED.created_at,
+                        result_json = EXCLUDED.result_json",
+                    &[
+                        &run.id,
+                        &run.user_id,
+                        &run.source_request_id,
+                        &to_beijing_string(&run.created_at),
+                        &run.result_json,
+                    ],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(())
+        })
+    }
+
+    fn get_compare_run<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<StoredCompareRun>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "SELECT id, user_id, source_request_id, created_at, result_json FROM compare_runs WHERE id = $1 LIMIT 1",
+                    &[&id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(row.map(|row| StoredCompareRun {
+                id: pg_row_string(&row, 0),
+                user_id: pg_row_string(&row, 1),
+                source_request_id: pg_row_i64_or(&row, 2, 0),
+                created_at: pg_row_datetime_or_now(&row, 3),
+                result_json: pg_row_string(&row, 4),
+            }))
         })
     }
 

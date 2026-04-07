@@ -47,6 +47,7 @@ pub async fn stream_openai_chat(
     api_key: String,
     client_token: Option<String>,
     mut upstream_req: ChatCompletionRequest,
+    log_context: super::common::StreamLogContext,
 ) -> Result<Response, GatewayError> {
     let url = join_openai_compat_endpoint(&base_url, "chat/completions");
     let client = crate::http_client::client_for_url(&url)?;
@@ -87,6 +88,7 @@ pub async fn stream_openai_chat(
                 let started_at = start_time;
                 let msg = e.to_string();
                 let ct_err = client_token_for_outer.clone();
+                let log_context_for_error = log_context.clone();
                 tokio::spawn(async move {
                     super::common::log_stream_error(
                         state_for_log,
@@ -98,6 +100,7 @@ pub async fn stream_openai_chat(
                         api_key_for_log,
                         ct_err,
                         msg,
+                        log_context_for_error,
                     )
                     .await;
                 });
@@ -122,6 +125,7 @@ pub async fn stream_openai_chat(
                                 let effective_model = effective_model.clone();
                                 let provider = provider_name.clone();
                                 let api_key = api_key_ref.clone();
+                                let log_context_for_done = log_context.clone();
                                 async move {
                                     super::common::log_stream_success(
                                         app,
@@ -133,6 +137,7 @@ pub async fn stream_openai_chat(
                                         api_key,
                                         ct_done,
                                         usage_snapshot,
+                                        log_context_for_done,
                                     )
                                     .await;
                                 }
@@ -174,6 +179,7 @@ pub async fn stream_openai_chat(
                         let started_at = start_time;
                         let error_for_log = error_msg.clone();
                         let ct_stream_err = client_token_for_outer.clone();
+                        let log_context_for_stream_error = log_context.clone();
                         tokio::spawn(async move {
                             super::common::log_stream_error(
                                 state_for_log,
@@ -185,6 +191,7 @@ pub async fn stream_openai_chat(
                                 api_key_for_log,
                                 ct_stream_err,
                                 error_for_log,
+                                log_context_for_stream_error,
                             )
                             .await;
                         });
@@ -208,6 +215,7 @@ pub async fn stream_openai_chat(
                 let effective_model = effective_model.clone();
                 let provider = provider_name.clone();
                 let api_key = api_key_ref.clone();
+                let log_context_for_fallback = log_context.clone();
                 async move {
                     super::common::log_stream_success(
                         app,
@@ -219,6 +227,7 @@ pub async fn stream_openai_chat(
                         api_key,
                         ct_fallback,
                         usage_snapshot,
+                        log_context_for_fallback,
                     )
                     .await;
                 }

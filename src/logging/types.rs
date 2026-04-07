@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 // 建议统一的请求类型常量（可扩展）
 pub const REQ_TYPE_CHAT_ONCE: &str = "chat_once";
 pub const REQ_TYPE_CHAT_STREAM: &str = "chat_stream";
+pub const REQ_TYPE_CHAT_REPLAY: &str = "chat_replay";
+pub const REQ_TYPE_CHAT_COMPARE: &str = "chat_compare";
 pub const REQ_TYPE_RECHARGE: &str = "recharge";
 pub const REQ_TYPE_MODELS_LIST: &str = "models_list";
 pub const REQ_TYPE_PROVIDER_MODELS_LIST: &str = "provider_models_list";
@@ -56,6 +58,28 @@ pub struct RequestLog {
     pub cached_tokens: Option<u32>,
     pub reasoning_tokens: Option<u32>,
     pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestLogDetailRecord {
+    pub request_log_id: i64,
+    pub request_payload_snapshot: Option<String>,
+    pub response_preview: Option<String>,
+    pub upstream_status: Option<i64>,
+    pub fallback_triggered: Option<bool>,
+    pub fallback_reason: Option<String>,
+    pub selected_provider: Option<String>,
+    pub selected_key_id: Option<String>,
+    pub first_token_latency_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredCompareRun {
+    pub id: String,
+    pub user_id: String,
+    pub source_request_id: i64,
+    pub created_at: DateTime<Utc>,
+    pub result_json: String,
 }
 
 #[derive(Debug, Clone)]

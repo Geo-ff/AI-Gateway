@@ -1,7 +1,9 @@
 use crate::logging::time::{
     BEIJING_OFFSET, DATETIME_FORMAT, parse_beijing_string, to_beijing_string, to_iso8601_utc_string,
 };
-use crate::logging::types::{ProviderKeyStatsAgg, RequestLog};
+use crate::logging::types::{
+    ProviderKeyStatsAgg, RequestLog, RequestLogDetailRecord, StoredCompareRun,
+};
 use crate::server::storage_traits::{
     AdminPublicKeyRecord, LoginCodeRecord, TuiSessionRecord, WebSessionRecord,
 };
@@ -932,6 +934,35 @@ impl DatabaseLogger {
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN client_token TEXT", []);
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN user_id TEXT", []);
         let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN amount_spent REAL", []);
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS request_log_details (
+                request_log_id INTEGER PRIMARY KEY,
+                request_payload_snapshot TEXT,
+                response_preview TEXT,
+                upstream_status INTEGER,
+                fallback_triggered INTEGER,
+                fallback_reason TEXT,
+                selected_provider TEXT,
+                selected_key_id TEXT,
+                first_token_latency_ms INTEGER,
+                FOREIGN KEY (request_log_id) REFERENCES request_logs(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS compare_runs (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                source_request_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                result_json TEXT NOT NULL
+            )",
+            [],
+        )?;
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS compare_runs_user_id_created_at_idx ON compare_runs(user_id, created_at)",
+            [],
+        );
         // Pricing table for models
         conn.execute(
             "CREATE TABLE IF NOT EXISTS model_prices (
@@ -1264,6 +1295,118 @@ impl DatabaseLogger {
             logs.push(r?);
         }
         Ok(logs)
+    }
+
+    pub async fn get_request_log_by_id(&self, id: i64) -> Result<Option<RequestLog>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider,
+                    api_key, status_code, response_time_ms, prompt_tokens,
+                    completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message,
+                    client_token, user_id, amount_spent
+             FROM request_logs WHERE id = ?1 LIMIT 1",
+        )?;
+        stmt.query_row([id], map_request_log_row).optional()
+    }
+
+    pub async fn upsert_request_log_detail(&self, detail: RequestLogDetailRecord) -> Result<()> {
+        let conn = self.connection.lock().await;
+        conn.execute(
+            "INSERT INTO request_log_details (
+                request_log_id, request_payload_snapshot, response_preview, upstream_status,
+                fallback_triggered, fallback_reason, selected_provider, selected_key_id, first_token_latency_ms
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(request_log_id) DO UPDATE SET
+                request_payload_snapshot = excluded.request_payload_snapshot,
+                response_preview = excluded.response_preview,
+                upstream_status = excluded.upstream_status,
+                fallback_triggered = excluded.fallback_triggered,
+                fallback_reason = excluded.fallback_reason,
+                selected_provider = excluded.selected_provider,
+                selected_key_id = excluded.selected_key_id,
+                first_token_latency_ms = excluded.first_token_latency_ms",
+            rusqlite::params![
+                detail.request_log_id,
+                detail.request_payload_snapshot,
+                detail.response_preview,
+                detail.upstream_status,
+                detail.fallback_triggered.map(|v| if v { 1 } else { 0 }),
+                detail.fallback_reason,
+                detail.selected_provider,
+                detail.selected_key_id,
+                detail.first_token_latency_ms,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub async fn get_request_log_detail(
+        &self,
+        request_log_id: i64,
+    ) -> Result<Option<RequestLogDetailRecord>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT request_log_id, request_payload_snapshot, response_preview, upstream_status,
+                    fallback_triggered, fallback_reason, selected_provider, selected_key_id, first_token_latency_ms
+             FROM request_log_details WHERE request_log_id = ?1 LIMIT 1",
+        )?;
+        stmt.query_row([request_log_id], |row| {
+            Ok(RequestLogDetailRecord {
+                request_log_id: row.get(0)?,
+                request_payload_snapshot: row.get(1)?,
+                response_preview: row.get(2)?,
+                upstream_status: row.get(3)?,
+                fallback_triggered: row
+                    .get::<_, Option<i64>>(4)?
+                    .map(|value| value != 0),
+                fallback_reason: row.get(5)?,
+                selected_provider: row.get(6)?,
+                selected_key_id: row.get(7)?,
+                first_token_latency_ms: row.get(8)?,
+            })
+        })
+        .optional()
+    }
+
+    pub async fn save_compare_run(&self, run: StoredCompareRun) -> Result<()> {
+        let conn = self.connection.lock().await;
+        conn.execute(
+            "INSERT INTO compare_runs (id, user_id, source_request_id, created_at, result_json)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+                user_id = excluded.user_id,
+                source_request_id = excluded.source_request_id,
+                created_at = excluded.created_at,
+                result_json = excluded.result_json",
+            rusqlite::params![
+                run.id,
+                run.user_id,
+                run.source_request_id,
+                to_beijing_string(&run.created_at),
+                run.result_json,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub async fn get_compare_run(&self, id: &str) -> Result<Option<StoredCompareRun>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, source_request_id, created_at, result_json
+             FROM compare_runs WHERE id = ?1 LIMIT 1",
+        )?;
+        stmt.query_row([id], |row| {
+            let created_at: String = row.get(3)?;
+            Ok(StoredCompareRun {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                source_request_id: row.get(2)?,
+                created_at: parse_beijing_string(&created_at)
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+                result_json: row.get(4)?,
+            })
+        })
+        .optional()
     }
 
     #[allow(dead_code)]

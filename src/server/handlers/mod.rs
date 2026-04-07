@@ -13,7 +13,7 @@ mod admin_prices;
 mod admin_provider_key_stats;
 mod admin_subscription;
 mod admin_users;
-mod auth;
+pub(crate) mod auth;
 mod auth_jwt;
 mod auth_keys;
 mod auth_login;
@@ -232,6 +232,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(admin_provider_key_stats::provider_key_stats),
         )
         .route("/admin/logs/requests", get(admin_logs::list_request_logs))
+        .route("/admin/requests/{id}", get(crate::server::request_lab::get_admin_request_detail))
         .route(
             "/admin/logs/chat-completions",
             get(admin_logs::list_chat_completion_logs),
@@ -256,6 +257,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/me/token/balance", get(me_token_info::my_token_balance))
         .route("/me/token/usage", get(me_token_info::my_token_usage))
         .route("/me/logs/requests", get(me_logs::list_my_request_logs))
+        .route("/me/requests/{id}", get(crate::server::request_lab::get_my_request_detail))
+        .route("/me/requests/{id}/replay", post(crate::server::request_lab::replay_my_request))
+        .route("/me/compare", post(crate::server::request_lab::create_compare))
+        .route("/me/compare/{id}", get(crate::server::request_lab::get_compare))
         .route("/me/balance", get(me_balance::get_balance))
         .route(
             "/me/balance/transactions",
