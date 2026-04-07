@@ -527,8 +527,25 @@ components:
           type: integer
         fallback_triggered:
           type: boolean
+        fallback_reason:
+          type: string
+          nullable: true
         error_message:
           type: string
+          nullable: true
+        upstream_status:
+          type: integer
+          format: int64
+          nullable: true
+        selected_provider:
+          type: string
+          nullable: true
+        selected_key_id:
+          type: string
+          nullable: true
+        first_token_latency_ms:
+          type: integer
+          format: int64
           nullable: true
 
     CompareResponse:
@@ -571,6 +588,53 @@ components:
           type: integer
         total_count:
           type: integer
+
+    RequestLabSnapshotSourcePayload:
+      type: object
+      properties:
+        source_request_id:
+          type: integer
+          format: int64
+        requested_model:
+          type: string
+          nullable: true
+        effective_model:
+          type: string
+          nullable: true
+        provider:
+          type: string
+          nullable: true
+        method:
+          type: string
+        path:
+          type: string
+        status:
+          type: string
+          enum: [success, failed]
+        status_code:
+          type: integer
+        source_timestamp:
+          type: string
+          format: date-time
+        request_payload_snapshot:
+          $ref: '#/components/schemas/RequestPayloadSnapshot'
+        response_preview:
+          type: string
+          nullable: true
+        fallback_triggered:
+          type: boolean
+          nullable: true
+        fallback_reason:
+          type: string
+          nullable: true
+
+    RequestLabSnapshotPayload:
+      type: object
+      properties:
+        compare:
+          $ref: '#/components/schemas/CompareResponse'
+        source:
+          $ref: '#/components/schemas/RequestLabSnapshotSourcePayload'
 
     RequestLabSnapshotListItemResponse:
       type: object
@@ -627,9 +691,12 @@ components:
             type: string
         items:
           $ref: '#/components/schemas/RequestLabSnapshotItemsSummary'
+        compare:
+          $ref: '#/components/schemas/CompareResponse'
+        source:
+          $ref: '#/components/schemas/RequestLabSnapshotSourcePayload'
         snapshot_json:
-          type: object
-          additionalProperties: true
+          $ref: '#/components/schemas/RequestLabSnapshotPayload'
 
     DeleteRequestLabSnapshotResponse:
       type: object

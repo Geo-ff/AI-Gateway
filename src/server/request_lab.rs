@@ -124,6 +124,14 @@ pub struct RequestLabSnapshotSourcePayload {
     pub status: String,
     pub status_code: u16,
     pub source_timestamp: String,
+    #[serde(default)]
+    pub request_payload_snapshot: Option<ReplayableRequestSnapshot>,
+    #[serde(default)]
+    pub response_preview: Option<String>,
+    #[serde(default)]
+    pub fallback_triggered: Option<bool>,
+    #[serde(default)]
+    pub fallback_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,6 +163,8 @@ pub struct RequestLabSnapshotDetailResponse {
     pub source_effective_model: Option<String>,
     pub models: Vec<String>,
     pub items: RequestLabSnapshotItemsSummary,
+    pub compare: CompareResponse,
+    pub source: RequestLabSnapshotSourcePayload,
     pub snapshot_json: serde_json::Value,
 }
 
@@ -180,7 +190,17 @@ pub struct CompareItemResponse {
     pub status: String,
     pub status_code: u16,
     pub fallback_triggered: bool,
+    #[serde(default)]
+    pub fallback_reason: Option<String>,
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub upstream_status: Option<i64>,
+    #[serde(default)]
+    pub selected_provider: Option<String>,
+    #[serde(default)]
+    pub selected_key_id: Option<String>,
+    #[serde(default)]
+    pub first_token_latency_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -527,7 +547,27 @@ fn request_lab_snapshot_source_payload(log: &RequestLog) -> RequestLabSnapshotSo
         status: request_status(log.status_code),
         status_code: log.status_code,
         source_timestamp: log.timestamp.to_rfc3339(),
+        request_payload_snapshot: None,
+        response_preview: None,
+        fallback_triggered: None,
+        fallback_reason: None,
     }
+}
+
+fn request_lab_snapshot_source_payload_with_detail(
+    log: &RequestLog,
+    detail: Option<&RequestLogDetailRecord>,
+) -> Result<RequestLabSnapshotSourcePayload, GatewayError> {
+    let mut payload = request_lab_snapshot_source_payload(log);
+    payload.request_payload_snapshot = detail
+        .and_then(|item| item.request_payload_snapshot.as_deref())
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|_| GatewayError::Config("请求快照格式非法".into()))?;
+    payload.response_preview = detail.and_then(|item| item.response_preview.clone());
+    payload.fallback_triggered = detail.and_then(|item| item.fallback_triggered);
+    payload.fallback_reason = detail.and_then(|item| item.fallback_reason.clone());
+    Ok(payload)
 }
 
 fn request_lab_snapshot_list_item_response(
@@ -552,8 +592,10 @@ fn request_lab_snapshot_list_item_response(
 fn request_lab_snapshot_detail_response(
     snapshot: StoredRequestLabSnapshot,
 ) -> Result<RequestLabSnapshotDetailResponse, GatewayError> {
-    let snapshot_json = serde_json::from_str(&snapshot.snapshot_json)
+    let snapshot_json: serde_json::Value = serde_json::from_str(&snapshot.snapshot_json)
         .map_err(|_| GatewayError::Config("历史快照已损坏".into()))?;
+    let payload: RequestLabSnapshotPayload = serde_json::from_value(snapshot_json.clone())
+        .map_err(|_| GatewayError::Config("历史快照详情格式非法".into()))?;
     Ok(RequestLabSnapshotDetailResponse {
         id: snapshot.id,
         note: snapshot.note,
@@ -568,7 +610,95 @@ fn request_lab_snapshot_detail_response(
             failure_count: snapshot.failure_count,
             total_count: snapshot.success_count + snapshot.failure_count,
         },
+        compare: payload.compare,
+        source: payload.source,
         snapshot_json,
+    })
+}
+
+async fn load_compare_item_detail(
+    app_state: &Arc<AppState>,
+    request_id: Option<i64>,
+) -> Result<Option<RequestLogDetailRecord>, GatewayError> {
+    let Some(request_id) = request_id else {
+        return Ok(None);
+    };
+    app_state
+        .log_store
+        .get_request_log_detail(request_id)
+        .await
+        .map_err(GatewayError::Db)
+}
+
+async fn compare_item_response_from_execution(
+    app_state: &Arc<AppState>,
+    requested_model: String,
+    executed: ExecutedChatRequest,
+) -> Result<CompareItemResponse, GatewayError> {
+    let detail = load_compare_item_detail(app_state, executed.logged.log_id).await?;
+    let fallback_triggered = detail
+        .as_ref()
+        .and_then(|item| item.fallback_triggered)
+        .unwrap_or(false);
+    let fallback_reason = detail.as_ref().and_then(|item| item.fallback_reason.clone());
+    let upstream_status = detail.as_ref().and_then(|item| item.upstream_status);
+    let selected_provider = detail
+        .as_ref()
+        .and_then(|item| item.selected_provider.clone())
+        .or_else(|| Some(executed.provider_name.clone()));
+    let selected_key_id = detail.as_ref().and_then(|item| item.selected_key_id.clone());
+    let first_token_latency_ms = detail.as_ref().and_then(|item| item.first_token_latency_ms);
+
+    Ok(match &executed.response {
+        Ok(dual) => {
+            let usage = resolved_usage(&dual.raw, &dual.typed);
+            CompareItemResponse {
+                request_id: executed.logged.log_id,
+                model: requested_model.clone(),
+                requested_model,
+                effective_model: Some(executed.effective_model.clone()),
+                provider: Some(executed.provider_name.clone()),
+                output_summary: response_text::response_summary(dual, 1200),
+                response: Some(dual.raw.clone()),
+                response_time_ms: executed.logged.response_time_ms,
+                input_tokens: usage.as_ref().map(|usage| usage.prompt_tokens),
+                output_tokens: usage.as_ref().map(|usage| usage.completion_tokens),
+                total_tokens: usage.as_ref().map(|usage| usage.total_tokens),
+                cost: executed.logged.amount_spent,
+                status: "success".to_string(),
+                status_code: 200,
+                fallback_triggered,
+                fallback_reason,
+                error_message: None,
+                upstream_status,
+                selected_provider,
+                selected_key_id,
+                first_token_latency_ms,
+            }
+        }
+        Err(err) => CompareItemResponse {
+            request_id: executed.logged.log_id,
+            model: requested_model.clone(),
+            requested_model,
+            effective_model: Some(executed.effective_model.clone()),
+            provider: Some(executed.provider_name.clone()),
+            output_summary: None,
+            response: None,
+            response_time_ms: executed.logged.response_time_ms,
+            input_tokens: None,
+            output_tokens: None,
+            total_tokens: None,
+            cost: executed.logged.amount_spent,
+            status: "failed".to_string(),
+            status_code: err.status_code().as_u16(),
+            fallback_triggered,
+            fallback_reason,
+            error_message: Some(err.to_string()),
+            upstream_status,
+            selected_provider,
+            selected_key_id,
+            first_token_latency_ms,
+        },
     })
 }
 
@@ -981,7 +1111,7 @@ pub async fn create_request_lab_snapshot(
 
     let created_at = Utc::now();
     let items_summary = snapshot_items_summary(&compare.items);
-    let source_payload = request_lab_snapshot_source_payload(&log);
+    let source_payload = request_lab_snapshot_source_payload_with_detail(&log, detail.as_ref())?;
     let snapshot_payload = RequestLabSnapshotPayload {
         compare,
         source: source_payload,
@@ -1153,7 +1283,12 @@ pub async fn create_compare(
                                 status: "failed".to_string(),
                                 status_code: err.status_code().as_u16(),
                                 fallback_triggered: false,
+                                fallback_reason: None,
                                 error_message: Some(err.to_string()),
+                                upstream_status: None,
+                                selected_provider: None,
+                                selected_key_id: None,
+                                first_token_latency_ms: None,
                             });
                         }
                     };
@@ -1169,49 +1304,14 @@ pub async fn create_compare(
                     )
                     .await;
                     let item = match executed {
-                        Ok(executed) => match &executed.response {
-                            Ok(dual) => {
-                                let usage = resolved_usage(&dual.raw, &dual.typed);
-                                CompareItemResponse {
-                                    request_id: executed.logged.log_id,
-                                    model: requested_model.clone(),
-                                    requested_model,
-                                    effective_model: Some(executed.effective_model.clone()),
-                                    provider: Some(executed.provider_name.clone()),
-                                    output_summary: response_text::response_summary(dual, 1200),
-                                    response: Some(dual.raw.clone()),
-                                    response_time_ms: executed.logged.response_time_ms,
-                                    input_tokens: usage.as_ref().map(|usage| usage.prompt_tokens),
-                                    output_tokens: usage
-                                        .as_ref()
-                                        .map(|usage| usage.completion_tokens),
-                                    total_tokens: usage.as_ref().map(|usage| usage.total_tokens),
-                                    cost: executed.logged.amount_spent,
-                                    status: "success".to_string(),
-                                    status_code: 200,
-                                    fallback_triggered: false,
-                                    error_message: None,
-                                }
-                            }
-                            Err(err) => CompareItemResponse {
-                                request_id: executed.logged.log_id,
-                                model: requested_model.clone(),
+                        Ok(executed) => {
+                            compare_item_response_from_execution(
+                                &app_state,
                                 requested_model,
-                                effective_model: Some(executed.effective_model.clone()),
-                                provider: Some(executed.provider_name.clone()),
-                                output_summary: None,
-                                response: None,
-                                response_time_ms: executed.logged.response_time_ms,
-                                input_tokens: None,
-                                output_tokens: None,
-                                total_tokens: None,
-                                cost: executed.logged.amount_spent,
-                                status: "failed".to_string(),
-                                status_code: err.status_code().as_u16(),
-                                fallback_triggered: false,
-                                error_message: Some(err.to_string()),
-                            },
-                        },
+                                executed,
+                            )
+                            .await?
+                        }
                         Err(err) => CompareItemResponse {
                             request_id: None,
                             model: requested_model.clone(),
@@ -1228,7 +1328,12 @@ pub async fn create_compare(
                             status: "failed".to_string(),
                             status_code: err.status_code().as_u16(),
                             fallback_triggered: false,
+                            fallback_reason: None,
                             error_message: Some(err.to_string()),
+                            upstream_status: None,
+                            selected_provider: None,
+                            selected_key_id: None,
+                            first_token_latency_ms: None,
                         },
                     };
                     Ok::<CompareItemResponse, GatewayError>(item)
@@ -1249,7 +1354,12 @@ pub async fn create_compare(
                     status: "failed".to_string(),
                     status_code: err.status_code().as_u16(),
                     fallback_triggered: false,
+                    fallback_reason: None,
                     error_message: Some(err.to_string()),
+                    upstream_status: None,
+                    selected_provider: None,
+                    selected_key_id: None,
+                    first_token_latency_ms: None,
                 }),
             }
         }
@@ -1301,7 +1411,8 @@ pub async fn get_compare(
 #[cfg(test)]
 mod tests {
     use super::{
-        ReplayOverrideInput, ReplayableRequestSnapshot, request_from_snapshot,
+        ReplayOverrideInput, ReplayableRequestSnapshot,
+        request_from_snapshot, request_lab_snapshot_detail_response,
         snapshot_matches_keyword,
     };
     use crate::logging::DatabaseLogger;
@@ -1374,6 +1485,90 @@ mod tests {
         assert!(snapshot_matches_keyword(&snapshot, "claude"));
         assert!(snapshot_matches_keyword(&snapshot, "验证"));
         assert!(!snapshot_matches_keyword(&snapshot, "gemini"));
+    }
+
+    #[test]
+    fn snapshot_detail_response_exposes_typed_payload_and_keeps_legacy_json() {
+        let created_at = Utc::now();
+        let snapshot = StoredRequestLabSnapshot {
+            id: "snap_detail".into(),
+            user_id: "u1".into(),
+            source_request_id: 42,
+            compare_run_id: "cmp_detail".into(),
+            note: Some("完整详情".into()),
+            created_at,
+            snapshot_json: json!({
+                "compare": {
+                    "id": "cmp_detail",
+                    "source_request_id": 42,
+                    "created_at": created_at.to_rfc3339(),
+                    "items": [
+                        {
+                            "request_id": 1001,
+                            "model": "openai/gpt-4.1-mini",
+                            "requested_model": "openai/gpt-4.1-mini",
+                            "effective_model": "gpt-4.1-mini",
+                            "provider": "openai",
+                            "output_summary": "# title",
+                            "response": {"choices": []},
+                            "response_time_ms": 321,
+                            "input_tokens": 12,
+                            "output_tokens": 34,
+                            "total_tokens": 46,
+                            "cost": 0.00123,
+                            "status": "success",
+                            "status_code": 200,
+                            "fallback_triggered": false
+                        }
+                    ]
+                },
+                "source": {
+                    "source_request_id": 42,
+                    "requested_model": "openai/gpt-4o-mini",
+                    "effective_model": "gpt-4o-mini",
+                    "provider": "openai",
+                    "method": "POST",
+                    "path": "/v1/chat/completions",
+                    "status": "success",
+                    "status_code": 200,
+                    "source_timestamp": "2025-01-01T00:00:00Z",
+                    "request_payload_snapshot": {
+                        "kind": "chat_completions",
+                        "request": {
+                            "model": "openai/gpt-4o-mini",
+                            "messages": [{"role": "user", "content": "hello"}]
+                        },
+                        "top_k": 4
+                    },
+                    "response_preview": "hello world"
+                }
+            })
+            .to_string(),
+            source_requested_model: Some("openai/gpt-4o-mini".into()),
+            source_effective_model: Some("gpt-4o-mini".into()),
+            models: vec!["openai/gpt-4.1-mini".into()],
+            success_count: 1,
+            failure_count: 0,
+        };
+
+        let response = request_lab_snapshot_detail_response(snapshot).unwrap();
+
+        assert_eq!(response.compare.id, "cmp_detail");
+        assert_eq!(response.compare.items.len(), 1);
+        assert_eq!(response.compare.items[0].model, "openai/gpt-4.1-mini");
+        assert_eq!(response.source.source_request_id, 42);
+        assert_eq!(
+            response
+                .source
+                .request_payload_snapshot
+                .as_ref()
+                .and_then(|item| item.top_k),
+            Some(4)
+        );
+        assert_eq!(
+            response.snapshot_json["source"]["response_preview"],
+            json!("hello world")
+        );
     }
 
     #[tokio::test]
