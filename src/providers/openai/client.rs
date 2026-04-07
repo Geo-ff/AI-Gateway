@@ -1,4 +1,5 @@
 use crate::error::GatewayError;
+use crate::providers::adapters::gateway_error_from_normalized;
 
 use super::types::{
     ChatCompletionRequest, ChatCompletionResponse, ModelListResponse, RawAndTypedChatCompletion,
@@ -77,6 +78,9 @@ impl OpenAIProvider {
                     }
                 }
             };
+            if let Some(err) = gateway_error_from_openai_payload(&raw) {
+                return Err(err);
+            }
             Ok(RawAndTypedChatCompletion { typed, raw })
         }
 
@@ -95,12 +99,62 @@ impl OpenAIProvider {
                 || msg.contains("bad_response_status_code")
         }
 
+        fn should_retry_empty_success_response(dual: &RawAndTypedChatCompletion) -> bool {
+            let completion_tokens = dual
+                .typed
+                .usage
+                .as_ref()
+                .map(|usage| usage.completion_tokens)
+                .or_else(|| {
+                    dual.raw
+                        .get("usage")
+                        .and_then(|usage| usage.get("completion_tokens"))
+                        .and_then(|value| value.as_u64())
+                        .map(|value| value as u32)
+                })
+                .unwrap_or(0);
+
+            if completion_tokens == 0 {
+                return false;
+            }
+
+            let typed_content = dual
+                .typed
+                .choices
+                .first()
+                .and_then(|choice| choice.message.content.as_deref())
+                .map(str::trim)
+                .filter(|content| !content.is_empty());
+            if typed_content.is_some() {
+                return false;
+            }
+
+            let raw_content = dual
+                .raw
+                .get("choices")
+                .and_then(|choices| choices.as_array())
+                .and_then(|choices| choices.first())
+                .and_then(|choice| choice.get("message"))
+                .and_then(|message| message.get("content"));
+
+            match raw_content {
+                Some(serde_json::Value::String(text)) => text.trim().is_empty(),
+                Some(serde_json::Value::Null) | None => true,
+                Some(serde_json::Value::Array(items)) => items.is_empty(),
+                Some(serde_json::Value::Object(map)) => map.is_empty(),
+                Some(_) => false,
+            }
+        }
+
         // 非流式：优先严格解析；失败则宽松回退构造（兼容部分上游缺失 object 等字段）。
         // 若上游聚合器对特定模型仅支持 stream=true，会返回结构化错误（bad_response_body 等），此时自动重试一次 stream=true，
         // 并将 SSE 聚合为非流式 JSON 返回给前端（对前端保持一次性响应语义）。
         let bytes = send_bytes(&client, &url, api_key, request).await?;
         let mut dual = parse_non_stream_bytes(&bytes)?;
-        if !request.stream.unwrap_or(false) && is_retryable_stream_required_error(&dual.raw) {
+        if !request.stream.unwrap_or(false)
+            && (is_retryable_stream_required_error(&dual.raw)
+                || should_retry_empty_success_response(&dual))
+        {
             let mut streaming_req = request.clone();
             streaming_req.stream = Some(true);
             let bytes2 = send_bytes(&client, &url, api_key, &streaming_req).await?;
@@ -162,6 +216,54 @@ fn sse_chat_completion_to_json(bytes: &[u8]) -> Result<Vec<u8>, GatewayError> {
     let mut finish_reason: Option<String> = None;
     let mut usage: Option<Value> = None;
 
+    fn collect_text_fragments(value: &Value) -> Vec<String> {
+        match value {
+            Value::Null => Vec::new(),
+            Value::String(text) => {
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![trimmed.to_string()]
+                }
+            }
+            Value::Array(items) => items.iter().flat_map(collect_text_fragments).collect(),
+            Value::Object(map) => {
+                for key in ["delta", "text", "output_text", "value", "content"] {
+                    if let Some(found) = map.get(key) {
+                        let fragments = collect_text_fragments(found);
+                        if !fragments.is_empty() {
+                            return fragments;
+                        }
+                    }
+                }
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn append_fragments(target: &mut String, fragments: Vec<String>) {
+        for fragment in fragments {
+            if fragment.is_empty() {
+                continue;
+            }
+            if !target.is_empty() {
+                target.push_str("\n\n");
+            }
+            target.push_str(&fragment);
+        }
+    }
+
+    fn append_stream_fragments(target: &mut String, fragments: Vec<String>) {
+        for fragment in fragments {
+            if fragment.is_empty() {
+                continue;
+            }
+            target.push_str(&fragment);
+        }
+    }
+
     for line in s.lines() {
         let line = line.trim();
         let Some(rest) = line.strip_prefix("data:") else {
@@ -188,6 +290,66 @@ fn sse_chat_completion_to_json(bytes: &[u8]) -> Result<Vec<u8>, GatewayError> {
         if usage.is_none() {
             usage = v.get("usage").cloned();
         }
+        if usage.is_none() {
+            usage = v.get("response").and_then(|response| response.get("usage")).cloned();
+        }
+
+        if v.get("object").and_then(|x| x.as_str()) == Some("response") {
+            append_fragments(&mut content, collect_text_fragments(&v));
+            if let Some(response) = v.get("response") {
+                if id.is_none() {
+                    id = response
+                        .get("id")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string());
+                }
+                if model.is_none() {
+                    model = response
+                        .get("model")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string());
+                }
+                if created.is_none() {
+                    created = response.get("created").and_then(|x| x.as_u64());
+                }
+                if usage.is_none() {
+                    usage = response.get("usage").cloned();
+                }
+            }
+        }
+
+        if let Some(event_type) = v.get("type").and_then(|x| x.as_str())
+            && (event_type.starts_with("response.output_text")
+                || event_type.starts_with("response.content_part")
+                || event_type.starts_with("response.output_item")
+                || event_type == "response.completed")
+        {
+            if event_type.contains(".delta") {
+                append_stream_fragments(&mut content, collect_text_fragments(&v));
+            } else {
+                append_fragments(&mut content, collect_text_fragments(&v));
+            }
+            if let Some(response) = v.get("response") {
+                if id.is_none() {
+                    id = response
+                        .get("id")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string());
+                }
+                if model.is_none() {
+                    model = response
+                        .get("model")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string());
+                }
+                if created.is_none() {
+                    created = response.get("created").and_then(|x| x.as_u64());
+                }
+                if usage.is_none() {
+                    usage = response.get("usage").cloned();
+                }
+            }
+        }
 
         // OpenAI streaming: choices[].delta
         if let Some(choice0) = v
@@ -206,8 +368,8 @@ fn sse_chat_completion_to_json(bytes: &[u8]) -> Result<Vec<u8>, GatewayError> {
                         .and_then(|x| x.as_str())
                         .map(|s| s.to_string());
                 }
-                if let Some(c) = delta.get("content").and_then(|x| x.as_str()) {
-                    content.push_str(c);
+                if let Some(delta_content) = delta.get("content") {
+                    append_stream_fragments(&mut content, collect_text_fragments(delta_content));
                 }
                 if let Some(r) = delta
                     .get("reasoning_content")
@@ -227,10 +389,10 @@ fn sse_chat_completion_to_json(bytes: &[u8]) -> Result<Vec<u8>, GatewayError> {
                         .and_then(|x| x.as_str())
                         .map(|s| s.to_string());
                 }
-                if content.is_empty() {
-                    if let Some(c) = message.get("content").and_then(|x| x.as_str()) {
-                        content = c.to_string();
-                    }
+                if content.is_empty()
+                    && let Some(message_content) = message.get("content")
+                {
+                    append_fragments(&mut content, collect_text_fragments(message_content));
                 }
                 if reasoning.is_empty() {
                     if let Some(r) = message
@@ -274,6 +436,28 @@ fn sse_chat_completion_to_json(bytes: &[u8]) -> Result<Vec<u8>, GatewayError> {
     }
 
     Ok(serde_json::to_vec(&out)?)
+}
+
+fn gateway_error_from_openai_payload(raw: &serde_json::Value) -> Option<GatewayError> {
+    let error = raw.get("error")?;
+    if raw.get("choices").is_some() {
+        return None;
+    }
+    let error_type = error
+        .get("type")
+        .and_then(|value| value.as_str())
+        .map(|value| match value {
+            "invalid_api_key" | "authentication_error" => "authentication_failed",
+            "rate_limit_error" => "rate_limited",
+            _ => "upstream_error",
+        })
+        .unwrap_or("upstream_error");
+    let message = error
+        .get("message")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| raw.to_string());
+    Some(gateway_error_from_normalized(error_type, message))
 }
 
 #[allow(deprecated)]
@@ -363,10 +547,37 @@ fn fallback_response_from_bytes(bytes: &[u8]) -> Result<ChatCompletionResponse, 
                 .get("role")
                 .and_then(|x| x.as_str())
                 .unwrap_or("assistant");
-            let content = msg
-                .get("content")
-                .and_then(|x| x.as_str())
-                .map(|s| s.to_string());
+            let content = msg.get("content").and_then(|value| {
+                match value {
+                    serde_json::Value::String(text) => Some(text.clone()),
+                    serde_json::Value::Array(parts) => {
+                        let mut out = Vec::new();
+                        for part in parts {
+                            if let Some(text) = part
+                                .get("text")
+                                .and_then(|text| text.as_str())
+                                .or_else(|| part.get("content").and_then(|text| text.as_str()))
+                            {
+                                let trimmed = text.trim();
+                                if !trimmed.is_empty() {
+                                    out.push(trimmed.to_string());
+                                }
+                            }
+                        }
+                        if out.is_empty() {
+                            None
+                        } else {
+                            Some(out.join("\n\n"))
+                        }
+                    }
+                    serde_json::Value::Object(object) => object
+                        .get("text")
+                        .and_then(|text| text.as_str())
+                        .or_else(|| object.get("content").and_then(|text| text.as_str()))
+                        .map(str::to_string),
+                    _ => None,
+                }
+            });
             // tool_calls（若存在）
             let tool_calls = msg
                 .get("tool_calls")
@@ -443,6 +654,7 @@ fn fallback_response_from_bytes(bytes: &[u8]) -> Result<ChatCompletionResponse, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::StatusCode;
 
     #[test]
     fn sse_is_aggregated_into_non_stream_response() {
@@ -451,5 +663,59 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(v["object"], "chat.completion");
         assert_eq!(v["choices"][0]["message"]["content"], "hello");
+    }
+
+    #[test]
+    fn responses_sse_is_aggregated_into_non_stream_response() {
+        let sse = b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_123\",\"created\":1,\"model\":\"gpt-5.2\"}}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"world\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_123\",\"created\":1,\"model\":\"gpt-5.2\",\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5}}}\n\ndata: [DONE]\n";
+        let out = sse_chat_completion_to_json(sse).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["object"], "chat.completion");
+        assert_eq!(v["id"], "resp_123");
+        assert_eq!(v["choices"][0]["message"]["content"], "helloworld");
+        assert_eq!(v["usage"]["total_tokens"], 5);
+    }
+
+    #[test]
+    fn chat_chunk_content_array_is_aggregated() {
+        let sse = b"data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt\",\"choices\":[{\"index\":0,\"delta\":{\"content\":[{\"type\":\"output_text\",\"text\":\"world\"}]},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n";
+        let out = sse_chat_completion_to_json(sse).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["choices"][0]["message"]["content"], "helloworld");
+    }
+
+    #[test]
+    fn openai_error_payload_is_treated_as_error() {
+        let raw = serde_json::json!({
+            "error": {
+                "type": "invalid_api_key",
+                "message": "bad key"
+            }
+        });
+        let err = gateway_error_from_openai_payload(&raw).unwrap();
+        assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn fallback_response_extracts_array_content() {
+        let raw = serde_json::json!({
+            "id": "chatcmpl-array",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-5.2",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "hello"},
+                        {"type": "output_text", "text": "world"}
+                    ]
+                },
+                "finish_reason": "stop"
+            }]
+        });
+        let typed = fallback_response_from_bytes(serde_json::to_string(&raw).unwrap().as_bytes()).unwrap();
+        assert_eq!(typed.choices[0].message.content.as_deref(), Some("hello\n\nworld"));
     }
 }

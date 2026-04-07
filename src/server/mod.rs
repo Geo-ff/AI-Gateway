@@ -10,6 +10,7 @@ pub(crate) mod model_types;
 pub(crate) mod pricing;
 pub(crate) mod pricing_sync;
 pub(crate) mod provider_dispatch;
+pub(crate) mod response_text;
 pub(crate) mod request_lab;
 pub(crate) mod request_logging;
 pub(crate) mod ssrf;

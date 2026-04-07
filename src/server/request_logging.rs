@@ -5,6 +5,7 @@ use crate::logging::RequestLog;
 use crate::logging::types::{REQ_TYPE_CHAT_ONCE, RequestLogDetailRecord};
 use crate::providers::openai::types::RawAndTypedChatCompletion;
 use crate::server::AppState;
+use crate::server::response_text;
 use crate::server::util::mask_key;
 use chrono::{DateTime, Utc};
 
@@ -29,31 +30,7 @@ pub struct LoggedChatRequest {
 }
 
 fn response_preview(response: &Result<RawAndTypedChatCompletion, GatewayError>) -> Option<String> {
-    fn truncate(text: String, max_len: usize) -> String {
-        if text.chars().count() <= max_len {
-            return text;
-        }
-        text.chars().take(max_len).collect::<String>() + "…"
-    }
-
-    match response {
-        Ok(dual) => {
-            let content = dual
-                .raw
-                .get("choices")
-                .and_then(|v| v.as_array())
-                .and_then(|choices| choices.first())
-                .and_then(|choice| choice.get("message"))
-                .and_then(|message| message.get("content"));
-            let preview = match content {
-                Some(serde_json::Value::String(text)) => text.clone(),
-                Some(value) => serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
-                None => serde_json::to_string(&dual.raw).unwrap_or_else(|_| dual.raw.to_string()),
-            };
-            Some(truncate(preview, 1200))
-        }
-        Err(err) => Some(truncate(err.to_string(), 600)),
-    }
+    response_text::response_preview(response, 1200, 600)
 }
 
 // 记录聊天请求日志（包含响应耗时和 token 使用情况）

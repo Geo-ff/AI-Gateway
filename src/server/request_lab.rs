@@ -27,6 +27,7 @@ use crate::server::pricing::{missing_price_allowed_for_chat, resolve_model_prici
 use crate::server::provider_dispatch::{
     call_provider_with_parsed_model, select_provider_for_model,
 };
+use crate::server::response_text;
 use crate::server::request_logging::{ChatLogContext, LoggedChatRequest, log_chat_request, log_simple_request};
 use crate::users::UserRole;
 
@@ -161,25 +162,6 @@ pub fn build_request_payload_snapshot(
         top_k,
     };
     Ok(serde_json::to_string(&snapshot)?)
-}
-
-fn summary_from_raw(raw: &serde_json::Value) -> Option<String> {
-    fn truncate(text: String, max_len: usize) -> String {
-        if text.chars().count() <= max_len {
-            return text;
-        }
-        text.chars().take(max_len).collect::<String>() + "…"
-    }
-
-    raw.get("choices")
-        .and_then(|v| v.as_array())
-        .and_then(|choices| choices.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(|message| message.get("content"))
-        .map(|content| match content {
-            serde_json::Value::String(text) => truncate(text.clone(), 1200),
-            value => truncate(serde_json::to_string(value).unwrap_or_else(|_| value.to_string()), 1200),
-        })
 }
 
 fn snapshot_from_detail(detail: &RequestLogDetailRecord) -> Result<ReplayableRequestSnapshot, GatewayError> {
@@ -486,7 +468,7 @@ fn replay_response(source_request_id: i64, requested_model: String, result: &Exe
             requested_model,
             effective_model: Some(result.effective_model.clone()),
             provider: Some(result.provider_name.clone()),
-            output_summary: summary_from_raw(&dual.raw),
+            output_summary: response_text::response_summary(dual, 1200),
             response: Some(dual.raw.clone()),
             response_time_ms: result.logged.response_time_ms,
             input_tokens: dual.typed.usage.as_ref().map(|usage| usage.prompt_tokens),
@@ -687,7 +669,7 @@ pub async fn create_compare(
                                 requested_model,
                                 effective_model: Some(executed.effective_model.clone()),
                                 provider: Some(executed.provider_name.clone()),
-                                output_summary: summary_from_raw(&dual.raw),
+                                output_summary: response_text::response_summary(dual, 1200),
                                 response: Some(dual.raw.clone()),
                                 response_time_ms: executed.logged.response_time_ms,
                                 input_tokens: dual.typed.usage.as_ref().map(|usage| usage.prompt_tokens),
