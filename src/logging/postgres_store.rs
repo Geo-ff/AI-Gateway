@@ -1476,6 +1476,24 @@ impl RequestLogStore for PgLogStore {
         })
     }
 
+    fn update_request_lab_snapshot_note<'a>(
+        &'a self,
+        id: &'a str,
+        note: Option<String>,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let affected = client
+                .execute(
+                    "UPDATE request_lab_snapshots SET note = $2 WHERE id = $1",
+                    &[&id, &note],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(affected > 0)
+        })
+    }
+
     fn delete_request_lab_snapshot<'a>(
         &'a self,
         user_id: &'a str,
@@ -3195,9 +3213,11 @@ fn provider_type_to_str(t: &ProviderType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::PgLogStore;
+    use crate::logging::types::StoredRequestLabSnapshot;
     use crate::logging::{ModelPriceSource, ModelPriceStatus, ModelPriceUpsert};
     use crate::server::storage_traits::RequestLogStore;
     use chrono::{Duration, Timelike, Utc};
+    use serde_json::json;
     use tokio_postgres::NoTls;
     use uuid::Uuid;
 
@@ -3249,6 +3269,78 @@ mod tests {
         assert_eq!(record.status, ModelPriceStatus::Stale);
         assert_eq!(record.synced_at, Some(synced_at));
         assert_eq!(record.expires_at, Some(expires_at));
+
+        client
+            .execute(&format!("DROP SCHEMA {} CASCADE", schema), &[])
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn postgres_snapshot_note_update_roundtrip() {
+        let Ok(pg_url) = std::env::var("GATEWAY_TEST_PG_URL") else {
+            return;
+        };
+
+        let schema = format!("gateway_test_{}", Uuid::new_v4().simple());
+        let (client, connection) = tokio_postgres::connect(&pg_url, NoTls).await.unwrap();
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        client
+            .execute(&format!("CREATE SCHEMA {}", schema), &[])
+            .await
+            .unwrap();
+
+        let store = PgLogStore::connect(&pg_url, &Some(schema.clone()), 1)
+            .await
+            .unwrap();
+        let created_at = Utc::now().with_nanosecond(0).unwrap();
+
+        RequestLogStore::save_request_lab_snapshot(
+            &store,
+            StoredRequestLabSnapshot {
+                id: "snap_pg_note".into(),
+                user_id: "u1".into(),
+                source_request_id: 21,
+                compare_run_id: "cmp_pg_note".into(),
+                note: Some("初始备注".into()),
+                created_at,
+                snapshot_json: json!({
+                    "compare": {
+                        "id": "cmp_pg_note",
+                        "source_request_id": 21,
+                        "created_at": created_at.to_rfc3339(),
+                        "items": []
+                    },
+                    "source": {
+                        "source_request_id": 21
+                    }
+                })
+                .to_string(),
+                source_requested_model: Some("openai/gpt-5.2".into()),
+                source_effective_model: Some("gpt-5.2".into()),
+                models: vec!["openai/gpt-5.4".into()],
+                success_count: 1,
+                failure_count: 0,
+            },
+        )
+        .await
+        .unwrap();
+
+        RequestLogStore::update_request_lab_snapshot_note(
+            &store,
+            "snap_pg_note",
+            Some("更新后的备注".into()),
+        )
+        .await
+        .unwrap();
+
+        let stored = RequestLogStore::get_request_lab_snapshot(&store, "snap_pg_note")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.note.as_deref(), Some("更新后的备注"));
 
         client
             .execute(&format!("DROP SCHEMA {} CASCADE", schema), &[])

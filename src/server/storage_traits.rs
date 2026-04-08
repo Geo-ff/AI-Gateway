@@ -123,6 +123,11 @@ pub trait RequestLogStore: Send + Sync {
         user_id: &'a str,
         compare_run_id: &'a str,
     ) -> BoxFuture<'a, rusqlite::Result<Option<StoredRequestLabSnapshot>>>;
+    fn update_request_lab_snapshot_note<'a>(
+        &'a self,
+        id: &'a str,
+        note: Option<String>,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>>;
     fn delete_request_lab_snapshot<'a>(
         &'a self,
         user_id: &'a str,
@@ -574,6 +579,14 @@ impl RequestLogStore for DatabaseLogger {
             self.get_request_lab_snapshot_by_compare_run(user_id, compare_run_id)
                 .await
         })
+    }
+
+    fn update_request_lab_snapshot_note<'a>(
+        &'a self,
+        id: &'a str,
+        note: Option<String>,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move { self.update_request_lab_snapshot_note(id, note).await })
     }
 
     fn delete_request_lab_snapshot<'a>(

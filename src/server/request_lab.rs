@@ -96,6 +96,12 @@ pub struct CreateRequestLabSnapshotRequest {
     pub note: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateRequestLabSnapshotNoteRequest {
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ListRequestLabSnapshotsQuery {
     #[serde(default)]
@@ -1233,6 +1239,41 @@ pub async fn get_request_lab_snapshot(
     Ok(Json(request_lab_snapshot_detail_response(snapshot)?))
 }
 
+pub async fn update_request_lab_snapshot_note(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(snapshot_id): Path<String>,
+    Json(payload): Json<UpdateRequestLabSnapshotNoteRequest>,
+) -> Result<Json<RequestLabSnapshotDetailResponse>, GatewayError> {
+    let claims = require_user(&headers)?;
+    let snapshot = app_state
+        .log_store
+        .get_request_lab_snapshot(&snapshot_id)
+        .await
+        .map_err(GatewayError::Db)?
+        .ok_or_else(|| GatewayError::NotFound("历史快照不存在".into()))?;
+    if snapshot.user_id != claims.sub && !is_superadmin(&claims) {
+        return Err(GatewayError::Forbidden("无权访问该历史快照".into()));
+    }
+
+    let updated = app_state
+        .log_store
+        .update_request_lab_snapshot_note(&snapshot_id, normalize_snapshot_note(payload.note))
+        .await
+        .map_err(GatewayError::Db)?;
+    if !updated {
+        return Err(GatewayError::NotFound("历史快照不存在".into()));
+    }
+
+    let snapshot = app_state
+        .log_store
+        .get_request_lab_snapshot(&snapshot_id)
+        .await
+        .map_err(GatewayError::Db)?
+        .ok_or_else(|| GatewayError::NotFound("历史快照不存在".into()))?;
+    Ok(Json(request_lab_snapshot_detail_response(snapshot)?))
+}
+
 pub async fn delete_request_lab_snapshot(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1431,17 +1472,91 @@ pub async fn get_compare(
 #[cfg(test)]
 mod tests {
     use super::{
-        ReplayOverrideInput, ReplayableRequestSnapshot, detail_response, request_from_snapshot,
-        request_lab_snapshot_detail_response, snapshot_matches_keyword,
+        ReplayOverrideInput, ReplayableRequestSnapshot, UpdateRequestLabSnapshotNoteRequest,
+        detail_response, request_from_snapshot, request_lab_snapshot_detail_response,
+        snapshot_matches_keyword, update_request_lab_snapshot_note,
     };
+    use crate::config::settings::{BalanceStrategy, LoadBalancing, LoggingConfig, ServerConfig};
+    use crate::error::GatewayError;
     use crate::logging::DatabaseLogger;
     use crate::logging::types::{
         RequestLog, RequestLogDetailRecord, StoredCompareRun, StoredRequestLabSnapshot,
     };
+    use crate::server::AppState;
+    use crate::server::handlers::auth::{AccessTokenClaims, issue_access_token};
+    use crate::server::login::LoginManager;
     use crate::server::storage_traits::RequestLogStore;
+    use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+    use axum::{
+        Json,
+        extract::{Path, State},
+    };
+    use chrono::Duration;
     use chrono::Utc;
     use serde_json::json;
+    use std::sync::Arc;
     use tempfile::tempdir;
+
+    fn test_settings(db_path: String) -> crate::config::Settings {
+        crate::config::Settings {
+            load_balancing: LoadBalancing {
+                strategy: BalanceStrategy::FirstAvailable,
+            },
+            server: ServerConfig::default(),
+            logging: LoggingConfig {
+                database_path: db_path,
+                ..Default::default()
+            },
+        }
+    }
+
+    async fn test_app_state() -> Arc<AppState> {
+        let db_path = std::env::temp_dir().join(format!(
+            "request_lab_test_{}.db",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let settings = test_settings(db_path.to_str().unwrap().to_string());
+        let logger = Arc::new(
+            DatabaseLogger::new(&settings.logging.database_path)
+                .await
+                .unwrap(),
+        );
+
+        Arc::new(AppState {
+            config: settings,
+            load_balancer_state: Arc::new(crate::routing::LoadBalancerState::default()),
+            log_store: logger.clone(),
+            model_cache: logger.clone(),
+            providers: logger.clone(),
+            token_store: logger.clone(),
+            favorites_store: logger.clone(),
+            login_manager: Arc::new(LoginManager::new(logger.clone())),
+            user_store: logger.clone(),
+            refresh_token_store: logger.clone(),
+            password_reset_token_store: logger.clone(),
+            balance_store: logger.clone(),
+            subscription_store: logger.clone(),
+        })
+    }
+
+    fn auth_headers(user_id: &str, role: &str) -> HeaderMap {
+        let claims = AccessTokenClaims {
+            sub: user_id.to_string(),
+            email: format!("{user_id}@example.com"),
+            role: role.to_string(),
+            permissions: Vec::new(),
+            jti: None,
+            exp: (Utc::now() + Duration::hours(1)).timestamp(),
+            iat: Some(Utc::now().timestamp()),
+        };
+        let token = issue_access_token(&claims).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+        );
+        headers
+    }
 
     #[test]
     fn request_snapshot_applies_model_and_sampling_overrides() {
@@ -1797,5 +1912,107 @@ mod tests {
                 .await
                 .unwrap();
         assert!(by_compare.is_some());
+    }
+
+    #[tokio::test]
+    async fn snapshot_note_update_roundtrip_trims_and_clears() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = DatabaseLogger::new(db_path.to_str().unwrap())
+            .await
+            .unwrap();
+        let created_at = Utc::now();
+
+        RequestLogStore::save_request_lab_snapshot(
+            &db,
+            StoredRequestLabSnapshot {
+                id: "snap_note".into(),
+                user_id: "u1".into(),
+                source_request_id: 9,
+                compare_run_id: "cmp_note".into(),
+                note: Some("初始备注".into()),
+                created_at,
+                snapshot_json: "{}".into(),
+                source_requested_model: Some("openai/gpt-5.2".into()),
+                source_effective_model: Some("gpt-5.2".into()),
+                models: vec!["openai/gpt-5.4".into()],
+                success_count: 1,
+                failure_count: 0,
+            },
+        )
+        .await
+        .unwrap();
+
+        let trimmed_note = super::normalize_snapshot_note(Some("  新备注  ".into()));
+        RequestLogStore::update_request_lab_snapshot_note(&db, "snap_note", trimmed_note)
+            .await
+            .unwrap();
+        let stored = RequestLogStore::get_request_lab_snapshot(&db, "snap_note")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.note.as_deref(), Some("新备注"));
+
+        let listed = RequestLogStore::list_request_lab_snapshots(&db, "u1")
+            .await
+            .unwrap();
+        assert_eq!(listed[0].note.as_deref(), Some("新备注"));
+
+        let by_compare =
+            RequestLogStore::get_request_lab_snapshot_by_compare_run(&db, "u1", "cmp_note")
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(by_compare.note.as_deref(), Some("新备注"));
+
+        let cleared_note = super::normalize_snapshot_note(Some("   ".into()));
+        RequestLogStore::update_request_lab_snapshot_note(&db, "snap_note", cleared_note)
+            .await
+            .unwrap();
+        let cleared = RequestLogStore::get_request_lab_snapshot(&db, "snap_note")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cleared.note.is_none());
+    }
+
+    #[tokio::test]
+    async fn snapshot_note_update_rejects_unauthorized_user() {
+        unsafe {
+            std::env::set_var("GW_JWT_SECRET", "request-lab-test-secret");
+        }
+
+        let app_state = test_app_state().await;
+        RequestLogStore::save_request_lab_snapshot(
+            app_state.log_store.as_ref(),
+            StoredRequestLabSnapshot {
+                id: "snap_forbidden".into(),
+                user_id: "owner".into(),
+                source_request_id: 11,
+                compare_run_id: "cmp_forbidden".into(),
+                note: Some("原备注".into()),
+                created_at: Utc::now(),
+                snapshot_json: "{}".into(),
+                source_requested_model: Some("openai/gpt-5.2".into()),
+                source_effective_model: Some("gpt-5.2".into()),
+                models: vec!["openai/gpt-5.4".into()],
+                success_count: 1,
+                failure_count: 0,
+            },
+        )
+        .await
+        .unwrap();
+
+        let result = update_request_lab_snapshot_note(
+            State(app_state),
+            auth_headers("other-user", "user"),
+            Path("snap_forbidden".to_string()),
+            Json(UpdateRequestLabSnapshotNoteRequest {
+                note: Some("试图修改".into()),
+            }),
+        )
+        .await;
+
+        assert!(matches!(result, Err(GatewayError::Forbidden(_))));
     }
 }

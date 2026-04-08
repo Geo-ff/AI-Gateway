@@ -227,17 +227,19 @@ fn sse_chat_completion_to_json(bytes: &[u8]) -> Result<Vec<u8>, GatewayError> {
     fn collect_text_fragments(value: &Value) -> Vec<String> {
         match value {
             Value::Null => Vec::new(),
-            Value::String(text) => {
-                let trimmed = text.trim();
-                if trimmed.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![trimmed.to_string()]
-                }
-            }
+            Value::String(text) => (!text.trim().is_empty())
+                .then(|| vec![text.to_string()])
+                .unwrap_or_default(),
             Value::Array(items) => items.iter().flat_map(collect_text_fragments).collect(),
             Value::Object(map) => {
-                for key in ["delta", "text", "output_text", "value", "content"] {
+                for key in [
+                    "delta",
+                    "text",
+                    "output_text",
+                    "value",
+                    "message",
+                    "content",
+                ] {
                     if let Some(found) = map.get(key) {
                         let fragments = collect_text_fragments(found);
                         if !fragments.is_empty() {
@@ -255,9 +257,6 @@ fn sse_chat_completion_to_json(bytes: &[u8]) -> Result<Vec<u8>, GatewayError> {
         for fragment in fragments {
             if fragment.is_empty() {
                 continue;
-            }
-            if !target.is_empty() {
-                target.push_str("\n\n");
             }
             target.push_str(&fragment);
         }
@@ -538,16 +537,15 @@ fn fallback_response_from_bytes(bytes: &[u8]) -> Result<ChatCompletionResponse, 
                             .and_then(|text| text.as_str())
                             .or_else(|| part.get("content").and_then(|text| text.as_str()))
                         {
-                            let trimmed = text.trim();
-                            if !trimmed.is_empty() {
-                                out.push(trimmed.to_string());
+                            if !text.trim().is_empty() {
+                                out.push(text.to_string());
                             }
                         }
                     }
                     if out.is_empty() {
                         None
                     } else {
-                        Some(out.join("\n\n"))
+                        Some(out.concat())
                     }
                 }
                 serde_json::Value::Object(object) => object
@@ -703,7 +701,7 @@ data: [DONE]
                 "message": {
                     "role": "assistant",
                     "content": [
-                        {"type": "output_text", "text": "hello"},
+                        {"type": "output_text", "text": "hello\n\n"},
                         {"type": "output_text", "text": "world"}
                     ]
                 },

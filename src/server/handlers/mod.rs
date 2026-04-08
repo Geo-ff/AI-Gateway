@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use std::sync::Arc;
 
@@ -278,6 +278,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/me/request-lab/snapshots/{id}",
             get(crate::server::request_lab::get_request_lab_snapshot)
                 .delete(crate::server::request_lab::delete_request_lab_snapshot),
+        )
+        .route(
+            "/me/request-lab/snapshots/{id}/note",
+            put(crate::server::request_lab::update_request_lab_snapshot_note),
         )
         .route(
             "/me/requests/{id}",

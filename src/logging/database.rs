@@ -1722,6 +1722,19 @@ impl DatabaseLogger {
         .optional()
     }
 
+    pub async fn update_request_lab_snapshot_note(
+        &self,
+        id: &str,
+        note: Option<String>,
+    ) -> Result<bool> {
+        let conn = self.connection.lock().await;
+        let affected = conn.execute(
+            "UPDATE request_lab_snapshots SET note = ?2 WHERE id = ?1",
+            rusqlite::params![id, note],
+        )?;
+        Ok(affected > 0)
+    }
+
     pub async fn delete_request_lab_snapshot(&self, user_id: &str, id: &str) -> Result<bool> {
         let conn = self.connection.lock().await;
         let affected = conn.execute(
