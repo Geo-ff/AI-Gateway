@@ -31,7 +31,6 @@ impl BalanceTransactionKind {
 #[derive(Debug, Clone)]
 pub struct BalanceTransaction {
     pub id: String,
-    pub user_id: String,
     pub kind: BalanceTransactionKind,
     pub amount: f64,
     pub created_at: DateTime<Utc>,

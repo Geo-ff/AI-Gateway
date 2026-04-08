@@ -356,6 +356,7 @@ pub async fn stream_chat_completions(
             top_k,
             common::StreamLogContext {
                 request_payload_snapshot: Some(snapshot.clone()),
+                response_preview: None,
             },
         )
         .await
@@ -373,6 +374,7 @@ pub async fn stream_chat_completions(
             upstream_req,
             common::StreamLogContext {
                 request_payload_snapshot: Some(snapshot.clone()),
+                response_preview: None,
             },
         )
         .await
@@ -393,6 +395,7 @@ pub async fn stream_chat_completions(
                 selected.provider.provider_config.clone(),
                 common::StreamLogContext {
                     request_payload_snapshot: Some(snapshot.clone()),
+                    response_preview: None,
                 },
             )
             .await
@@ -412,6 +415,7 @@ pub async fn stream_chat_completions(
                 upstream_req,
                 common::StreamLogContext {
                     request_payload_snapshot: Some(snapshot.clone()),
+                    response_preview: None,
                 },
             )
             .await
@@ -436,6 +440,7 @@ pub async fn stream_chat_completions(
             selected.provider.provider_config.clone(),
             common::StreamLogContext {
                 request_payload_snapshot: Some(snapshot),
+                response_preview: None,
             },
         )
         .await
@@ -728,7 +733,7 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("model price not set"));
 
-        let logs = app_state.log_store.get_recent_logs(5).await.unwrap();
+        let logs = app_state.log_store.get_request_logs(5, None).await.unwrap();
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].amount_spent, None);
     }
@@ -754,7 +759,7 @@ mod tests {
         assert_eq!(updated.amount_spent, 0.0);
         assert_eq!(updated.total_tokens_spent, 11);
 
-        let logs = app_state.log_store.get_recent_logs(5).await.unwrap();
+        let logs = app_state.log_store.get_request_logs(5, None).await.unwrap();
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].status_code, 200);
         assert_eq!(logs[0].amount_spent, None);

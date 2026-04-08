@@ -172,32 +172,6 @@ impl LoadBalancer {
         }
     }
 
-    pub fn select_provider(&self) -> Result<SelectedProvider, BalanceError> {
-        if self.providers.is_empty() {
-            return Err(BalanceError::NoProvidersAvailable);
-        }
-
-        let provider = match self.strategy {
-            BalanceStrategy::FirstAvailable => &self.providers[0],
-            BalanceStrategy::RoundRobin => {
-                let index = self.state.next_provider_index(self.providers.len());
-                &self.providers[index]
-            }
-            BalanceStrategy::Random => {
-                let mut rng = rand::rng();
-                let index = rng.random_range(0..self.providers.len());
-                &self.providers[index]
-            }
-        };
-
-        let api_key = self.select_api_key(provider)?;
-
-        Ok(SelectedProvider {
-            provider: provider.clone(),
-            api_key,
-        })
-    }
-
     pub fn select_provider_only(&self) -> Result<Provider, BalanceError> {
         if self.providers.is_empty() {
             return Err(BalanceError::NoProvidersAvailable);
@@ -216,27 +190,6 @@ impl LoadBalancer {
             }
         };
         Ok(provider.clone())
-    }
-
-    fn select_api_key(&self, provider: &Provider) -> Result<String, BalanceError> {
-        if provider.api_keys.is_empty() {
-            return Err(BalanceError::NoApiKeysAvailable);
-        }
-
-        match self.strategy {
-            BalanceStrategy::FirstAvailable => Ok(provider.api_keys[0].clone()),
-            BalanceStrategy::RoundRobin => {
-                let index = self
-                    .state
-                    .next_key_index(&provider.name, provider.api_keys.len());
-                Ok(provider.api_keys[index].clone())
-            }
-            BalanceStrategy::Random => {
-                let mut rng = rand::rng();
-                let index = rng.random_range(0..provider.api_keys.len());
-                Ok(provider.api_keys[index].clone())
-            }
-        }
     }
 }
 
@@ -280,8 +233,21 @@ mod tests {
                 BalanceStrategy::RoundRobin,
                 state.clone(),
             );
-            let s = lb.select_provider().unwrap();
-            out.push((s.provider.name, s.api_key));
+            let provider = lb.select_provider_only().unwrap();
+            let keys = provider
+                .api_keys
+                .iter()
+                .map(|value| ProviderKeyEntry {
+                    value: value.clone(),
+                    active: true,
+                    weight: 1,
+                })
+                .collect::<Vec<_>>();
+            let api_key = lb
+                .state
+                .select_provider_key(&provider.name, KeyRotationStrategy::Sequential, &keys)
+                .unwrap();
+            out.push((provider.name, api_key));
         }
 
         assert_eq!(

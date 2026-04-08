@@ -1578,7 +1578,10 @@ impl DatabaseLogger {
         Ok(affected > 0)
     }
 
-    pub async fn save_request_lab_snapshot(&self, snapshot: StoredRequestLabSnapshot) -> Result<()> {
+    pub async fn save_request_lab_snapshot(
+        &self,
+        snapshot: StoredRequestLabSnapshot,
+    ) -> Result<()> {
         let conn = self.connection.lock().await;
         conn.execute(
             "INSERT INTO request_lab_snapshots (

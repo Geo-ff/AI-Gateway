@@ -8,6 +8,7 @@ use crate::error::GatewayError;
 use crate::providers::anthropic::AnthropicProvider;
 use crate::providers::openai::{ChatCompletionRequest, Usage};
 use crate::server::AppState;
+use crate::server::response_text;
 use crate::server::util::mask_key;
 
 /// Anthropic streaming (best-effort):
@@ -62,7 +63,7 @@ pub async fn stream_anthropic_chat(
                 let mut delta = serde_json::Map::new();
                 delta.insert("role".to_string(), Value::String("assistant".to_string()));
                 if !content.is_empty() {
-                    delta.insert("content".to_string(), Value::String(content));
+                    delta.insert("content".to_string(), Value::String(content.clone()));
                 }
                 if let Some(r) = reasoning.as_deref()
                     && !r.is_empty()
@@ -114,6 +115,18 @@ pub async fn stream_anthropic_chat(
                     let provider = provider_name.clone();
                     let api_key = api_key_ref.clone();
                     let ct = client_token_for_task.clone();
+                    let response_preview = response_text::preview_from_stream_text(
+                        if content.is_empty() {
+                            reasoning.unwrap_or_default()
+                        } else {
+                            content.clone()
+                        },
+                        1200,
+                    );
+                    let log_context = super::common::context_with_response_preview(
+                        &log_context,
+                        response_preview,
+                    );
                     async move {
                         super::common::log_stream_success(
                             app,
@@ -125,7 +138,7 @@ pub async fn stream_anthropic_chat(
                             api_key,
                             ct,
                             usage,
-                            log_context.clone(),
+                            log_context,
                         )
                         .await;
                     }

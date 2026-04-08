@@ -1,6 +1,6 @@
 use axum::http::HeaderMap;
 
-use crate::config::settings::{KeyLogStrategy, LoggingConfig};
+use crate::config::settings::KeyLogStrategy;
 
 // HTTP helpers
 pub fn bearer_token(headers: &HeaderMap) -> Option<String> {
@@ -24,18 +24,6 @@ pub fn mask_key(key: &str) -> String {
     }
     let (start, end) = (&key[..4], &key[key.len() - 4..]);
     format!("{}****{}", start, end)
-}
-
-pub fn api_key_hint(cfg: &LoggingConfig, key: &str) -> Option<String> {
-    match cfg
-        .key_log_strategy
-        .clone()
-        .unwrap_or(KeyLogStrategy::Masked)
-    {
-        KeyLogStrategy::None => None,
-        KeyLogStrategy::Plain => Some(key.to_string()),
-        KeyLogStrategy::Masked => Some(mask_key(key)),
-    }
 }
 
 pub fn key_display_hint(strategy: &Option<KeyLogStrategy>, key: &str) -> Option<String> {

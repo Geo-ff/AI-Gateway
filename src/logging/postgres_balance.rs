@@ -27,7 +27,6 @@ impl BalanceStore for PgLogStore {
             .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
         Ok(BalanceTransaction {
             id,
-            user_id: user_id.to_string(),
             kind,
             amount,
             created_at: now,
@@ -61,7 +60,6 @@ impl BalanceStore for PgLogStore {
             let created_at: DateTime<Utc> = row.get(4);
             out.push(BalanceTransaction {
                 id: row.get(0),
-                user_id: row.get(1),
                 kind,
                 amount: row.get(3),
                 created_at,

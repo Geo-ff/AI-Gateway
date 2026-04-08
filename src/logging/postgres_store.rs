@@ -968,24 +968,6 @@ impl RequestLogStore for PgLogStore {
         })
     }
 
-    fn get_recent_logs<'a>(
-        &'a self,
-        limit: i32,
-    ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>> {
-        Box::pin(async move {
-            let client = self.pool.pick();
-            let lim: i64 = limit as i64;
-            let rows = client
-                .query(
-                    "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent FROM request_logs ORDER BY id DESC LIMIT $1",
-                    &[&lim],
-                )
-                .await
-                .map_err(pg_err)?;
-            Ok(rows.into_iter().map(Self::row_to_request_log).collect())
-        })
-    }
-
     fn get_recent_logs_with_cursor<'a>(
         &'a self,
         limit: i32,
@@ -1404,7 +1386,8 @@ impl RequestLogStore for PgLogStore {
                     source_requested_model: pg_row_opt_string(&row, 7),
                     source_effective_model: pg_row_opt_string(&row, 8),
                     models: serde_json::from_str(
-                        &row.try_get::<usize, String>(9).unwrap_or_else(|_| "[]".to_string()),
+                        &row.try_get::<usize, String>(9)
+                            .unwrap_or_else(|_| "[]".to_string()),
                     )
                     .unwrap_or_default(),
                     success_count: pg_row_i64_or(&row, 10, 0) as u32,
@@ -1443,7 +1426,8 @@ impl RequestLogStore for PgLogStore {
                 source_requested_model: pg_row_opt_string(&row, 7),
                 source_effective_model: pg_row_opt_string(&row, 8),
                 models: serde_json::from_str(
-                    &row.try_get::<usize, String>(9).unwrap_or_else(|_| "[]".to_string()),
+                    &row.try_get::<usize, String>(9)
+                        .unwrap_or_else(|_| "[]".to_string()),
                 )
                 .unwrap_or_default(),
                 success_count: pg_row_i64_or(&row, 10, 0) as u32,
@@ -1482,7 +1466,8 @@ impl RequestLogStore for PgLogStore {
                 source_requested_model: pg_row_opt_string(&row, 7),
                 source_effective_model: pg_row_opt_string(&row, 8),
                 models: serde_json::from_str(
-                    &row.try_get::<usize, String>(9).unwrap_or_else(|_| "[]".to_string()),
+                    &row.try_get::<usize, String>(9)
+                        .unwrap_or_else(|_| "[]".to_string()),
                 )
                 .unwrap_or_default(),
                 success_count: pg_row_i64_or(&row, 10, 0) as u32,
@@ -2625,8 +2610,6 @@ impl ProviderStore for PgLogStore {
             for r in rows {
                 let value = pg_row_string(&r, 0);
                 let enc = pg_row_bool_or(&r, 1, false);
-                let active = pg_row_bool_or(&r, 2, true);
-                let weight = pg_row_u32_or(&r, 3, 1);
                 let created_at_raw = pg_row_string(&r, 4);
                 let created_at = parse_datetime_string(&created_at_raw).map_err(pg_err)?;
 
@@ -2635,8 +2618,6 @@ impl ProviderStore for PgLogStore {
                 if !decrypted.is_empty() {
                     out.push(ProviderKeyEntryWithCreatedAt {
                         value: decrypted,
-                        active,
-                        weight: if weight >= 1 { weight } else { 1 },
                         created_at,
                     });
                 }

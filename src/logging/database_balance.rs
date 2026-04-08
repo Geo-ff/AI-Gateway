@@ -22,7 +22,6 @@ fn row_to_transaction(row: &rusqlite::Row<'_>) -> rusqlite::Result<BalanceTransa
     })?;
     Ok(BalanceTransaction {
         id: row.get(0)?,
-        user_id: row.get(1)?,
         kind,
         amount: row.get(3)?,
         created_at,
@@ -55,7 +54,6 @@ impl BalanceStore for DatabaseLogger {
         )?;
         Ok(BalanceTransaction {
             id,
-            user_id: user_id.to_string(),
             kind,
             amount,
             created_at: now,

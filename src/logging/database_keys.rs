@@ -76,14 +76,12 @@ impl DatabaseLogger {
     ) -> Result<Vec<ProviderKeyEntryWithCreatedAt>> {
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT key_value, enc, active, weight, created_at FROM provider_keys WHERE provider = ?1 ORDER BY created_at",
+            "SELECT key_value, enc, created_at FROM provider_keys WHERE provider = ?1 ORDER BY created_at",
         )?;
         let rows = stmt.query_map([provider], |row| {
             let value: String = row.get(0)?;
             let enc: i64 = row.get(1)?;
-            let active: i64 = row.get(2)?;
-            let weight: i64 = row.get(3)?;
-            let created_at_raw: String = row.get(4)?;
+            let created_at_raw: String = row.get(2)?;
 
             let decrypted =
                 crate::crypto::unprotect(strategy, provider, &value, enc != 0).unwrap_or_default();
@@ -102,11 +100,8 @@ impl DatabaseLogger {
                 .ok_or_else(|| rusqlite::Error::ExecuteReturnedResults)?;
             let created_at = local.with_timezone(&Utc);
 
-            let weight_u32 = if weight >= 1 { weight as u32 } else { 1 };
             Ok(ProviderKeyEntryWithCreatedAt {
                 value: decrypted,
-                active: active != 0,
-                weight: weight_u32,
                 created_at,
             })
         })?;

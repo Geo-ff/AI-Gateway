@@ -10,12 +10,6 @@ mod utils;
 pub struct AnthropicProvider;
 
 impl AnthropicProvider {
-    pub fn convert_openai_to_anthropic(
-        openai_req: &ChatCompletionRequest,
-    ) -> anthropic::CreateMessageParams {
-        request::convert_openai_to_anthropic(openai_req, None)
-    }
-
     pub fn convert_openai_to_anthropic_with_top_k(
         openai_req: &ChatCompletionRequest,
         top_k: Option<u32>,

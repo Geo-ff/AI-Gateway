@@ -65,12 +65,14 @@ pub async fn stream_openai_chat(
         .json(&upstream_req);
 
     let usage_cell: Arc<Mutex<Option<Usage>>> = Arc::new(Mutex::new(None));
+    let preview_cell: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let logged_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     // 统计与日志关联使用稳定脱敏值，避免明文泄露
     let api_key_ref = Some(mask_key(&api_key));
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<axum::response::sse::Event>();
     let usage_cell_for_task = usage_cell.clone();
+    let preview_cell_for_task = preview_cell.clone();
     let app_state_clone = app_state.clone();
     let client_token_for_outer = client_token.clone();
     let _client_token_outer = client_token.clone();
@@ -117,6 +119,10 @@ pub async fn stream_openai_chat(
                     if m.data.trim() == "[DONE]" {
                         if !logged_flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
                             let usage_snapshot = usage_cell_for_task.lock().unwrap().clone();
+                            let log_context_for_done = super::common::context_with_stream_preview(
+                                &log_context,
+                                &preview_cell_for_task,
+                            );
                             let ct_done = client_token_for_outer.clone();
                             tokio::spawn({
                                 let app = app_state_clone.clone();
@@ -125,7 +131,6 @@ pub async fn stream_openai_chat(
                                 let effective_model = effective_model.clone();
                                 let provider = provider_name.clone();
                                 let api_key = api_key_ref.clone();
-                                let log_context_for_done = log_context.clone();
                                 async move {
                                     super::common::log_stream_success(
                                         app,
@@ -157,11 +162,15 @@ pub async fn stream_openai_chat(
                         captured = true;
                     }
                     // Fallback: Value parse to extract usage (tolerate vendor extensions)
-                    if !captured
-                        && let Ok(v) = serde_json::from_str::<Value>(&m.data)
-                        && let Some(usage) = super::common::parse_usage_from_value(&v)
-                    {
-                        *usage_cell_for_task.lock().unwrap() = Some(usage);
+                    if let Ok(v) = serde_json::from_str::<Value>(&m.data) {
+                        if !captured && let Some(usage) = super::common::parse_usage_from_value(&v)
+                        {
+                            *usage_cell_for_task.lock().unwrap() = Some(usage);
+                        }
+                        super::common::append_response_preview_fragment(
+                            &preview_cell_for_task,
+                            crate::server::response_text::stream_chunk_preview_fragment(&v),
+                        );
                     }
 
                     let _ = tx.send(axum::response::sse::Event::default().data(m.data));
@@ -170,6 +179,11 @@ pub async fn stream_openai_chat(
                     tracing::error!("Stream error: {}", e);
                     let error_msg = e.to_string();
                     if !logged_flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                        let log_context_for_stream_error =
+                            super::common::context_with_stream_preview(
+                                &log_context,
+                                &preview_cell_for_task,
+                            );
                         let state_for_log = app_state_clone.clone();
                         let billing_model_for_log = model_with_prefix.clone();
                         let requested_model_for_log = requested_model.clone();
@@ -179,7 +193,6 @@ pub async fn stream_openai_chat(
                         let started_at = start_time;
                         let error_for_log = error_msg.clone();
                         let ct_stream_err = client_token_for_outer.clone();
-                        let log_context_for_stream_error = log_context.clone();
                         tokio::spawn(async move {
                             super::common::log_stream_error(
                                 state_for_log,
@@ -207,6 +220,8 @@ pub async fn stream_openai_chat(
         // Safety net: log if stream closed without [DONE]
         if !logged_flag.load(std::sync::atomic::Ordering::SeqCst) {
             let usage_snapshot = usage_cell_for_task.lock().unwrap().clone();
+            let log_context_for_fallback =
+                super::common::context_with_stream_preview(&log_context, &preview_cell_for_task);
             let ct_fallback = client_token_for_outer.clone();
             tokio::spawn({
                 let app = app_state_clone.clone();
@@ -215,7 +230,6 @@ pub async fn stream_openai_chat(
                 let effective_model = effective_model.clone();
                 let provider = provider_name.clone();
                 let api_key = api_key_ref.clone();
-                let log_context_for_fallback = log_context.clone();
                 async move {
                     super::common::log_stream_success(
                         app,

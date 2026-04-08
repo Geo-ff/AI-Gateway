@@ -59,21 +59,3 @@ pub async fn apply_provider_model_redirects_to_parsed_model(
     parsed_model.model_name = resolved.clone();
     Ok(Some((original, resolved)))
 }
-
-pub async fn apply_provider_model_redirects_to_request(
-    app_state: &AppState,
-    provider: &str,
-    request: &mut ChatCompletionRequest,
-) -> Result<Option<(String, String)>, crate::error::GatewayError> {
-    let mut parsed = ParsedModel::parse(&request.model);
-    let applied =
-        apply_provider_model_redirects_to_parsed_model(app_state, provider, &mut parsed).await?;
-    if applied.is_some() {
-        request.model = if parsed.provider_name.is_some() {
-            format!("{}/{}", provider, parsed.model_name)
-        } else {
-            parsed.model_name
-        };
-    }
-    Ok(applied)
-}

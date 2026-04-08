@@ -344,11 +344,18 @@ fn usage_from_counts(
 fn handle_normalized_events(
     emitter: &mut OpenAiSseEmitter,
     usage_cell: &Arc<Mutex<Option<Usage>>>,
+    preview_cell: &Arc<Mutex<String>>,
     events: Vec<NormalizedStreamEvent>,
 ) -> Result<bool, String> {
     for event in events {
-        if let NormalizedStreamEvent::Usage(usage) = &event {
-            *usage_cell.lock().unwrap() = Some(usage.clone());
+        match &event {
+            NormalizedStreamEvent::Usage(usage) => {
+                *usage_cell.lock().unwrap() = Some(usage.clone());
+            }
+            NormalizedStreamEvent::TextDelta(text) => {
+                super::common::append_response_preview_fragment(preview_cell, Some(text.clone()));
+            }
+            NormalizedStreamEvent::RoleStart | NormalizedStreamEvent::Finish(_) => {}
         }
         if !emitter.emit(event) {
             return Ok(false);
@@ -795,6 +802,7 @@ pub async fn stream_native_chat(
 ) -> Result<Response, GatewayError> {
     let api_key_ref = Some(mask_key(&api_key));
     let usage_cell: Arc<Mutex<Option<Usage>>> = Arc::new(Mutex::new(None));
+    let preview_cell: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let logged_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<axum::response::sse::Event>();
     let mut emitter = OpenAiSseEmitter::new(tx.clone(), effective_model.clone());
@@ -1047,6 +1055,7 @@ pub async fn stream_native_chat(
         .unwrap_or_default()
         .to_string();
     let usage_cell_for_task = usage_cell.clone();
+    let preview_cell_for_task = preview_cell.clone();
     let app_state_clone = app_state.clone();
     let client_token_for_task = client_token.clone();
     let response_model = effective_model.clone();
@@ -1068,7 +1077,12 @@ pub async fn stream_native_chat(
                             return Ok(());
                         }
                         let events = parse_azure_chunk(data)?;
-                        if !handle_normalized_events(&mut emitter, &usage_cell_for_task, events)? {
+                        if !handle_normalized_events(
+                            &mut emitter,
+                            &usage_cell_for_task,
+                            &preview_cell_for_task,
+                            events,
+                        )? {
                             return Ok(());
                         }
                     }
@@ -1104,6 +1118,7 @@ pub async fn stream_native_chat(
                             if !handle_normalized_events(
                                 &mut emitter,
                                 &usage_cell_for_task,
+                                &preview_cell_for_task,
                                 events,
                             )? {
                                 return Ok(());
@@ -1116,6 +1131,7 @@ pub async fn stream_native_chat(
                             if !handle_normalized_events(
                                 &mut emitter,
                                 &usage_cell_for_task,
+                                &preview_cell_for_task,
                                 events,
                             )? {
                                 return Ok(());
@@ -1134,7 +1150,12 @@ pub async fn stream_native_chat(
                     let text = String::from_utf8_lossy(&chunk).to_string();
                     for message in decoder.push(&text) {
                         let events = parse_cohere_event(&message.event, &message.data)?;
-                        if !handle_normalized_events(&mut emitter, &usage_cell_for_task, events)? {
+                        if !handle_normalized_events(
+                            &mut emitter,
+                            &usage_cell_for_task,
+                            &preview_cell_for_task,
+                            events,
+                        )? {
                             return Ok(());
                         }
                     }
@@ -1167,6 +1188,7 @@ pub async fn stream_native_chat(
                             if !handle_normalized_events(
                                 &mut emitter,
                                 &usage_cell_for_task,
+                                &preview_cell_for_task,
                                 events,
                             )? {
                                 return Ok(());
@@ -1178,6 +1200,7 @@ pub async fn stream_native_chat(
                             if !handle_normalized_events(
                                 &mut emitter,
                                 &usage_cell_for_task,
+                                &preview_cell_for_task,
                                 events,
                             )? {
                                 return Ok(());
@@ -1203,7 +1226,12 @@ pub async fn stream_native_chat(
                             return Ok(());
                         }
                         let events = parse_xf_spark_chunk(data)?;
-                        if !handle_normalized_events(&mut emitter, &usage_cell_for_task, events)? {
+                        if !handle_normalized_events(
+                            &mut emitter,
+                            &usage_cell_for_task,
+                            &preview_cell_for_task,
+                            events,
+                        )? {
                             return Ok(());
                         }
                     }
@@ -1224,7 +1252,12 @@ pub async fn stream_native_chat(
                         let value: Value = serde_json::from_slice(&frame)
                             .map_err(|err| format!("AWS Claude EventStream 载荷解析失败：{err}"))?;
                         let events = parse_bedrock_event(&value)?;
-                        if !handle_normalized_events(&mut emitter, &usage_cell_for_task, events)? {
+                        if !handle_normalized_events(
+                            &mut emitter,
+                            &usage_cell_for_task,
+                            &preview_cell_for_task,
+                            events,
+                        )? {
                             return Ok(());
                         }
                     }
@@ -1239,6 +1272,10 @@ pub async fn stream_native_chat(
             Ok(()) => {
                 if !logged_flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
                     let usage_snapshot = usage_cell_for_task.lock().unwrap().clone();
+                    let log_context_for_success = super::common::context_with_stream_preview(
+                        &log_context,
+                        &preview_cell_for_task,
+                    );
                     super::common::log_stream_success(
                         app_state_clone,
                         start_time,
@@ -1249,7 +1286,7 @@ pub async fn stream_native_chat(
                         api_key_ref,
                         client_token_for_task,
                         usage_snapshot,
-                        log_context.clone(),
+                        log_context_for_success,
                     )
                     .await;
                 }
@@ -1257,6 +1294,10 @@ pub async fn stream_native_chat(
             Err(message) => {
                 let _ = emitter.emit_error(message.clone());
                 if !logged_flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    let log_context_for_error = super::common::context_with_stream_preview(
+                        &log_context,
+                        &preview_cell_for_task,
+                    );
                     super::common::log_stream_error(
                         app_state_clone,
                         start_time,
@@ -1267,7 +1308,7 @@ pub async fn stream_native_chat(
                         api_key_ref,
                         client_token_for_task,
                         message.clone(),
-                        log_context,
+                        log_context_for_error,
                     )
                     .await;
                 }

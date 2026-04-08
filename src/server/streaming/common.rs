@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 
@@ -7,10 +7,14 @@ use crate::logging::RequestLog;
 use crate::logging::types::{REQ_TYPE_CHAT_STREAM, RequestLogDetailRecord};
 use crate::providers::openai::Usage;
 use crate::server::AppState;
+use crate::server::response_text;
+
+const STREAM_RESPONSE_PREVIEW_MAX_LEN: usize = 1200;
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct StreamLogContext {
     pub request_payload_snapshot: Option<String>,
+    pub response_preview: Option<String>,
 }
 
 async fn upsert_stream_log_detail(
@@ -24,7 +28,7 @@ async fn upsert_stream_log_detail(
     let detail = RequestLogDetailRecord {
         request_log_id,
         request_payload_snapshot: context.request_payload_snapshot.clone(),
-        response_preview: None,
+        response_preview: context.response_preview.clone(),
         upstream_status: Some(i64::from(status_code)),
         fallback_triggered: None,
         fallback_reason: None,
@@ -35,6 +39,37 @@ async fn upsert_stream_log_detail(
     if let Err(error) = app_state.log_store.upsert_request_log_detail(detail).await {
         tracing::warn!("Failed to upsert streaming request log detail: {}", error);
     }
+}
+
+pub(super) fn append_response_preview_fragment(
+    preview_cell: &Arc<Mutex<String>>,
+    fragment: Option<String>,
+) {
+    let Some(fragment) = fragment else {
+        return;
+    };
+    preview_cell.lock().unwrap().push_str(&fragment);
+}
+
+pub(super) fn context_with_stream_preview(
+    context: &StreamLogContext,
+    preview_cell: &Arc<Mutex<String>>,
+) -> StreamLogContext {
+    let mut next_context = context.clone();
+    next_context.response_preview = response_text::preview_from_stream_text(
+        preview_cell.lock().unwrap().clone(),
+        STREAM_RESPONSE_PREVIEW_MAX_LEN,
+    );
+    next_context
+}
+
+pub(super) fn context_with_response_preview(
+    context: &StreamLogContext,
+    response_preview: Option<String>,
+) -> StreamLogContext {
+    let mut next_context = context.clone();
+    next_context.response_preview = response_preview;
+    next_context
 }
 
 // 统一的流式错误日志记录函数（KISS/DRY）
@@ -527,6 +562,7 @@ mod tests {
             }),
             StreamLogContext {
                 request_payload_snapshot: Some(snapshot.clone()),
+                response_preview: Some("hello world".into()),
             },
         )
         .await;
@@ -545,5 +581,6 @@ mod tests {
         assert_eq!(detail.selected_provider.as_deref(), Some("demo-provider"));
         assert_eq!(detail.upstream_status, Some(200));
         assert_eq!(detail.selected_key_id.as_deref(), Some("sk-d****cret"));
+        assert_eq!(detail.response_preview.as_deref(), Some("hello world"));
     }
 }

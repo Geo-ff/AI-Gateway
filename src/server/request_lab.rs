@@ -265,7 +265,6 @@ pub struct ReplayResponse {
 
 #[derive(Debug)]
 pub struct ExecutedChatRequest {
-    pub requested_model: String,
     pub effective_model: String,
     pub provider_name: String,
     pub response: Result<RawAndTypedChatCompletion, GatewayError>,
@@ -407,9 +406,16 @@ fn detail_response(
     let detail_snapshot = detail
         .as_ref()
         .and_then(|item| item.request_payload_snapshot.as_deref())
-        .map(serde_json::from_str)
-        .transpose()
-        .map_err(|_| GatewayError::Config("请求快照格式非法".into()))?;
+        .and_then(|raw| match serde_json::from_str(raw) {
+            Ok(snapshot) => Some(snapshot),
+            Err(error) => {
+                tracing::warn!(
+                    "failed to parse request payload snapshot for detail response: {}",
+                    error
+                );
+                None
+            }
+        });
     Ok(RequestDetailResponse {
         id: log.id.unwrap_or_default(),
         timestamp: log.timestamp.to_rfc3339(),
@@ -561,9 +567,16 @@ fn request_lab_snapshot_source_payload_with_detail(
     let mut payload = request_lab_snapshot_source_payload(log);
     payload.request_payload_snapshot = detail
         .and_then(|item| item.request_payload_snapshot.as_deref())
-        .map(serde_json::from_str)
-        .transpose()
-        .map_err(|_| GatewayError::Config("请求快照格式非法".into()))?;
+        .and_then(|raw| match serde_json::from_str(raw) {
+            Ok(snapshot) => Some(snapshot),
+            Err(error) => {
+                tracing::warn!(
+                    "failed to parse request payload snapshot for snapshot payload: {}",
+                    error
+                );
+                None
+            }
+        });
     payload.response_preview = detail.and_then(|item| item.response_preview.clone());
     payload.fallback_triggered = detail.and_then(|item| item.fallback_triggered);
     payload.fallback_reason = detail.and_then(|item| item.fallback_reason.clone());
@@ -640,13 +653,17 @@ async fn compare_item_response_from_execution(
         .as_ref()
         .and_then(|item| item.fallback_triggered)
         .unwrap_or(false);
-    let fallback_reason = detail.as_ref().and_then(|item| item.fallback_reason.clone());
+    let fallback_reason = detail
+        .as_ref()
+        .and_then(|item| item.fallback_reason.clone());
     let upstream_status = detail.as_ref().and_then(|item| item.upstream_status);
     let selected_provider = detail
         .as_ref()
         .and_then(|item| item.selected_provider.clone())
         .or_else(|| Some(executed.provider_name.clone()));
-    let selected_key_id = detail.as_ref().and_then(|item| item.selected_key_id.clone());
+    let selected_key_id = detail
+        .as_ref()
+        .and_then(|item| item.selected_key_id.clone());
     let first_token_latency_ms = detail.as_ref().and_then(|item| item.first_token_latency_ms);
 
     Ok(match &executed.response {
@@ -880,7 +897,6 @@ pub async fn execute_logged_chat_request(
     }
 
     Ok(ExecutedChatRequest {
-        requested_model,
         effective_model: upstream_model,
         provider_name: selected.provider.name,
         response,
@@ -1182,7 +1198,11 @@ pub async fn list_request_lab_snapshots(
     }
 
     let sort_order = query.sort.as_deref().unwrap_or("desc");
-    snapshots.sort_by(|left, right| left.created_at.cmp(&right.created_at).then(left.id.cmp(&right.id)));
+    snapshots.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then(left.id.cmp(&right.id))
+    });
     if sort_order != "asc" {
         snapshots.reverse();
     }
@@ -1411,12 +1431,13 @@ pub async fn get_compare(
 #[cfg(test)]
 mod tests {
     use super::{
-        ReplayOverrideInput, ReplayableRequestSnapshot,
-        request_from_snapshot, request_lab_snapshot_detail_response,
-        snapshot_matches_keyword,
+        ReplayOverrideInput, ReplayableRequestSnapshot, detail_response, request_from_snapshot,
+        request_lab_snapshot_detail_response, snapshot_matches_keyword,
     };
     use crate::logging::DatabaseLogger;
-    use crate::logging::types::{StoredCompareRun, StoredRequestLabSnapshot};
+    use crate::logging::types::{
+        RequestLog, RequestLogDetailRecord, StoredCompareRun, StoredRequestLabSnapshot,
+    };
     use crate::server::storage_traits::RequestLogStore;
     use chrono::Utc;
     use serde_json::json;
@@ -1477,7 +1498,10 @@ mod tests {
             snapshot_json: "{}".into(),
             source_requested_model: Some("openai/gpt-4o-mini".into()),
             source_effective_model: Some("openai/gpt-4o-mini".into()),
-            models: vec!["openai/gpt-4.1-mini".into(), "anthropic/claude-3.7-sonnet".into()],
+            models: vec![
+                "openai/gpt-4.1-mini".into(),
+                "anthropic/claude-3.7-sonnet".into(),
+            ],
             success_count: 1,
             failure_count: 1,
         };
@@ -1571,11 +1595,63 @@ mod tests {
         );
     }
 
+    #[test]
+    fn detail_response_keeps_preview_when_snapshot_is_invalid() {
+        let log = RequestLog {
+            id: Some(42),
+            timestamp: Utc::now(),
+            method: "POST".into(),
+            path: "/v1/chat/completions".into(),
+            request_type: "chat_once".into(),
+            requested_model: Some("openai/gpt-4o-mini".into()),
+            effective_model: Some("gpt-4o-mini".into()),
+            model: Some("gpt-4o-mini".into()),
+            provider: Some("openai".into()),
+            api_key: Some("sk-****".into()),
+            client_token: Some("tok_1".into()),
+            user_id: None,
+            amount_spent: Some(0.01),
+            status_code: 200,
+            response_time_ms: 123,
+            prompt_tokens: Some(10),
+            completion_tokens: Some(5),
+            total_tokens: Some(15),
+            cached_tokens: None,
+            reasoning_tokens: None,
+            error_message: None,
+        };
+        let detail = RequestLogDetailRecord {
+            request_log_id: 42,
+            request_payload_snapshot: Some("{not-json".into()),
+            response_preview: Some("preview text".into()),
+            upstream_status: Some(200),
+            fallback_triggered: Some(false),
+            fallback_reason: None,
+            selected_provider: Some("openai".into()),
+            selected_key_id: Some("sk-****".into()),
+            first_token_latency_ms: Some(88),
+        };
+
+        let response = detail_response(
+            log,
+            Some(detail),
+            Some("Token A".into()),
+            Some("alice".into()),
+        )
+        .unwrap();
+
+        assert_eq!(response.response_preview.as_deref(), Some("preview text"));
+        assert!(response.request_payload_snapshot.is_none());
+        assert_eq!(response.selected_provider.as_deref(), Some("openai"));
+    }
+
     #[tokio::test]
     async fn snapshot_storage_roundtrip_preserves_compare_run() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        let db = DatabaseLogger::new(db_path.to_str().unwrap()).await.unwrap();
+        let db = DatabaseLogger::new(db_path.to_str().unwrap())
+            .await
+            .unwrap();
         let created_at = Utc::now();
 
         RequestLogStore::save_compare_run(
@@ -1618,7 +1694,10 @@ mod tests {
             .to_string(),
             source_requested_model: Some("openai/gpt-4o-mini".into()),
             source_effective_model: Some("openai/gpt-4o-mini".into()),
-            models: vec!["openai/gpt-4.1-mini".into(), "anthropic/claude-3.7-sonnet".into()],
+            models: vec![
+                "openai/gpt-4.1-mini".into(),
+                "anthropic/claude-3.7-sonnet".into(),
+            ],
             success_count: 1,
             failure_count: 1,
         };
@@ -1644,10 +1723,12 @@ mod tests {
             .await
             .unwrap();
         assert!(deleted);
-        assert!(RequestLogStore::list_request_lab_snapshots(&db, "u1")
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            RequestLogStore::list_request_lab_snapshots(&db, "u1")
+                .await
+                .unwrap()
+                .is_empty()
+        );
 
         let compare_run = RequestLogStore::get_compare_run(&db, "cmp_1")
             .await
@@ -1659,7 +1740,9 @@ mod tests {
     async fn snapshot_storage_is_idempotent_per_compare_run() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        let db = DatabaseLogger::new(db_path.to_str().unwrap()).await.unwrap();
+        let db = DatabaseLogger::new(db_path.to_str().unwrap())
+            .await
+            .unwrap();
         let created_at = Utc::now();
 
         let first = StoredRequestLabSnapshot {
@@ -1686,7 +1769,10 @@ mod tests {
             snapshot_json: "{}".into(),
             source_requested_model: Some("openai/gpt-4o-mini".into()),
             source_effective_model: Some("openai/gpt-4o-mini".into()),
-            models: vec!["openai/gpt-4.1-mini".into(), "anthropic/claude-3.7-sonnet".into()],
+            models: vec![
+                "openai/gpt-4.1-mini".into(),
+                "anthropic/claude-3.7-sonnet".into(),
+            ],
             success_count: 2,
             failure_count: 0,
         };
@@ -1706,13 +1792,10 @@ mod tests {
         assert_eq!(listed[0].note.as_deref(), Some("更新后的备注"));
         assert_eq!(listed[0].models.len(), 2);
 
-        let by_compare = RequestLogStore::get_request_lab_snapshot_by_compare_run(
-            &db,
-            "u1",
-            "cmp_same",
-        )
-        .await
-        .unwrap();
+        let by_compare =
+            RequestLogStore::get_request_lab_snapshot_by_compare_run(&db, "u1", "cmp_same")
+                .await
+                .unwrap();
         assert!(by_compare.is_some());
     }
 }

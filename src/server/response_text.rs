@@ -48,6 +48,42 @@ fn join_fragments(fragments: Vec<String>) -> Option<String> {
     normalize_whitespace(joined)
 }
 
+fn collect_stream_fragments(value: &Value) -> Vec<String> {
+    match value {
+        Value::String(text) => {
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![text.clone()]
+            }
+        }
+        Value::Array(items) => items
+            .iter()
+            .flat_map(collect_stream_fragments)
+            .collect::<Vec<_>>(),
+        Value::Object(map) => {
+            for key in ["output_text", "text", "value", "content"] {
+                if let Some(found) = map.get(key) {
+                    let fragments = collect_stream_fragments(found);
+                    if !fragments.is_empty() {
+                        return fragments;
+                    }
+                }
+            }
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn join_stream_fragments(fragments: Vec<String>) -> Option<String> {
+    if fragments.is_empty() {
+        None
+    } else {
+        Some(fragments.concat())
+    }
+}
+
 fn extract_from_choices(raw: &Value) -> Option<String> {
     let message = raw
         .get("choices")
@@ -141,9 +177,41 @@ pub(crate) fn response_preview(
     }
 }
 
+pub(crate) fn preview_from_stream_text(text: String, max_len: usize) -> Option<String> {
+    normalize_whitespace(text).map(|text| truncate(text, max_len))
+}
+
+pub(crate) fn stream_chunk_preview_fragment(raw: &Value) -> Option<String> {
+    let delta = raw
+        .get("choices")
+        .and_then(|value| value.as_array())
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("delta"));
+
+    if let Some(text) = delta
+        .and_then(|delta| delta.get("content"))
+        .and_then(|value| join_stream_fragments(collect_stream_fragments(value)))
+    {
+        return Some(text);
+    }
+
+    if let Some(text) = delta
+        .and_then(|delta| delta.get("reasoning_content"))
+        .and_then(|value| join_stream_fragments(collect_stream_fragments(value)))
+    {
+        return Some(text);
+    }
+
+    raw.get("choices")
+        .and_then(|value| value.as_array())
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("text"))
+        .and_then(|value| join_stream_fragments(collect_stream_fragments(value)))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{extract_response_text, response_summary};
+    use super::{extract_response_text, response_summary, stream_chunk_preview_fragment};
     use crate::providers::openai::types::RawAndTypedChatCompletion;
     use serde_json::json;
 
@@ -261,5 +329,45 @@ mod tests {
         let summary = response_summary(&dual, 1200).unwrap();
         assert!(summary.contains("response"));
         assert!(summary.contains("test-model"));
+    }
+
+    #[test]
+    fn extracts_stream_chunk_preview_fragment_without_losing_spacing() {
+        let chunk = json!({
+            "id": "chatcmpl-stream",
+            "object": "chat.completion.chunk",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": " hello"
+                },
+                "finish_reason": null
+            }]
+        });
+
+        assert_eq!(
+            stream_chunk_preview_fragment(&chunk).as_deref(),
+            Some(" hello")
+        );
+    }
+
+    #[test]
+    fn extracts_stream_chunk_preview_fragment_from_reasoning_content() {
+        let chunk = json!({
+            "id": "chatcmpl-stream",
+            "object": "chat.completion.chunk",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "reasoning_content": "step-1"
+                },
+                "finish_reason": null
+            }]
+        });
+
+        assert_eq!(
+            stream_chunk_preview_fragment(&chunk).as_deref(),
+            Some("step-1")
+        );
     }
 }

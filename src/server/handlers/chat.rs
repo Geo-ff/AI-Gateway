@@ -13,11 +13,6 @@ use crate::server::chat_request::GatewayChatCompletionRequest;
 use crate::server::request_lab::{build_request_payload_snapshot, execute_logged_chat_request};
 use crate::server::streaming::stream_chat_completions;
 
-fn is_openai_error_payload(v: &serde_json::Value) -> bool {
-    // OpenAI-style error payload is `{ "error": { ... } }` without `choices`.
-    v.get("error").is_some() && v.get("choices").is_none()
-}
-
 fn error_payload_to_chat_completion(
     provider: &str,
     effective_model: &str,
@@ -144,7 +139,7 @@ pub async fn chat_completions(
 
 #[cfg(test)]
 mod tests {
-    use super::{error_payload_to_chat_completion, is_openai_error_payload};
+    use super::error_payload_to_chat_completion;
     use crate::admin::{CreateTokenPayload, TokenStore};
     use crate::config::settings::{
         BalanceStrategy, LoadBalancing, LoggingConfig, PricingMode, Provider, ProviderConfig,
@@ -174,6 +169,8 @@ mod tests {
 
     #[test]
     fn openai_error_payload_detection() {
+        let is_openai_error_payload =
+            |v: &serde_json::Value| v.get("error").is_some() && v.get("choices").is_none();
         let v = serde_json::json!({
             "error": {
                 "message": "openai_error",
@@ -2052,7 +2049,7 @@ mod tests {
         assert!(err.to_string().contains("model price not set"));
         assert!(captured.lock().await.is_empty());
 
-        let logs = app_state.log_store.get_recent_logs(5).await.unwrap();
+        let logs = app_state.log_store.get_request_logs(5, None).await.unwrap();
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].amount_spent, None);
         assert!(
@@ -2101,7 +2098,7 @@ mod tests {
         assert_eq!(updated.amount_spent, 0.0);
         assert_eq!(updated.total_tokens_spent, 10);
 
-        let logs = app_state.log_store.get_recent_logs(5).await.unwrap();
+        let logs = app_state.log_store.get_request_logs(5, None).await.unwrap();
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].status_code, 200);
         assert_eq!(logs[0].amount_spent, None);

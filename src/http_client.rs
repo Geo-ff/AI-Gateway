@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use reqwest::ClientBuilder;
 
 fn has_proxy_env() -> bool {
@@ -51,14 +49,6 @@ pub fn maybe_disable_proxy(builder: ClientBuilder, url: &str) -> ClientBuilder {
 
 pub fn client_for_url(url: &str) -> Result<reqwest::Client, reqwest::Error> {
     let builder = reqwest::Client::builder();
-    maybe_disable_proxy(builder, url).build()
-}
-
-pub fn client_for_url_with_timeout(
-    url: &str,
-    timeout: Duration,
-) -> Result<reqwest::Client, reqwest::Error> {
-    let builder = reqwest::Client::builder().timeout(timeout);
     maybe_disable_proxy(builder, url).build()
 }
 

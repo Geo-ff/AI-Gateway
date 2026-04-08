@@ -57,10 +57,6 @@ pub trait FavoritesStore: Send + Sync {
 // 日志存储抽象（可由 SQLite、Postgres 等实现）
 pub trait RequestLogStore: Send + Sync {
     fn log_request<'a>(&'a self, log: RequestLog) -> BoxFuture<'a, rusqlite::Result<i64>>;
-    fn get_recent_logs<'a>(
-        &'a self,
-        limit: i32,
-    ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>>;
     fn get_recent_logs_with_cursor<'a>(
         &'a self,
         limit: i32,
@@ -343,8 +339,6 @@ pub struct AdminPublicKeyRecord {
 #[derive(Debug, Clone)]
 pub struct ProviderKeyEntryWithCreatedAt {
     pub value: String,
-    pub active: bool,
-    pub weight: u32,
     pub created_at: DateTime<Utc>,
 }
 
@@ -459,13 +453,6 @@ pub trait LoginStore: Send + Sync {
 impl RequestLogStore for DatabaseLogger {
     fn log_request<'a>(&'a self, log: RequestLog) -> BoxFuture<'a, rusqlite::Result<i64>> {
         Box::pin(async move { self.log_request(log).await })
-    }
-
-    fn get_recent_logs<'a>(
-        &'a self,
-        limit: i32,
-    ) -> BoxFuture<'a, rusqlite::Result<Vec<RequestLog>>> {
-        Box::pin(async move { self.get_recent_logs(limit).await })
     }
 
     fn get_recent_logs_with_cursor<'a>(
