@@ -120,6 +120,22 @@ pub struct RequestLabSnapshotItemsSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalizedMessage {
+    pub zh_cn: String,
+    pub en: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompareItemErrorInfo {
+    pub code: String,
+    pub i18n_key: String,
+    pub message: String,
+    pub localized_message: LocalizedMessage,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestLabSnapshotSourcePayload {
     pub source_request_id: i64,
     pub requested_model: Option<String>,
@@ -175,6 +191,22 @@ pub struct RequestLabSnapshotDetailResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct CompareDetailResponse {
+    pub id: String,
+    pub source_request_id: i64,
+    pub created_at: String,
+    pub items: Vec<CompareItemResponse>,
+    pub compare_run_id: String,
+    pub source_requested_model: Option<String>,
+    pub source_effective_model: Option<String>,
+    pub models: Vec<String>,
+    pub items_summary: RequestLabSnapshotItemsSummary,
+    pub compare: CompareResponse,
+    pub source: RequestLabSnapshotSourcePayload,
+    pub snapshot_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct DeleteRequestLabSnapshotResponse {
     pub deleted: bool,
 }
@@ -199,6 +231,8 @@ pub struct CompareItemResponse {
     #[serde(default)]
     pub fallback_reason: Option<String>,
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub error: Option<CompareItemErrorInfo>,
     #[serde(default)]
     pub upstream_status: Option<i64>,
     #[serde(default)]
@@ -527,6 +561,193 @@ fn request_status(status_code: u16) -> String {
     }
 }
 
+fn gateway_error_detail(err: &GatewayError) -> String {
+    match err {
+        GatewayError::TimeParse(message)
+        | GatewayError::Config(message)
+        | GatewayError::NotFound(message)
+        | GatewayError::RateLimited(message)
+        | GatewayError::Unauthorized(message)
+        | GatewayError::Forbidden(message) => message.clone(),
+        _ => err.to_string(),
+    }
+}
+
+fn normalize_compare_error_detail(raw: &str) -> String {
+    let mut detail = raw.trim().to_string();
+    loop {
+        let next = if let Some(rest) = detail.strip_prefix("Config error: ") {
+            Some(rest)
+        } else if let Some(rest) = detail.strip_prefix("Unauthorized: ") {
+            Some(rest)
+        } else if let Some(rest) = detail.strip_prefix("Rate limited: ") {
+            Some(rest)
+        } else if let Some(rest) = detail.strip_prefix("Not found: ") {
+            Some(rest)
+        } else if let Some(rest) = detail.strip_prefix("Forbidden: ") {
+            Some(rest)
+        } else {
+            None
+        };
+        let Some(next) = next else {
+            break;
+        };
+        detail = next.trim().to_string();
+    }
+    detail
+}
+
+fn compare_item_error_info(err: &GatewayError) -> CompareItemErrorInfo {
+    let detail = normalize_compare_error_detail(&gateway_error_detail(err));
+    let detail_lc = detail.to_lowercase();
+
+    let (code, i18n_key, zh_cn, en) = if detail_lc.contains("insufficient account balance")
+        || detail.contains("余额不足")
+    {
+        (
+            "insufficient_balance",
+            "request_lab.compare.error.insufficient_balance",
+            "余额不足，请充值后重试。若当前令牌已被停用，请在充值或订阅后手动启用。",
+            "Insufficient balance. Please top up and try again. If the token was disabled, re-enable it after topping up or renewing your subscription.",
+        )
+    } else if detail_lc.contains("token budget exceeded") {
+        (
+            "token_budget_exceeded",
+            "request_lab.compare.error.token_budget_exceeded",
+            "当前令牌预算已用尽，无法继续发起对比请求。",
+            "This token has exhausted its budget and cannot be used for comparison requests.",
+        )
+    } else if detail_lc.contains("token disabled") {
+        (
+            "token_disabled",
+            "request_lab.compare.error.token_disabled",
+            "当前令牌已被停用，请启用后再试。",
+            "This token is disabled. Enable it before trying again.",
+        )
+    } else if detail_lc.contains("token expired") {
+        (
+            "token_expired",
+            "request_lab.compare.error.token_expired",
+            "当前令牌已过期，请更换可用令牌后重试。",
+            "This token has expired. Switch to an active token and try again.",
+        )
+    } else if detail_lc.contains("token total usage exceeded") {
+        (
+            "token_usage_exceeded",
+            "request_lab.compare.error.token_usage_exceeded",
+            "当前令牌的总用量已达到上限，无法继续发起对比请求。",
+            "This token has reached its total usage limit and cannot be used for comparison requests.",
+        )
+    } else if detail_lc.contains("model is disabled") {
+        (
+            "model_disabled",
+            "request_lab.compare.error.model_disabled",
+            "该模型当前已被禁用，请选择其他模型。",
+            "This model is currently disabled. Please choose another model.",
+        )
+    } else if detail_lc.contains("model price not set") {
+        (
+            "model_price_not_set",
+            "request_lab.compare.error.model_price_not_set",
+            "该模型尚未配置价格信息，暂时无法参与对比。",
+            "Pricing is not configured for this model, so it cannot be used in comparisons yet.",
+        )
+    } else if detail_lc.contains("invalid token") || detail.contains("缺少可用令牌") {
+        (
+            "token_unavailable",
+            "request_lab.compare.error.token_unavailable",
+            "当前请求缺少可用令牌，无法完成模型对比。",
+            "No usable token is available for this request, so the comparison cannot be completed.",
+        )
+    } else if detail_lc.contains("rate limit") {
+        (
+            "rate_limited",
+            "request_lab.compare.error.rate_limited",
+            "请求过于频繁，请稍后重试。",
+            "Too many requests. Please try again later.",
+        )
+    } else if detail_lc.contains("authentication") || matches!(err, GatewayError::Unauthorized(_)) {
+        (
+            "authentication_failed",
+            "request_lab.compare.error.authentication_failed",
+            "模型服务鉴权失败，请检查凭证配置后重试。",
+            "Authentication with the model provider failed. Please verify the credentials and try again.",
+        )
+    } else if detail_lc.contains("upstream returned error payload") {
+        (
+            "upstream_error",
+            "request_lab.compare.error.upstream_error",
+            "模型服务返回了错误响应，本次对比未成功。",
+            "The model provider returned an error response, so this comparison attempt failed.",
+        )
+    } else {
+        (
+            "request_failed",
+            "request_lab.compare.error.request_failed",
+            "本次对比请求失败，请稍后重试或检查模型与令牌配置。",
+            "This comparison request failed. Please try again later or review the model and token configuration.",
+        )
+    };
+
+    CompareItemErrorInfo {
+        code: code.to_string(),
+        i18n_key: i18n_key.to_string(),
+        message: zh_cn.to_string(),
+        localized_message: LocalizedMessage {
+            zh_cn: zh_cn.to_string(),
+            en: en.to_string(),
+        },
+        detail: if detail.is_empty() {
+            None
+        } else {
+            Some(detail)
+        },
+    }
+}
+
+fn failed_compare_item(
+    request_id: Option<i64>,
+    model: String,
+    requested_model: String,
+    effective_model: Option<String>,
+    provider: Option<String>,
+    response_time_ms: i64,
+    cost: Option<f64>,
+    fallback_triggered: bool,
+    fallback_reason: Option<String>,
+    upstream_status: Option<i64>,
+    selected_provider: Option<String>,
+    selected_key_id: Option<String>,
+    first_token_latency_ms: Option<i64>,
+    err: &GatewayError,
+) -> CompareItemResponse {
+    let error = compare_item_error_info(err);
+    CompareItemResponse {
+        request_id,
+        model,
+        requested_model,
+        effective_model,
+        provider,
+        output_summary: None,
+        response: None,
+        response_time_ms,
+        input_tokens: None,
+        output_tokens: None,
+        total_tokens: None,
+        cost,
+        status: "failed".to_string(),
+        status_code: err.status_code().as_u16(),
+        fallback_triggered,
+        fallback_reason,
+        error_message: Some(error.message.clone()),
+        error: Some(error),
+        upstream_status,
+        selected_provider,
+        selected_key_id,
+        first_token_latency_ms,
+    }
+}
+
 fn normalize_snapshot_note(note: Option<String>) -> Option<String> {
     note.and_then(|value| {
         let trimmed = value.trim().to_string();
@@ -635,6 +856,38 @@ fn request_lab_snapshot_detail_response(
     })
 }
 
+fn compare_detail_response(
+    compare: CompareResponse,
+    log: &RequestLog,
+    detail: Option<&RequestLogDetailRecord>,
+) -> Result<CompareDetailResponse, GatewayError> {
+    let source = request_lab_snapshot_source_payload_with_detail(log, detail)?;
+    let snapshot_json = serde_json::to_value(RequestLabSnapshotPayload {
+        compare: compare.clone(),
+        source: source.clone(),
+    })
+    .map_err(|_| GatewayError::Config("对比结果格式非法".into()))?;
+    let items_summary = snapshot_items_summary(&compare.items);
+    Ok(CompareDetailResponse {
+        id: compare.id.clone(),
+        source_request_id: compare.source_request_id,
+        created_at: compare.created_at.clone(),
+        items: compare.items.clone(),
+        compare_run_id: compare.id.clone(),
+        source_requested_model: source.requested_model.clone(),
+        source_effective_model: source.effective_model.clone(),
+        models: compare
+            .items
+            .iter()
+            .map(|item| item.model.clone())
+            .collect(),
+        items_summary,
+        compare,
+        source,
+        snapshot_json,
+    })
+}
+
 async fn load_compare_item_detail(
     app_state: &Arc<AppState>,
     request_id: Option<i64>,
@@ -693,35 +946,29 @@ async fn compare_item_response_from_execution(
                 fallback_triggered,
                 fallback_reason,
                 error_message: None,
+                error: None,
                 upstream_status,
                 selected_provider,
                 selected_key_id,
                 first_token_latency_ms,
             }
         }
-        Err(err) => CompareItemResponse {
-            request_id: executed.logged.log_id,
-            model: requested_model.clone(),
+        Err(err) => failed_compare_item(
+            executed.logged.log_id,
+            requested_model.clone(),
             requested_model,
-            effective_model: Some(executed.effective_model.clone()),
-            provider: Some(executed.provider_name.clone()),
-            output_summary: None,
-            response: None,
-            response_time_ms: executed.logged.response_time_ms,
-            input_tokens: None,
-            output_tokens: None,
-            total_tokens: None,
-            cost: executed.logged.amount_spent,
-            status: "failed".to_string(),
-            status_code: err.status_code().as_u16(),
+            Some(executed.effective_model.clone()),
+            Some(executed.provider_name.clone()),
+            executed.logged.response_time_ms,
+            executed.logged.amount_spent,
             fallback_triggered,
             fallback_reason,
-            error_message: Some(err.to_string()),
             upstream_status,
             selected_provider,
             selected_key_id,
             first_token_latency_ms,
-        },
+            err,
+        ),
     })
 }
 
@@ -1292,7 +1539,7 @@ pub async fn create_compare(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payload): Json<CompareRequest>,
-) -> Result<Json<CompareResponse>, GatewayError> {
+) -> Result<Json<CompareDetailResponse>, GatewayError> {
     let claims = require_user(&headers)?;
     if payload.models.len() < 2 || payload.models.len() > 3 {
         return Err(GatewayError::Config(
@@ -1328,29 +1575,22 @@ pub async fn create_compare(
                     let snapshot_json = match build_request_payload_snapshot(&request, top_k) {
                         Ok(value) => value,
                         Err(err) => {
-                            return Ok(CompareItemResponse {
-                                request_id: None,
-                                model: requested_model.clone(),
+                            return Ok(failed_compare_item(
+                                None,
+                                requested_model.clone(),
                                 requested_model,
-                                effective_model: None,
-                                provider: None,
-                                output_summary: None,
-                                response: None,
-                                response_time_ms: 0,
-                                input_tokens: None,
-                                output_tokens: None,
-                                total_tokens: None,
-                                cost: None,
-                                status: "failed".to_string(),
-                                status_code: err.status_code().as_u16(),
-                                fallback_triggered: false,
-                                fallback_reason: None,
-                                error_message: Some(err.to_string()),
-                                upstream_status: None,
-                                selected_provider: None,
-                                selected_key_id: None,
-                                first_token_latency_ms: None,
-                            });
+                                None,
+                                None,
+                                0,
+                                None,
+                                false,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                &err,
+                            ));
                         }
                     };
                     let executed = execute_logged_chat_request(
@@ -1373,55 +1613,41 @@ pub async fn create_compare(
                             )
                             .await?
                         }
-                        Err(err) => CompareItemResponse {
-                            request_id: None,
-                            model: requested_model.clone(),
+                        Err(err) => failed_compare_item(
+                            None,
+                            requested_model.clone(),
                             requested_model,
-                            effective_model: None,
-                            provider: None,
-                            output_summary: None,
-                            response: None,
-                            response_time_ms: 0,
-                            input_tokens: None,
-                            output_tokens: None,
-                            total_tokens: None,
-                            cost: None,
-                            status: "failed".to_string(),
-                            status_code: err.status_code().as_u16(),
-                            fallback_triggered: false,
-                            fallback_reason: None,
-                            error_message: Some(err.to_string()),
-                            upstream_status: None,
-                            selected_provider: None,
-                            selected_key_id: None,
-                            first_token_latency_ms: None,
-                        },
+                            None,
+                            None,
+                            0,
+                            None,
+                            false,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            &err,
+                        ),
                     };
                     Ok::<CompareItemResponse, GatewayError>(item)
                 }
-                Err(err) => Ok(CompareItemResponse {
-                    request_id: None,
-                    model: model.clone(),
-                    requested_model: model,
-                    effective_model: None,
-                    provider: None,
-                    output_summary: None,
-                    response: None,
-                    response_time_ms: 0,
-                    input_tokens: None,
-                    output_tokens: None,
-                    total_tokens: None,
-                    cost: None,
-                    status: "failed".to_string(),
-                    status_code: err.status_code().as_u16(),
-                    fallback_triggered: false,
-                    fallback_reason: None,
-                    error_message: Some(err.to_string()),
-                    upstream_status: None,
-                    selected_provider: None,
-                    selected_key_id: None,
-                    first_token_latency_ms: None,
-                }),
+                Err(err) => Ok(failed_compare_item(
+                    None,
+                    model.clone(),
+                    model,
+                    None,
+                    None,
+                    0,
+                    None,
+                    false,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    &err,
+                )),
             }
         }
     });
@@ -1446,14 +1672,18 @@ pub async fn create_compare(
         })
         .await
         .map_err(GatewayError::Db)?;
-    Ok(Json(response))
+    Ok(Json(compare_detail_response(
+        response,
+        &log,
+        Some(&detail),
+    )?))
 }
 
 pub async fn get_compare(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(compare_id): Path<String>,
-) -> Result<Json<CompareResponse>, GatewayError> {
+) -> Result<Json<CompareDetailResponse>, GatewayError> {
     let claims = require_user(&headers)?;
     let run = app_state
         .log_store
@@ -1466,15 +1696,38 @@ pub async fn get_compare(
     }
     let response: CompareResponse = serde_json::from_str(&run.result_json)
         .map_err(|_| GatewayError::Config("对比记录已损坏".into()))?;
-    Ok(Json(response))
+    let (log, detail) = if run.user_id == claims.sub {
+        let (log, detail, _) =
+            load_request_log_for_user(&app_state, &claims, run.source_request_id).await?;
+        (log, detail)
+    } else {
+        let log = app_state
+            .log_store
+            .get_request_log_by_id(run.source_request_id)
+            .await
+            .map_err(GatewayError::Db)?
+            .ok_or_else(|| GatewayError::NotFound("来源请求不存在".into()))?;
+        let detail = app_state
+            .log_store
+            .get_request_log_detail(run.source_request_id)
+            .await
+            .map_err(GatewayError::Db)?;
+        (log, detail)
+    };
+    Ok(Json(compare_detail_response(
+        response,
+        &log,
+        detail.as_ref(),
+    )?))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         ReplayOverrideInput, ReplayableRequestSnapshot, UpdateRequestLabSnapshotNoteRequest,
-        detail_response, request_from_snapshot, request_lab_snapshot_detail_response,
-        snapshot_matches_keyword, update_request_lab_snapshot_note,
+        compare_detail_response, compare_item_error_info, detail_response, request_from_snapshot,
+        request_lab_snapshot_detail_response, snapshot_matches_keyword,
+        update_request_lab_snapshot_note,
     };
     use crate::config::settings::{BalanceStrategy, LoadBalancing, LoggingConfig, ServerConfig};
     use crate::error::GatewayError;
@@ -1758,6 +2011,129 @@ mod tests {
         assert_eq!(response.response_preview.as_deref(), Some("preview text"));
         assert!(response.request_payload_snapshot.is_none());
         assert_eq!(response.selected_provider.as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn compare_detail_response_exposes_source_preview_and_snapshot_json() {
+        let now = Utc::now();
+        let log = RequestLog {
+            id: Some(77),
+            timestamp: now,
+            method: "POST".into(),
+            path: "/v1/chat/completions".into(),
+            request_type: "chat_once".into(),
+            requested_model: Some("openai/gpt-4o-mini".into()),
+            effective_model: Some("gpt-4o-mini".into()),
+            model: Some("gpt-4o-mini".into()),
+            provider: Some("openai".into()),
+            api_key: None,
+            client_token: Some("tok_1".into()),
+            user_id: Some("u1".into()),
+            amount_spent: Some(0.02),
+            status_code: 200,
+            response_time_ms: 120,
+            prompt_tokens: Some(10),
+            completion_tokens: Some(20),
+            total_tokens: Some(30),
+            cached_tokens: None,
+            reasoning_tokens: None,
+            error_message: None,
+        };
+        let detail = RequestLogDetailRecord {
+            request_log_id: 77,
+            request_payload_snapshot: Some(
+                json!({
+                    "kind": "chat_completions",
+                    "request": {
+                        "model": "openai/gpt-4o-mini",
+                        "messages": [{"role": "user", "content": "hello"}]
+                    },
+                    "top_k": 2
+                })
+                .to_string(),
+            ),
+            response_preview: Some("source preview".into()),
+            upstream_status: Some(200),
+            fallback_triggered: Some(false),
+            fallback_reason: None,
+            selected_provider: Some("openai".into()),
+            selected_key_id: Some("sk-****".into()),
+            first_token_latency_ms: Some(45),
+        };
+        let compare = super::CompareResponse {
+            id: "cmp_live".into(),
+            source_request_id: 77,
+            created_at: now.to_rfc3339(),
+            items: vec![super::CompareItemResponse {
+                request_id: Some(99),
+                model: "openai/gpt-5.4".into(),
+                requested_model: "openai/gpt-5.4".into(),
+                effective_model: Some("gpt-5.4".into()),
+                provider: Some("openai".into()),
+                output_summary: Some("hello".into()),
+                response: Some(json!({"choices": []})),
+                response_time_ms: 321,
+                input_tokens: Some(11),
+                output_tokens: Some(22),
+                total_tokens: Some(33),
+                cost: Some(0.1),
+                status: "success".into(),
+                status_code: 200,
+                fallback_triggered: false,
+                fallback_reason: None,
+                error_message: None,
+                error: None,
+                upstream_status: Some(200),
+                selected_provider: Some("openai".into()),
+                selected_key_id: Some("sk-****".into()),
+                first_token_latency_ms: Some(21),
+            }],
+        };
+
+        let response = compare_detail_response(compare, &log, Some(&detail)).unwrap();
+
+        assert_eq!(response.id, "cmp_live");
+        assert_eq!(response.compare_run_id, "cmp_live");
+        assert_eq!(response.models, vec!["openai/gpt-5.4"]);
+        assert_eq!(response.items.len(), 1);
+        assert_eq!(response.items_summary.total_count, 1);
+        assert_eq!(
+            response.source.response_preview.as_deref(),
+            Some("source preview")
+        );
+        assert_eq!(
+            response.snapshot_json["source"]["response_preview"],
+            json!("source preview")
+        );
+        assert_eq!(
+            response.snapshot_json["compare"]["items"][0]["model"],
+            json!("openai/gpt-5.4")
+        );
+    }
+
+    #[test]
+    fn compare_item_error_info_localizes_balance_errors() {
+        let error = compare_item_error_info(&GatewayError::Config(
+            "Config error: Insufficient account balance".into(),
+        ));
+
+        assert_eq!(error.code, "insufficient_balance");
+        assert_eq!(
+            error.i18n_key,
+            "request_lab.compare.error.insufficient_balance"
+        );
+        assert_eq!(
+            error.message,
+            "余额不足，请充值后重试。若当前令牌已被停用，请在充值或订阅后手动启用。"
+        );
+        assert_eq!(
+            error.localized_message.en,
+            "Insufficient balance. Please top up and try again. If the token was disabled, re-enable it after topping up or renewing your subscription."
+        );
+        assert_eq!(
+            error.detail.as_deref(),
+            Some("Insufficient account balance")
+        );
     }
 
     #[tokio::test]

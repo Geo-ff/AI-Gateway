@@ -533,6 +533,8 @@ components:
         error_message:
           type: string
           nullable: true
+        error:
+          $ref: '#/components/schemas/CompareItemErrorInfo'
         upstream_status:
           type: integer
           format: int64
@@ -563,6 +565,65 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CompareItemResponse'
+
+    LocalizedMessage:
+      type: object
+      properties:
+        zh_cn:
+          type: string
+        en:
+          type: string
+
+    CompareItemErrorInfo:
+      type: object
+      properties:
+        code:
+          type: string
+        i18n_key:
+          type: string
+        message:
+          type: string
+        localized_message:
+          $ref: '#/components/schemas/LocalizedMessage'
+        detail:
+          type: string
+          nullable: true
+
+    CompareDetailResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        source_request_id:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompareItemResponse'
+        compare_run_id:
+          type: string
+        source_requested_model:
+          type: string
+          nullable: true
+        source_effective_model:
+          type: string
+          nullable: true
+        models:
+          type: array
+          items:
+            type: string
+        items_summary:
+          $ref: '#/components/schemas/RequestLabSnapshotItemsSummary'
+        compare:
+          $ref: '#/components/schemas/CompareResponse'
+        source:
+          $ref: '#/components/schemas/RequestLabSnapshotSourcePayload'
+        snapshot_json:
+          $ref: '#/components/schemas/RequestLabSnapshotPayload'
 
     CreateRequestLabSnapshotRequest:
       type: object
@@ -3417,7 +3478,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CompareResponse'
+                $ref: '#/components/schemas/CompareDetailResponse'
         '400':
           description: 快照缺失、模型不可用、参数非法
           content:
@@ -3451,7 +3512,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CompareResponse'
+                $ref: '#/components/schemas/CompareDetailResponse'
         '401':
           description: 未登录/Token 无效/过期
           content:
