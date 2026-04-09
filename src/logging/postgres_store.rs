@@ -354,6 +354,18 @@ impl PgLogStore {
                         SELECT 1
                         FROM information_schema.columns
                         WHERE table_schema = current_schema()
+                          AND table_name = 'provider_ops_logs'
+                          AND column_name = 'id'
+                          AND data_type = 'integer'
+                    ) THEN
+                        ALTER TABLE provider_ops_logs
+                            ALTER COLUMN id TYPE BIGINT USING id::BIGINT;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = current_schema()
                           AND table_name = 'compare_runs'
                           AND column_name = 'source_request_id'
                           AND data_type = 'integer'
@@ -473,7 +485,7 @@ impl PgLogStore {
         client
             .execute(
                 r#"CREATE TABLE IF NOT EXISTS provider_ops_logs (
-                id SERIAL PRIMARY KEY,
+                id BIGSERIAL PRIMARY KEY,
                 timestamp TEXT NOT NULL,
                 operation TEXT NOT NULL,
                 provider TEXT,
@@ -977,11 +989,10 @@ impl RequestLogStore for PgLogStore {
             let client = self.pool.pick();
             let lim: i64 = limit as i64;
             let rows = if let Some(cursor_id) = cursor {
-                let cursor_i32 = cursor_id as i32;
                 client
                     .query(
                         "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent FROM request_logs WHERE id < $1 ORDER BY id DESC LIMIT $2",
-                        &[&cursor_i32, &lim],
+                        &[&cursor_id, &lim],
                     )
                     .await
                     .map_err(pg_err)?
@@ -1007,11 +1018,10 @@ impl RequestLogStore for PgLogStore {
             let client = self.pool.pick();
             let lim: i64 = limit as i64;
             let rows = if let Some(cursor_id) = cursor {
-                let cursor_i32 = cursor_id as i32;
                 client
                     .query(
                         "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent FROM request_logs WHERE id < $1 ORDER BY id DESC LIMIT $2",
-                        &[&cursor_i32, &lim],
+                        &[&cursor_id, &lim],
                     )
                     .await
                     .map_err(pg_err)?
@@ -1039,11 +1049,10 @@ impl RequestLogStore for PgLogStore {
             let client = self.pool.pick();
             let lim: i64 = limit as i64;
             let rows = if let Some(cursor_id) = cursor {
-                let cursor_i32 = cursor_id as i32;
                 client
                     .query(
                         "SELECT id, timestamp, method, path, request_type, requested_model, effective_model, model, provider, api_key, status_code, response_time_ms, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, error_message, client_token, user_id, amount_spent FROM request_logs WHERE method = $1 AND path = $2 AND id < $3 ORDER BY id DESC LIMIT $4",
-                        &[&method, &path, &cursor_i32, &lim],
+                        &[&method, &path, &cursor_id, &lim],
                     )
                     .await
                     .map_err(pg_err)?
@@ -1670,11 +1679,10 @@ impl RequestLogStore for PgLogStore {
             let client = self.pool.pick();
             let lim: i64 = limit as i64;
             let rows = if let Some(cursor_id) = cursor {
-                let cursor_i32 = cursor_id as i32;
                 client
                     .query(
                         "SELECT id, timestamp, operation, provider, details FROM provider_ops_logs WHERE id < $1 ORDER BY id DESC LIMIT $2",
-                        &[&cursor_i32, &lim],
+                        &[&cursor_id, &lim],
                     )
                     .await
                     .map_err(pg_err)?
@@ -3213,7 +3221,7 @@ fn provider_type_to_str(t: &ProviderType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::PgLogStore;
-    use crate::logging::types::StoredRequestLabSnapshot;
+    use crate::logging::types::{ProviderOpLog, StoredRequestLabSnapshot};
     use crate::logging::{ModelPriceSource, ModelPriceStatus, ModelPriceUpsert};
     use crate::server::storage_traits::RequestLogStore;
     use chrono::{Duration, Timelike, Utc};
@@ -3341,6 +3349,140 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(stored.note.as_deref(), Some("更新后的备注"));
+
+        client
+            .execute(&format!("DROP SCHEMA {} CASCADE", schema), &[])
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn postgres_log_cursor_queries_accept_i64_ids() {
+        let Ok(pg_url) = std::env::var("GATEWAY_TEST_PG_URL") else {
+            return;
+        };
+
+        let schema = format!("gateway_test_{}", Uuid::new_v4().simple());
+        let (client, connection) = tokio_postgres::connect(&pg_url, NoTls).await.unwrap();
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        client
+            .execute(&format!("CREATE SCHEMA {}", schema), &[])
+            .await
+            .unwrap();
+
+        let store = PgLogStore::connect(&pg_url, &Some(schema.clone()), 1)
+            .await
+            .unwrap();
+        let now = Utc::now().with_nanosecond(0).unwrap();
+
+        let first_id = RequestLogStore::log_request(
+            &store,
+            crate::logging::types::RequestLog {
+                id: None,
+                timestamp: now,
+                method: "POST".into(),
+                path: "/v1/chat/completions".into(),
+                request_type: "chat_once".into(),
+                requested_model: Some("openai/gpt-5.4".into()),
+                effective_model: Some("gpt-5.4".into()),
+                model: Some("gpt-5.4".into()),
+                provider: Some("openai".into()),
+                api_key: None,
+                client_token: Some("atk_test".into()),
+                user_id: Some("u_test".into()),
+                amount_spent: Some(0.1),
+                status_code: 200,
+                response_time_ms: 12,
+                prompt_tokens: Some(10),
+                completion_tokens: Some(20),
+                total_tokens: Some(30),
+                cached_tokens: None,
+                reasoning_tokens: None,
+                error_message: None,
+            },
+        )
+        .await
+        .unwrap();
+        let second_id = RequestLogStore::log_request(
+            &store,
+            crate::logging::types::RequestLog {
+                id: None,
+                timestamp: now + Duration::seconds(1),
+                method: "POST".into(),
+                path: "/v1/chat/completions".into(),
+                request_type: "chat_once".into(),
+                requested_model: Some("openai/gpt-5.4".into()),
+                effective_model: Some("gpt-5.4".into()),
+                model: Some("gpt-5.4".into()),
+                provider: Some("openai".into()),
+                api_key: None,
+                client_token: Some("atk_test".into()),
+                user_id: Some("u_test".into()),
+                amount_spent: Some(0.2),
+                status_code: 200,
+                response_time_ms: 15,
+                prompt_tokens: Some(11),
+                completion_tokens: Some(21),
+                total_tokens: Some(32),
+                cached_tokens: None,
+                reasoning_tokens: None,
+                error_message: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(second_id > first_id);
+
+        let logs = RequestLogStore::get_recent_logs_with_cursor(&store, 10, Some(second_id))
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].id, Some(first_id));
+
+        let path_logs = RequestLogStore::get_logs_by_method_path(
+            &store,
+            "POST",
+            "/v1/chat/completions",
+            10,
+            Some(second_id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(path_logs.len(), 1);
+        assert_eq!(path_logs[0].id, Some(first_id));
+
+        RequestLogStore::log_provider_op(
+            &store,
+            ProviderOpLog {
+                id: None,
+                timestamp: now,
+                operation: "provider_create".into(),
+                provider: Some("openai".into()),
+                details: Some("first".into()),
+            },
+        )
+        .await
+        .unwrap();
+        let second_op_id = RequestLogStore::log_provider_op(
+            &store,
+            ProviderOpLog {
+                id: None,
+                timestamp: now + Duration::seconds(1),
+                operation: "provider_update".into(),
+                provider: Some("openai".into()),
+                details: Some("second".into()),
+            },
+        )
+        .await
+        .unwrap();
+
+        let op_logs = RequestLogStore::get_provider_ops_logs(&store, 10, Some(second_op_id))
+            .await
+            .unwrap();
+        assert_eq!(op_logs.len(), 1);
+        assert_eq!(op_logs[0].details.as_deref(), Some("first"));
 
         client
             .execute(&format!("DROP SCHEMA {} CASCADE", schema), &[])
