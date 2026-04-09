@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::auth::require_superadmin;
+use super::provider_models_list::invalidate_cache_for_provider;
 use crate::error::GatewayError;
 use crate::logging::types::{
     ProviderOpLog, REQ_TYPE_PROVIDER_KEY_ADD, REQ_TYPE_PROVIDER_KEY_CONFIG_GET,
@@ -137,6 +138,7 @@ pub async fn add_provider_key(
         )
         .await
         .map_err(GatewayError::Db)?;
+    invalidate_cache_for_provider(&provider_name).await;
 
     let start_time = Utc::now();
     // provider ops audit log with masked/plain/none display
@@ -253,6 +255,7 @@ pub async fn toggle_provider_key(
         .await;
 
     if updated {
+        invalidate_cache_for_provider(&provider_name).await;
         log_simple_request(
             &app_state,
             start_time,
@@ -380,6 +383,10 @@ pub async fn add_provider_keys_batch(
         }
     }
 
+    if success > 0 {
+        invalidate_cache_for_provider(&provider_name).await;
+    }
+
     let detail = serde_json::json!({
         "added": success,
         "failed": failed,
@@ -497,6 +504,7 @@ pub async fn delete_provider_key(
         })
         .await;
     if deleted {
+        invalidate_cache_for_provider(&provider_name).await;
         log_simple_request(
             &app_state,
             start_time,
@@ -645,6 +653,10 @@ pub async fn delete_provider_keys_batch(
             details: Some(detail),
         })
         .await;
+
+    if removed > 0 {
+        invalidate_cache_for_provider(&provider_name).await;
+    }
 
     log_simple_request(
         &app_state,

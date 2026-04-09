@@ -772,6 +772,12 @@ impl DatabaseLogger {
             )",
             [],
         )?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS organizations (
+                name TEXT PRIMARY KEY
+            )",
+            [],
+        )?;
 
         // Best-effort migrations for provider keys/config
         let _ = conn.execute(
@@ -819,6 +825,17 @@ impl DatabaseLogger {
             [],
         );
         let _ = conn.execute("DELETE FROM provider_collections WHERE name = '-'", []);
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO organizations (name) VALUES ('default')",
+            [],
+        );
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO organizations (name)
+             SELECT DISTINCT TRIM(organization_id) FROM client_tokens
+             WHERE organization_id IS NOT NULL AND TRIM(organization_id) != ''",
+            [],
+        );
+        let _ = conn.execute("DELETE FROM organizations WHERE name = ''", []);
 
         // Provider-scoped model redirects: (source_model -> target_model)
         conn.execute(

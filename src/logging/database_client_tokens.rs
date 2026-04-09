@@ -52,6 +52,12 @@ impl TokenStore for DatabaseLogger {
         let ip_whitelist_s = encode_json_string_list("ip_whitelist", &payload.ip_whitelist)?;
         let ip_blacklist_s = encode_json_string_list("ip_blacklist", &payload.ip_blacklist)?;
         let conn = self.connection.lock().await;
+        if let Some(organization_id) = payload.organization_id.as_deref() {
+            conn.execute(
+                "INSERT OR IGNORE INTO organizations (name) VALUES (?1)",
+                [organization_id],
+            )?;
+        }
         conn.execute(
             "INSERT INTO client_tokens (id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist, model_blacklist) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, 0, 0, 0, ?11, ?12, ?13, ?14, ?15)",
             (
@@ -231,6 +237,12 @@ impl TokenStore for DatabaseLogger {
 
         let ip_whitelist_s = encode_json_string_list("ip_whitelist", &ip_whitelist)?;
         let ip_blacklist_s = encode_json_string_list("ip_blacklist", &ip_blacklist)?;
+        if let Some(organization_id) = organization_id.as_deref() {
+            conn.execute(
+                "INSERT OR IGNORE INTO organizations (name) VALUES (?1)",
+                [organization_id],
+            )?;
+        }
         conn.execute(
             "UPDATE client_tokens SET name = ?2, allowed_models = ?3, max_tokens = ?4, enabled = ?5, expires_at = ?6, max_amount = ?7, remark = ?8, organization_id = ?9, ip_whitelist = ?10, ip_blacklist = ?11, model_blacklist = ?12 WHERE token = ?1",
             (
@@ -1006,5 +1018,41 @@ mod tests {
         let fetched = db.get_token("legacy-token").await.unwrap().unwrap();
         assert!(fetched.user_id.is_some());
         assert!(fetched.max_amount.is_none());
+    }
+
+    #[tokio::test]
+    async fn sqlite_create_token_persists_custom_organization_registry() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = DatabaseLogger::new(db_path.to_str().unwrap()).await.unwrap();
+
+        let created = db
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: None,
+                name: Some("org-token".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: Some("team-alpha".into()),
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(created.organization_id.as_deref(), Some("team-alpha"));
+
+        let organizations = db.list_organizations().await.unwrap();
+        assert!(organizations.iter().any(|id| id == "default"));
+        assert!(organizations.iter().any(|id| id == "team-alpha"));
+
+        let reopened = DatabaseLogger::new(db_path.to_str().unwrap()).await.unwrap();
+        let persisted = reopened.list_organizations().await.unwrap();
+        assert!(persisted.iter().any(|id| id == "team-alpha"));
     }
 }

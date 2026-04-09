@@ -612,6 +612,29 @@ async fn ensure_client_tokens_table_pg(
             &[],
         )
         .await;
+    let _ = client
+        .execute(
+            r#"CREATE TABLE IF NOT EXISTS organizations (
+                name TEXT PRIMARY KEY
+            )"#,
+            &[],
+        )
+        .await;
+    let _ = client
+        .execute(
+            "INSERT INTO organizations (name) VALUES ('default') ON CONFLICT (name) DO NOTHING",
+            &[],
+        )
+        .await;
+    let _ = client
+        .execute(
+            "INSERT INTO organizations (name)
+             SELECT DISTINCT BTRIM(organization_id) FROM client_tokens
+             WHERE organization_id IS NOT NULL AND BTRIM(organization_id) <> ''
+             ON CONFLICT (name) DO NOTHING",
+            &[],
+        )
+        .await;
 
     Ok(())
 }
@@ -642,6 +665,15 @@ impl TokenStore for PgTokenStore {
         let expires_s = expires_at.as_ref().map(to_beijing_string);
         let ip_whitelist_s = encode_json_string_list("ip_whitelist", &payload.ip_whitelist)?;
         let ip_blacklist_s = encode_json_string_list("ip_blacklist", &payload.ip_blacklist)?;
+        if let Some(organization_id) = payload.organization_id.as_deref() {
+            self.client
+                .execute(
+                    "INSERT INTO organizations (name) VALUES ($1) ON CONFLICT (name) DO NOTHING",
+                    &[&organization_id],
+                )
+                .await
+                .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
+        }
         self.client
             .execute(
                 "INSERT INTO client_tokens (id, user_id, name, token, allowed_models, max_tokens, enabled, expires_at, created_at, max_amount, amount_spent, prompt_tokens_spent, completion_tokens_spent, total_tokens_spent, remark, organization_id, ip_whitelist, ip_blacklist, model_blacklist) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, 0, 0, 0, $11, $12, $13, $14, $15)",
@@ -728,6 +760,15 @@ impl TokenStore for PgTokenStore {
 
         let ip_whitelist_s = encode_json_string_list("ip_whitelist", &current.ip_whitelist)?;
         let ip_blacklist_s = encode_json_string_list("ip_blacklist", &current.ip_blacklist)?;
+        if let Some(organization_id) = current.organization_id.as_deref() {
+            self.client
+                .execute(
+                    "INSERT INTO organizations (name) VALUES ($1) ON CONFLICT (name) DO NOTHING",
+                    &[&organization_id],
+                )
+                .await
+                .map_err(|e| GatewayError::Config(format!("DB error: {}", e)))?;
+        }
         self.client
             .execute(
                 "UPDATE client_tokens SET name = $2, allowed_models = $3, max_tokens = $4, enabled = $5, expires_at = $6, max_amount = $7, remark = $8, organization_id = $9, ip_whitelist = $10, ip_blacklist = $11, model_blacklist = $12 WHERE token = $1",

@@ -331,6 +331,14 @@ pub trait ProviderStore: Send + Sync {
     ) -> BoxFuture<'a, rusqlite::Result<bool>>;
 }
 
+pub trait OrganizationStore: Send + Sync {
+    fn list_organizations<'a>(&'a self) -> BoxFuture<'a, rusqlite::Result<Vec<String>>>;
+    fn create_organization<'a>(
+        &'a self,
+        organization_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<()>>;
+}
+
 #[derive(Debug, Clone)]
 pub struct AdminPublicKeyRecord {
     pub fingerprint: String,
@@ -884,5 +892,18 @@ impl ProviderStore for DatabaseLogger {
         source_model: &'a str,
     ) -> BoxFuture<'a, rusqlite::Result<bool>> {
         Box::pin(async move { self.delete_model_redirect(provider, source_model).await })
+    }
+}
+
+impl OrganizationStore for DatabaseLogger {
+    fn list_organizations<'a>(&'a self) -> BoxFuture<'a, rusqlite::Result<Vec<String>>> {
+        Box::pin(async move { self.list_organizations().await })
+    }
+
+    fn create_organization<'a>(
+        &'a self,
+        organization_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move { self.create_organization(organization_id).await })
     }
 }

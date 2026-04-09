@@ -868,6 +868,7 @@ mod tests {
             providers: logger.clone(),
             token_store: logger.clone(),
             favorites_store: logger.clone(),
+            organizations: logger.clone(),
             login_manager: Arc::new(LoginManager::new(logger.clone())),
             user_store: logger.clone(),
             refresh_token_store,
@@ -936,6 +937,8 @@ mod tests {
             Some(vec!["1.1.1.1".to_string(), "2001:db8::/32".to_string()])
         );
         assert_eq!(created.ip_blacklist, Some(vec!["2.2.2.2".to_string()]));
+        let organizations = h.state.organizations.list_organizations().await.unwrap();
+        assert!(organizations.iter().any(|id| id == "org-1"));
 
         let Json(fetched) = get_token(
             Path(created.id.clone()),

@@ -29,7 +29,8 @@ use crate::password_reset_tokens::PasswordResetTokenStore;
 use crate::refresh_tokens::RefreshTokenStore;
 use crate::routing::LoadBalancerState;
 use crate::server::storage_traits::{
-    AdminPublicKeyRecord, FavoritesStore, LoginStore, ModelCache, ProviderStore, RequestLogStore,
+    AdminPublicKeyRecord, FavoritesStore, LoginStore, ModelCache, OrganizationStore,
+    ProviderStore, RequestLogStore,
 };
 use crate::subscription::SubscriptionStore;
 use crate::users::UserStore;
@@ -48,6 +49,7 @@ type StoreTuple = (
     Arc<dyn ProviderStore + Send + Sync>,
     Arc<dyn TokenStore + Send + Sync>,
     Arc<dyn FavoritesStore + Send + Sync>,
+    Arc<dyn OrganizationStore + Send + Sync>,
     Arc<dyn LoginStore + Send + Sync>,
     Arc<dyn UserStore + Send + Sync>,
     Arc<dyn RefreshTokenStore + Send + Sync>,
@@ -65,6 +67,7 @@ pub struct AppState {
     pub providers: Arc<dyn ProviderStore + Send + Sync>,
     pub token_store: Arc<dyn TokenStore + Send + Sync>,
     pub favorites_store: Arc<dyn FavoritesStore + Send + Sync>,
+    pub organizations: Arc<dyn OrganizationStore + Send + Sync>,
     pub login_manager: Arc<login::LoginManager>,
     pub user_store: Arc<dyn UserStore + Send + Sync>,
     pub refresh_token_store: Arc<dyn RefreshTokenStore + Send + Sync>,
@@ -86,6 +89,7 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
         provider_store_arc,
         token_store,
         favorites_store_arc,
+        organizations_store_arc,
         login_store_arc,
         user_store_arc,
         refresh_token_store_arc,
@@ -111,10 +115,12 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
             log_cache.clone(),
             log_cache.clone(),
             log_cache.clone(),
+            log_cache.clone(),
         )
     } else {
         let db_logger = Arc::new(DatabaseLogger::new(&config.logging.database_path).await?);
         (
+            db_logger.clone(),
             db_logger.clone(),
             db_logger.clone(),
             db_logger.clone(),
@@ -156,6 +162,7 @@ pub async fn create_app(config: Settings) -> AppResult<Router> {
         providers: provider_store_arc,
         token_store,
         favorites_store: favorites_store_arc,
+        organizations: organizations_store_arc,
         login_manager: Arc::new(login::LoginManager::new(login_store_arc.clone())),
         user_store: user_store_arc,
         refresh_token_store: refresh_token_store_arc,

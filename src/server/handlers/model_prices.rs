@@ -102,6 +102,7 @@ mod tests {
             providers: Arc::new(logger.clone()),
             token_store: Arc::new(logger.clone()),
             favorites_store: Arc::new(logger.clone()),
+            organizations: Arc::new(logger.clone()),
             login_manager: Arc::new(crate::server::login::LoginManager::new(Arc::new(
                 logger.clone(),
             ))),

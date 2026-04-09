@@ -3175,4 +3175,14 @@ mod tests {
         assert!(runtime_streaming_unsupported_message(ProviderType::OpenAI).is_none());
         assert!(runtime_streaming_unsupported_message(ProviderType::Yi).is_none());
     }
+
+    #[test]
+    fn invalid_key_error_is_mapped_to_visible_authentication_failure() {
+        let err = build_models_list_error(
+            StatusCode::UNAUTHORIZED,
+            br#"{"error":{"message":"invalid api key"}}"#,
+        );
+        assert!(matches!(err, GatewayError::Unauthorized(_)));
+        assert!(err.to_string().contains("检查 Key"));
+    }
 }

@@ -19,8 +19,8 @@ use crate::providers::openai::Model;
 use crate::routing::{KeyRotationStrategy, ProviderKeyEntry};
 use crate::server::storage_traits::{
     AdminPublicKeyRecord, BoxFuture, FavoriteKind, FavoritesStore, LoginCodeRecord, LoginStore,
-    ModelCache, ProviderKeyEntryWithCreatedAt, ProviderStore, RequestLogStore, TuiSessionRecord,
-    WebSessionRecord,
+    ModelCache, OrganizationStore, ProviderKeyEntryWithCreatedAt, ProviderStore, RequestLogStore,
+    TuiSessionRecord, WebSessionRecord,
 };
 
 fn pg_err<E: std::fmt::Display>(e: E) -> rusqlite::Error {
@@ -669,6 +669,33 @@ impl PgLogStore {
             .await;
         let _ = client
             .execute("DELETE FROM provider_collections WHERE name = '-'", &[])
+            .await;
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS organizations (
+                name TEXT PRIMARY KEY
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| GatewayError::Config(format!("Failed to init organizations: {}", e)))?;
+        let _ = client
+            .execute(
+                "INSERT INTO organizations (name) VALUES ('default') ON CONFLICT (name) DO NOTHING",
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute(
+                "INSERT INTO organizations (name)
+                 SELECT DISTINCT BTRIM(organization_id) FROM client_tokens
+                 WHERE organization_id IS NOT NULL AND BTRIM(organization_id) <> ''
+                 ON CONFLICT (name) DO NOTHING",
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute("DELETE FROM organizations WHERE name = ''", &[])
             .await;
         client
             .execute(
@@ -2787,6 +2814,47 @@ impl ProviderStore for PgLogStore {
                 .await
                 .map_err(pg_err)?;
             Ok(affected > 0)
+        })
+    }
+}
+
+impl OrganizationStore for PgLogStore {
+    fn list_organizations<'a>(&'a self) -> BoxFuture<'a, rusqlite::Result<Vec<String>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let rows = client
+                .query(
+                    "SELECT name FROM organizations ORDER BY CASE WHEN name = $1 THEN 0 ELSE 1 END, name",
+                    &[&"default"],
+                )
+                .await
+                .map_err(pg_err)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(pg_row_string(&row, 0));
+            }
+            Ok(out)
+        })
+    }
+
+    fn create_organization<'a>(
+        &'a self,
+        organization_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let trimmed = organization_id.trim();
+            if trimmed.is_empty() {
+                return Ok(());
+            }
+            let client = self.pool.pick();
+            client
+                .execute(
+                    "INSERT INTO organizations (name) VALUES ($1) ON CONFLICT (name) DO NOTHING",
+                    &[&trimmed],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(())
         })
     }
 }

@@ -30,6 +30,7 @@ mod me_tokens;
 mod model_prices;
 mod model_redirects;
 mod models;
+mod organizations;
 mod provider_keys;
 mod provider_model_test;
 mod provider_models_list;
@@ -173,6 +174,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/admin/tokens/{id}/favorite",
             post(client_tokens::set_token_favorite),
+        )
+        .route(
+            "/admin/organizations",
+            get(organizations::list_organizations).post(organizations::create_organization),
         )
         .route(
             "/admin/users",
