@@ -99,6 +99,10 @@ components:
           format: double
           nullable: true
           description: 本次请求消耗的金额
+        amount_spent_currency:
+          type: string
+          nullable: true
+          description: 本次请求消耗金额的原始币种（如 USD / CNY）
         status_code:
           type: integer
           description: HTTP 状态码
@@ -178,6 +182,10 @@ components:
           type: number
           format: double
           nullable: true
+        amount_spent_currency:
+          type: string
+          nullable: true
+          description: 本次请求消耗金额的原始币种（如 USD / CNY）
         status_code:
           type: integer
         response_time_ms:
@@ -253,6 +261,10 @@ components:
           type: number
           format: double
           nullable: true
+        amount_spent_currency:
+          type: string
+          nullable: true
+          description: 本次请求消耗金额的原始币种（如 USD / CNY）
         status_code:
           type: integer
           format: int32
@@ -3011,6 +3023,24 @@ paths:
                     output_price:
                       type: number
                       format: double
+                      nullable: true
+                    currency:
+                      type: string
+                      nullable: true
+                    price_source:
+                      type: string
+                      nullable: true
+                      enum: [manual, auto]
+                    price_status:
+                      type: string
+                      enum: [active, missing, stale]
+                    price_synced_at:
+                      type: string
+                      format: date-time
+                      nullable: true
+                    price_expires_at:
+                      type: string
+                      format: date-time
                       nullable: true
                     redirect_name:
                       type: string

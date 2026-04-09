@@ -19,6 +19,7 @@ use crate::server::request_logging::log_simple_request;
 const MAX_LOG_LIMIT: usize = 1000;
 const DEFAULT_LOG_LIMIT: usize = 200;
 const CLIENT_TOKEN_ID_PREFIX: &str = "atk_";
+const RECHARGE_AMOUNT_CURRENCY: &str = "CNY";
 
 #[derive(Debug, Deserialize, Default)]
 pub struct OpsQuery {
@@ -74,6 +75,7 @@ pub struct RequestLogEntry {
     pub client_token_name: Option<String>,
     pub username: Option<String>,
     pub amount_spent: Option<f64>,
+    pub amount_spent_currency: Option<String>,
     pub status_code: u16,
     pub response_time_ms: i64,
     pub prompt_tokens: Option<u32>,
@@ -158,6 +160,49 @@ fn normalize_client_token(raw: Option<&str>) -> Option<NormalizedClientToken> {
     Some(NormalizedClientToken::TokenId(
         crate::admin::client_token_id_for_token(raw),
     ))
+}
+
+fn normalize_logged_price_currency(currency: Option<&str>) -> String {
+    match currency
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("USD")
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "RMB" | "CNH" => "CNY".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn resolve_amount_spent_currency(
+    request_type: &str,
+    provider: Option<&str>,
+    billing_model: Option<&str>,
+    effective_model: Option<&str>,
+    requested_model: Option<&str>,
+    price_currency_by_key: &std::collections::HashMap<String, Option<String>>,
+) -> Option<String> {
+    if request_type == "recharge"
+        || request_type.starts_with("recharge_")
+        || request_type == "subscription_purchase"
+    {
+        return Some(RECHARGE_AMOUNT_CURRENCY.to_string());
+    }
+
+    let provider = provider.map(str::trim).filter(|value| !value.is_empty())?;
+
+    for model in [billing_model, effective_model, requested_model] {
+        let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        let key = format!("{provider}:{model}");
+        if let Some(currency) = price_currency_by_key.get(&key) {
+            return Some(normalize_logged_price_currency(currency.as_deref()));
+        }
+    }
+
+    None
 }
 
 fn filter_logs<'a>(logs: &'a [RequestLog], query: &LogsQuery) -> Vec<&'a RequestLog> {
@@ -316,6 +361,20 @@ pub async fn list_request_logs(
             .into_iter()
             .map(|provider| (provider.name.clone(), provider))
             .collect();
+    let price_currency_by_key = app_state
+        .log_store
+        .list_model_prices(None)
+        .await
+        .map(|items| {
+            items.into_iter().fold(
+                std::collections::HashMap::<String, Option<String>>::new(),
+                |mut acc, item| {
+                    acc.insert(format!("{}:{}", item.provider, item.model), item.currency);
+                    acc
+                },
+            )
+        })
+        .unwrap_or_default();
     let mut replayable_by_id: std::collections::HashMap<i64, bool> =
         std::collections::HashMap::new();
     for log in &filtered {
@@ -366,6 +425,14 @@ pub async fn list_request_logs(
             };
             let requested_model_raw = log.requested_model.clone().or_else(|| log.model.clone());
             let effective_model_raw = log.effective_model.clone().or_else(|| log.model.clone());
+            let amount_spent_currency = resolve_amount_spent_currency(
+                &log.request_type,
+                log.provider.as_deref(),
+                log.model.as_deref(),
+                effective_model_raw.as_deref(),
+                requested_model_raw.as_deref(),
+                &price_currency_by_key,
+            );
             let requested_model_display = requested_model_raw.as_deref().map(|model| {
                 format_model_display_name(&providers_by_id, model, log.provider.as_deref())
             });
@@ -395,6 +462,7 @@ pub async fn list_request_logs(
                 client_token_name,
                 username,
                 amount_spent: log.amount_spent,
+                amount_spent_currency,
                 status_code: log.status_code,
                 response_time_ms: log.response_time_ms,
                 prompt_tokens: log.prompt_tokens,
@@ -492,6 +560,20 @@ pub async fn list_chat_completion_logs(
             .into_iter()
             .map(|provider| (provider.name.clone(), provider))
             .collect();
+    let price_currency_by_key = app_state
+        .log_store
+        .list_model_prices(None)
+        .await
+        .map(|items| {
+            items.into_iter().fold(
+                std::collections::HashMap::<String, Option<String>>::new(),
+                |mut acc, item| {
+                    acc.insert(format!("{}:{}", item.provider, item.model), item.currency);
+                    acc
+                },
+            )
+        })
+        .unwrap_or_default();
     let data: Vec<RequestLogEntry> = raw_logs
         .iter()
         .map(|log| {
@@ -514,6 +596,14 @@ pub async fn list_chat_completion_logs(
             };
             let requested_model_raw = log.requested_model.clone().or_else(|| log.model.clone());
             let effective_model_raw = log.effective_model.clone().or_else(|| log.model.clone());
+            let amount_spent_currency = resolve_amount_spent_currency(
+                &log.request_type,
+                log.provider.as_deref(),
+                log.model.as_deref(),
+                effective_model_raw.as_deref(),
+                requested_model_raw.as_deref(),
+                &price_currency_by_key,
+            );
             let requested_model_display = requested_model_raw.as_deref().map(|model| {
                 format_model_display_name(&providers_by_id, model, log.provider.as_deref())
             });
@@ -543,6 +633,7 @@ pub async fn list_chat_completion_logs(
                 client_token_name,
                 username,
                 amount_spent: log.amount_spent,
+                amount_spent_currency,
                 status_code: log.status_code,
                 response_time_ms: log.response_time_ms,
                 prompt_tokens: log.prompt_tokens,
