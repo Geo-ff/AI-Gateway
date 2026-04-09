@@ -64,3 +64,9 @@ docs/request-lab/08-request-lab-snapshot-detail.svg
 .gitignore
 .gitignore
 docs/request-lab/07-request-lab-snapshots-drawer.svg
+docs/request-lab/09-experiment-template-main.svg
+.gitignore
+docs/request-lab/10-experiment-template-drawer.svg
+docs/request-lab/11-experiment-template-dialogs.svg
+docs/request-lab/12-experiment-template-components.svg
+docs/request-lab/13-experiment-template-edit-flow.svg

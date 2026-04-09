@@ -14,8 +14,9 @@ use crate::admin::ClientToken;
 use crate::error::GatewayError;
 use crate::logging::RequestLog;
 use crate::logging::types::{
-    REQ_TYPE_CHAT_COMPARE, REQ_TYPE_CHAT_REPLAY, RequestLogDetailRecord, StoredCompareRun,
-    StoredRequestLabSnapshot, StoredRequestLabSource,
+    REQ_TYPE_CHAT_COMPARE, REQ_TYPE_CHAT_REPLAY, RequestLabExperimentConfig,
+    RequestLogDetailRecord, StoredCompareRun, StoredRequestLabSnapshot, StoredRequestLabSource,
+    StoredRequestLabTemplate,
 };
 use crate::providers::openai::ChatCompletionRequest;
 use crate::providers::openai::types::RawAndTypedChatCompletion;
@@ -51,7 +52,17 @@ pub struct ReplayOverrideInput {
     #[serde(default)]
     pub temperature: Option<serde_json::Value>,
     #[serde(default)]
+    pub top_p: Option<serde_json::Value>,
+    #[serde(default)]
     pub max_tokens: Option<serde_json::Value>,
+    #[serde(default)]
+    pub presence_penalty: Option<serde_json::Value>,
+    #[serde(default)]
+    pub frequency_penalty: Option<serde_json::Value>,
+    #[serde(default)]
+    pub preserve_system_prompt: Option<bool>,
+    #[serde(default)]
+    pub preserve_message_structure: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -61,7 +72,57 @@ pub struct CompareRequest {
     #[serde(default)]
     pub temperature: Option<serde_json::Value>,
     #[serde(default)]
+    pub top_p: Option<serde_json::Value>,
+    #[serde(default)]
     pub max_tokens: Option<serde_json::Value>,
+    #[serde(default)]
+    pub presence_penalty: Option<serde_json::Value>,
+    #[serde(default)]
+    pub frequency_penalty: Option<serde_json::Value>,
+    #[serde(default)]
+    pub preserve_system_prompt: Option<bool>,
+    #[serde(default)]
+    pub preserve_message_structure: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateRequestLabTemplateRequest {
+    #[serde(default)]
+    pub scope: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub source_request_id: i64,
+    pub compare_models: Vec<String>,
+    pub experiment_config: RequestLabExperimentConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateRequestLabTemplateRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub source_request_id: Option<i64>,
+    #[serde(default)]
+    pub compare_models: Option<Vec<String>>,
+    #[serde(default)]
+    pub experiment_config: Option<RequestLabExperimentConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ListRequestLabTemplatesQuery {
+    #[serde(default)]
+    pub keyword: Option<String>,
+    #[serde(default)]
+    pub tag: Option<String>,
+    #[serde(default)]
+    pub sort: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -211,6 +272,56 @@ pub struct DeleteRequestLabSnapshotResponse {
     pub deleted: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteRequestLabTemplateResponse {
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StructuredRequestContent {
+    #[serde(default)]
+    pub text: Option<String>,
+    pub raw: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StructuredRequestMessage {
+    pub role: String,
+    pub content: StructuredRequestContent,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceRequestSummary {
+    pub source_request_id: i64,
+    pub timestamp: String,
+    pub requested_model: Option<String>,
+    pub effective_model: Option<String>,
+    pub provider: Option<String>,
+    pub username: Option<String>,
+    pub client_token_name: Option<String>,
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
+    pub total_tokens: Option<u32>,
+    pub status: String,
+    pub status_code: u16,
+    pub response_time_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RequestLabTemplateResponse {
+    pub id: String,
+    pub scope: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+    pub source_request_id: i64,
+    pub compare_models: Vec<String>,
+    pub experiment_config: RequestLabExperimentConfig,
+    pub created_by: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompareItemResponse {
     pub request_id: Option<i64>,
@@ -281,6 +392,15 @@ pub struct RequestDetailResponse {
     pub selected_key_id: Option<String>,
     pub first_token_latency_ms: Option<i64>,
     pub error_message: Option<String>,
+    pub source_request_summary: SourceRequestSummary,
+    #[serde(default)]
+    pub system_prompt: Option<StructuredRequestContent>,
+    #[serde(default)]
+    pub messages: Vec<StructuredRequestMessage>,
+    pub locked_fields: Vec<String>,
+    pub template_applied: bool,
+    #[serde(default)]
+    pub template_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -328,6 +448,330 @@ pub fn build_request_payload_snapshot(
     Ok(serde_json::to_string(&snapshot)?)
 }
 
+fn is_system_role(role: &str) -> bool {
+    matches!(role, "system" | "developer")
+}
+
+fn message_role(message: &serde_json::Value) -> String {
+    message
+        .get("role")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn message_content_value(message: &serde_json::Value) -> serde_json::Value {
+    message
+        .get("content")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null)
+}
+
+fn collect_text_fragments(value: &serde_json::Value) -> Vec<String> {
+    match value {
+        serde_json::Value::String(text) => {
+            if text.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![text.clone()]
+            }
+        }
+        serde_json::Value::Array(items) => items.iter().flat_map(collect_text_fragments).collect(),
+        serde_json::Value::Object(map) => {
+            for key in [
+                "delta",
+                "output_text",
+                "text",
+                "value",
+                "message",
+                "content",
+            ] {
+                if let Some(value) = map.get(key) {
+                    let fragments = collect_text_fragments(value);
+                    if !fragments.is_empty() {
+                        return fragments;
+                    }
+                }
+            }
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn join_text_fragments(fragments: Vec<String>) -> Option<String> {
+    let joined = fragments.join("").trim().to_string();
+    if joined.is_empty() {
+        None
+    } else {
+        Some(joined)
+    }
+}
+
+fn value_display_text(value: &serde_json::Value) -> Option<String> {
+    join_text_fragments(collect_text_fragments(value)).or_else(|| match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(text) => {
+            let trimmed = text.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        }
+        _ => serde_json::to_string_pretty(value)
+            .ok()
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty()),
+    })
+}
+
+fn structured_content_from_value(value: serde_json::Value) -> StructuredRequestContent {
+    StructuredRequestContent {
+        text: value_display_text(&value),
+        raw: value,
+    }
+}
+
+fn request_snapshot_parts(
+    snapshot: Option<&ReplayableRequestSnapshot>,
+) -> (
+    Option<StructuredRequestContent>,
+    Vec<StructuredRequestMessage>,
+) {
+    let Some(snapshot) = snapshot else {
+        return (None, Vec::new());
+    };
+    let messages = snapshot
+        .request
+        .get("messages")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut system_contents = Vec::new();
+    let mut system_text_parts = Vec::new();
+    let mut structured_messages = Vec::new();
+
+    for message in messages {
+        let role = message_role(&message);
+        let content = message_content_value(&message);
+        if is_system_role(&role) {
+            if let Some(text) = value_display_text(&content) {
+                system_text_parts.push(text);
+            }
+            system_contents.push(content);
+            continue;
+        }
+
+        structured_messages.push(StructuredRequestMessage {
+            role,
+            content: structured_content_from_value(content),
+        });
+    }
+
+    let system_prompt = if system_contents.is_empty() {
+        None
+    } else if system_contents.len() == 1 {
+        Some(StructuredRequestContent {
+            text: system_text_parts
+                .into_iter()
+                .map(|item| item.trim().to_string())
+                .find(|item| !item.is_empty()),
+            raw: system_contents
+                .into_iter()
+                .next()
+                .unwrap_or(serde_json::Value::Null),
+        })
+    } else {
+        Some(StructuredRequestContent {
+            text: {
+                let joined = system_text_parts.join("\n\n").trim().to_string();
+                if joined.is_empty() {
+                    None
+                } else {
+                    Some(joined)
+                }
+            },
+            raw: serde_json::Value::Array(system_contents),
+        })
+    };
+
+    (system_prompt, structured_messages)
+}
+
+fn transformed_snapshot_messages(
+    messages: Vec<serde_json::Value>,
+    preserve_system_prompt: bool,
+    preserve_message_structure: bool,
+) -> Vec<serde_json::Value> {
+    let filtered: Vec<serde_json::Value> = messages
+        .into_iter()
+        .filter(|message| preserve_system_prompt || !is_system_role(&message_role(message)))
+        .collect();
+
+    if preserve_message_structure {
+        return filtered;
+    }
+
+    let mut retained_system_messages = Vec::new();
+    let mut collapsed_blocks = Vec::new();
+
+    for message in filtered {
+        let role = message_role(&message);
+        if is_system_role(&role) {
+            retained_system_messages.push(message);
+            continue;
+        }
+        let content = message_content_value(&message);
+        if let Some(text) = value_display_text(&content) {
+            collapsed_blocks.push(format!("{}:\n{}", role.to_uppercase(), text));
+        }
+    }
+
+    if collapsed_blocks.is_empty() {
+        return retained_system_messages;
+    }
+
+    retained_system_messages.push(serde_json::json!({
+        "role": "user",
+        "content": collapsed_blocks.join("\n\n"),
+    }));
+    retained_system_messages
+}
+
+fn request_summary(
+    log: &RequestLog,
+    client_token_name: Option<&str>,
+    username: Option<&str>,
+) -> SourceRequestSummary {
+    SourceRequestSummary {
+        source_request_id: log.id.unwrap_or_default(),
+        timestamp: log.timestamp.to_rfc3339(),
+        requested_model: log.requested_model.clone(),
+        effective_model: log.effective_model.clone().or_else(|| log.model.clone()),
+        provider: log.provider.clone(),
+        username: username.map(|value| value.to_string()),
+        client_token_name: client_token_name.map(|value| value.to_string()),
+        input_tokens: log.prompt_tokens,
+        output_tokens: log.completion_tokens,
+        total_tokens: log.total_tokens,
+        status: request_status(log.status_code),
+        status_code: log.status_code,
+        response_time_ms: log.response_time_ms,
+    }
+}
+
+fn request_locked_fields() -> Vec<String> {
+    vec![
+        "source_request_relation".to_string(),
+        "system_prompt".to_string(),
+        "messages".to_string(),
+        "user_input_body".to_string(),
+    ]
+}
+
+fn normalize_template_scope(scope: Option<String>) -> Result<String, GatewayError> {
+    let normalized = scope.unwrap_or_else(|| "personal".to_string());
+    let normalized = normalized.trim().to_lowercase();
+    if normalized == "personal" {
+        Ok(normalized)
+    } else {
+        Err(GatewayError::Config("模板 scope 仅支持 personal".into()))
+    }
+}
+
+fn normalize_template_name(name: String) -> Result<String, GatewayError> {
+    let trimmed = name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(GatewayError::Config("模板名称不能为空".into()));
+    }
+    Ok(trimmed)
+}
+
+fn normalize_template_description(description: Option<String>) -> Option<String> {
+    description.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
+fn normalize_template_tags(tags: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for tag in tags {
+        let trimmed = tag.trim().to_string();
+        if trimmed.is_empty() || normalized.iter().any(|item| item == &trimmed) {
+            continue;
+        }
+        normalized.push(trimmed);
+    }
+    normalized
+}
+
+fn normalize_compare_models(models: Vec<String>) -> Result<Vec<String>, GatewayError> {
+    let normalized: Vec<String> = models
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
+    if normalized.len() < 2 || normalized.len() > 3 {
+        return Err(GatewayError::Config(
+            "实验模板的模型对比方案仅支持选择 2 到 3 个模型".into(),
+        ));
+    }
+    Ok(normalized)
+}
+
+fn template_matches_keyword(template: &StoredRequestLabTemplate, keyword: &str) -> bool {
+    let keyword = keyword.trim().to_lowercase();
+    if keyword.is_empty() {
+        return true;
+    }
+
+    template.name.to_lowercase().contains(&keyword)
+        || template
+            .description
+            .as_deref()
+            .map(|value| value.to_lowercase().contains(&keyword))
+            .unwrap_or(false)
+        || template
+            .tags
+            .iter()
+            .any(|value| value.to_lowercase().contains(&keyword))
+        || template
+            .compare_models
+            .iter()
+            .any(|value| value.to_lowercase().contains(&keyword))
+}
+
+fn template_matches_tag(template: &StoredRequestLabTemplate, tag: &str) -> bool {
+    let tag = tag.trim().to_lowercase();
+    if tag.is_empty() {
+        return true;
+    }
+    template.tags.iter().any(|item| item.to_lowercase() == tag)
+}
+
+fn request_lab_template_response(template: StoredRequestLabTemplate) -> RequestLabTemplateResponse {
+    RequestLabTemplateResponse {
+        id: template.id,
+        scope: template.scope,
+        name: template.name,
+        description: template.description,
+        tags: template.tags,
+        source_request_id: template.source_request_id,
+        compare_models: template.compare_models,
+        experiment_config: template.experiment_config,
+        created_by: template.created_by,
+        created_at: template.created_at.to_rfc3339(),
+        updated_at: template.updated_at.to_rfc3339(),
+    }
+}
+
 fn snapshot_from_detail(
     detail: &RequestLogDetailRecord,
 ) -> Result<ReplayableRequestSnapshot, GatewayError> {
@@ -361,8 +805,33 @@ fn request_from_snapshot(
     if let Some(temperature) = overrides.temperature.clone() {
         request_obj.insert("temperature".to_string(), temperature);
     }
+    if let Some(top_p) = overrides.top_p.clone() {
+        request_obj.insert("top_p".to_string(), top_p);
+    }
     if let Some(max_tokens) = overrides.max_tokens.clone() {
         request_obj.insert("max_tokens".to_string(), max_tokens);
+    }
+    if let Some(presence_penalty) = overrides.presence_penalty.clone() {
+        request_obj.insert("presence_penalty".to_string(), presence_penalty);
+    }
+    if let Some(frequency_penalty) = overrides.frequency_penalty.clone() {
+        request_obj.insert("frequency_penalty".to_string(), frequency_penalty);
+    }
+    let preserve_system_prompt = overrides.preserve_system_prompt.unwrap_or(true);
+    let preserve_message_structure = overrides.preserve_message_structure.unwrap_or(true);
+    if let Some(messages) = request_obj
+        .get("messages")
+        .and_then(|value| value.as_array())
+        .cloned()
+    {
+        request_obj.insert(
+            "messages".to_string(),
+            serde_json::Value::Array(transformed_snapshot_messages(
+                messages,
+                preserve_system_prompt,
+                preserve_message_structure,
+            )),
+        );
     }
     let request: ChatCompletionRequest = serde_json::from_value(request)
         .map_err(|_| GatewayError::Config("请求快照无法反序列化为可回放请求".into()))?;
@@ -456,6 +925,9 @@ fn detail_response(
                 None
             }
         });
+    let (system_prompt, messages) = request_snapshot_parts(detail_snapshot.as_ref());
+    let source_request_summary =
+        request_summary(&log, client_token_name.as_deref(), username.as_deref());
     Ok(RequestDetailResponse {
         id: log.id.unwrap_or_default(),
         timestamp: log.timestamp.to_rfc3339(),
@@ -499,6 +971,12 @@ fn detail_response(
             .and_then(|item| item.selected_key_id.clone()),
         first_token_latency_ms: detail.as_ref().and_then(|item| item.first_token_latency_ms),
         error_message: log.error_message,
+        source_request_summary,
+        system_prompt,
+        messages,
+        locked_fields: request_locked_fields(),
+        template_applied: false,
+        template_name: None,
     })
 }
 
@@ -1535,6 +2013,172 @@ pub async fn delete_request_lab_snapshot(
     Ok(Json(DeleteRequestLabSnapshotResponse { deleted }))
 }
 
+pub async fn list_request_lab_templates(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<ListRequestLabTemplatesQuery>,
+) -> Result<Json<Vec<RequestLabTemplateResponse>>, GatewayError> {
+    let claims = require_user(&headers)?;
+    let mut templates = app_state
+        .log_store
+        .list_request_lab_templates(&claims.sub)
+        .await
+        .map_err(GatewayError::Db)?;
+
+    if let Some(keyword) = query.keyword.as_deref() {
+        templates.retain(|template| template_matches_keyword(template, keyword));
+    }
+    if let Some(tag) = query.tag.as_deref() {
+        templates.retain(|template| template_matches_tag(template, tag));
+    }
+
+    let sort_order = query.sort.as_deref().unwrap_or("desc");
+    templates.sort_by(|left, right| {
+        left.updated_at
+            .cmp(&right.updated_at)
+            .then(left.id.cmp(&right.id))
+    });
+    if sort_order != "asc" {
+        templates.reverse();
+    }
+
+    Ok(Json(
+        templates
+            .into_iter()
+            .map(request_lab_template_response)
+            .collect(),
+    ))
+}
+
+pub async fn create_request_lab_template(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<CreateRequestLabTemplateRequest>,
+) -> Result<(axum::http::StatusCode, Json<RequestLabTemplateResponse>), GatewayError> {
+    let claims = require_user(&headers)?;
+    let (log, detail, _) =
+        load_request_log_for_user(&app_state, &claims, payload.source_request_id).await?;
+    ensure_request_can_be_source(&log, detail.as_ref())?;
+
+    let now = Utc::now();
+    let stored = StoredRequestLabTemplate {
+        id: format!("tmpl_{}", Uuid::new_v4().simple()),
+        user_id: claims.sub.clone(),
+        scope: normalize_template_scope(payload.scope)?,
+        name: normalize_template_name(payload.name)?,
+        description: normalize_template_description(payload.description),
+        tags: normalize_template_tags(payload.tags),
+        source_request_id: payload.source_request_id,
+        compare_models: normalize_compare_models(payload.compare_models)?,
+        experiment_config: payload.experiment_config,
+        created_by: claims.sub,
+        created_at: now,
+        updated_at: now,
+    };
+
+    app_state
+        .log_store
+        .save_request_lab_template(stored.clone())
+        .await
+        .map_err(GatewayError::Db)?;
+
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(request_lab_template_response(stored)),
+    ))
+}
+
+pub async fn get_request_lab_template(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(template_id): Path<String>,
+) -> Result<Json<RequestLabTemplateResponse>, GatewayError> {
+    let claims = require_user(&headers)?;
+    let template = app_state
+        .log_store
+        .get_request_lab_template(&template_id)
+        .await
+        .map_err(GatewayError::Db)?
+        .ok_or_else(|| GatewayError::NotFound("实验模板不存在".into()))?;
+    if template.user_id != claims.sub && !is_superadmin(&claims) {
+        return Err(GatewayError::Forbidden("无权访问该实验模板".into()));
+    }
+    Ok(Json(request_lab_template_response(template)))
+}
+
+pub async fn update_request_lab_template(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(template_id): Path<String>,
+    Json(payload): Json<UpdateRequestLabTemplateRequest>,
+) -> Result<Json<RequestLabTemplateResponse>, GatewayError> {
+    let claims = require_user(&headers)?;
+    let existing = app_state
+        .log_store
+        .get_request_lab_template(&template_id)
+        .await
+        .map_err(GatewayError::Db)?
+        .ok_or_else(|| GatewayError::NotFound("实验模板不存在".into()))?;
+    if existing.user_id != claims.sub && !is_superadmin(&claims) {
+        return Err(GatewayError::Forbidden("无权修改该实验模板".into()));
+    }
+
+    let metadata_changed =
+        payload.name.is_some() || payload.description.is_some() || payload.tags.is_some();
+    let method_changed = payload.compare_models.is_some()
+        || payload.experiment_config.is_some()
+        || payload.source_request_id.is_some();
+    if !metadata_changed && !method_changed {
+        return Err(GatewayError::Config("没有可更新的模板内容".into()));
+    }
+
+    let mut updated = existing.clone();
+    if let Some(name) = payload.name {
+        updated.name = normalize_template_name(name)?;
+    }
+    if let Some(description) = payload.description {
+        updated.description = normalize_template_description(Some(description));
+    }
+    if let Some(tags) = payload.tags {
+        updated.tags = normalize_template_tags(tags);
+    }
+    if let Some(source_request_id) = payload.source_request_id {
+        let (log, detail, _) =
+            load_request_log_for_user(&app_state, &claims, source_request_id).await?;
+        ensure_request_can_be_source(&log, detail.as_ref())?;
+        updated.source_request_id = source_request_id;
+    }
+    if let Some(compare_models) = payload.compare_models {
+        updated.compare_models = normalize_compare_models(compare_models)?;
+    }
+    if let Some(experiment_config) = payload.experiment_config {
+        updated.experiment_config = experiment_config;
+    }
+    updated.updated_at = Utc::now();
+
+    app_state
+        .log_store
+        .save_request_lab_template(updated.clone())
+        .await
+        .map_err(GatewayError::Db)?;
+
+    Ok(Json(request_lab_template_response(updated)))
+}
+
+pub async fn delete_request_lab_template(
+    State(app_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(template_id): Path<String>,
+) -> Result<Json<DeleteRequestLabTemplateResponse>, GatewayError> {
+    let claims = require_user(&headers)?;
+    let deleted = app_state
+        .log_store
+        .delete_request_lab_template(&claims.sub, &template_id)
+        .await
+        .map_err(GatewayError::Db)?;
+    Ok(Json(DeleteRequestLabTemplateResponse { deleted }))
+}
+
 pub async fn create_compare(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1555,17 +2199,30 @@ pub async fn create_compare(
     let snapshot = snapshot_from_detail(&detail)?;
     let compare_id = format!("cmp_{}", Uuid::new_v4().simple());
     let created_at = Utc::now();
+    let top_p = payload.top_p.clone();
+    let presence_penalty = payload.presence_penalty.clone();
+    let frequency_penalty = payload.frequency_penalty.clone();
+    let preserve_system_prompt = payload.preserve_system_prompt;
+    let preserve_message_structure = payload.preserve_message_structure;
     let futures = payload.models.iter().cloned().map(|model| {
         let app_state = Arc::clone(&app_state);
         let token = token.token.clone();
         let snapshot = snapshot.clone();
         let temperature = payload.temperature.clone();
         let max_tokens = payload.max_tokens.clone();
+        let top_p = top_p.clone();
+        let presence_penalty = presence_penalty.clone();
+        let frequency_penalty = frequency_penalty.clone();
         async move {
             let overrides = ReplayOverrideInput {
                 model: Some(model.clone()),
                 temperature,
+                top_p,
                 max_tokens,
+                presence_penalty,
+                frequency_penalty,
+                preserve_system_prompt,
+                preserve_message_structure,
                 ..ReplayOverrideInput::default()
             };
             let result = request_from_snapshot(&snapshot, &overrides)
@@ -1724,30 +2381,37 @@ pub async fn get_compare(
 #[cfg(test)]
 mod tests {
     use super::{
-        ReplayOverrideInput, ReplayableRequestSnapshot, UpdateRequestLabSnapshotNoteRequest,
-        compare_detail_response, compare_item_error_info, detail_response, request_from_snapshot,
-        request_lab_snapshot_detail_response, snapshot_matches_keyword,
-        update_request_lab_snapshot_note,
+        CreateRequestLabTemplateRequest, ListRequestLabTemplatesQuery, ReplayOverrideInput,
+        ReplayableRequestSnapshot, UpdateRequestLabSnapshotNoteRequest,
+        UpdateRequestLabTemplateRequest, compare_detail_response, compare_item_error_info,
+        create_request_lab_template, delete_request_lab_template, detail_response,
+        get_my_request_detail, get_request_lab_template, list_request_lab_templates,
+        request_from_snapshot, request_lab_snapshot_detail_response, snapshot_matches_keyword,
+        update_request_lab_snapshot_note, update_request_lab_template,
     };
+    use crate::admin::CreateTokenPayload;
     use crate::config::settings::{BalanceStrategy, LoadBalancing, LoggingConfig, ServerConfig};
     use crate::error::GatewayError;
     use crate::logging::DatabaseLogger;
     use crate::logging::types::{
-        RequestLog, RequestLogDetailRecord, StoredCompareRun, StoredRequestLabSnapshot,
+        RequestLabExperimentConfig, RequestLog, RequestLogDetailRecord, StoredCompareRun,
+        StoredRequestLabSnapshot,
     };
     use crate::server::AppState;
     use crate::server::handlers::auth::{AccessTokenClaims, issue_access_token};
     use crate::server::login::LoginManager;
     use crate::server::storage_traits::RequestLogStore;
+    use crate::users::{CreateUserPayload, UserRole, UserStatus};
     use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
     use axum::{
         Json,
-        extract::{Path, State},
+        extract::{Path, Query, State},
     };
     use chrono::Duration;
     use chrono::Utc;
     use serde_json::json;
     use std::sync::Arc;
+    use std::sync::Once;
     use tempfile::tempdir;
 
     fn test_settings(db_path: String) -> crate::config::Settings {
@@ -1793,7 +2457,15 @@ mod tests {
         })
     }
 
+    fn ensure_test_jwt_secret() {
+        static JWT_SECRET_ONCE: Once = Once::new();
+        JWT_SECRET_ONCE.call_once(|| unsafe {
+            std::env::set_var("GW_JWT_SECRET", "request-lab-test-secret");
+        });
+    }
+
     fn auth_headers(user_id: &str, role: &str) -> HeaderMap {
+        ensure_test_jwt_secret();
         let claims = AccessTokenClaims {
             sub: user_id.to_string(),
             email: format!("{user_id}@example.com"),
@@ -1810,6 +2482,108 @@ mod tests {
             HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
         );
         headers
+    }
+
+    async fn seed_owned_source_request(app_state: &Arc<AppState>) -> (String, i64, String) {
+        let nonce = Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        let user = app_state
+            .user_store
+            .create_user(CreateUserPayload {
+                first_name: Some("Request".into()),
+                last_name: Some("Lab".into()),
+                username: Some(format!("request_lab_{nonce}")),
+                email: format!("request-lab-{nonce}@example.com"),
+                phone_number: None,
+                password: Some("password123".into()),
+                status: UserStatus::Active,
+                role: UserRole::Admin,
+                is_anonymous: false,
+            })
+            .await
+            .unwrap();
+        let token = app_state
+            .token_store
+            .create_token(CreateTokenPayload {
+                id: None,
+                user_id: Some(user.id.clone()),
+                name: Some("Lab Token".into()),
+                token: None,
+                allowed_models: None,
+                model_blacklist: None,
+                max_tokens: None,
+                max_amount: None,
+                enabled: true,
+                expires_at: None,
+                remark: None,
+                organization_id: None,
+                ip_whitelist: None,
+                ip_blacklist: None,
+            })
+            .await
+            .unwrap();
+
+        let request_id = app_state
+            .log_store
+            .log_request(RequestLog {
+                id: None,
+                timestamp: Utc::now(),
+                method: "POST".into(),
+                path: "/v1/chat/completions".into(),
+                request_type: "chat_once".into(),
+                requested_model: Some("openai/gpt-4o-mini".into()),
+                effective_model: Some("gpt-4o-mini".into()),
+                model: Some("gpt-4o-mini".into()),
+                provider: Some("openai".into()),
+                api_key: Some("sk-****".into()),
+                client_token: Some(token.id.clone()),
+                user_id: Some(user.id.clone()),
+                amount_spent: Some(0.01),
+                status_code: 200,
+                response_time_ms: 123,
+                prompt_tokens: Some(12),
+                completion_tokens: Some(34),
+                total_tokens: Some(46),
+                cached_tokens: None,
+                reasoning_tokens: None,
+                error_message: None,
+            })
+            .await
+            .unwrap();
+
+        app_state
+            .log_store
+            .upsert_request_log_detail(RequestLogDetailRecord {
+                request_log_id: request_id,
+                request_payload_snapshot: Some(
+                    json!({
+                        "kind": "chat_completions",
+                        "request": {
+                            "model": "openai/gpt-4o-mini",
+                            "temperature": 0.3,
+                            "top_p": 0.9,
+                            "max_tokens": 256,
+                            "messages": [
+                                {"role": "system", "content": "You are helpful."},
+                                {"role": "user", "content": "真实输入正文：请总结这段日志。"},
+                                {"role": "assistant", "content": "收到，请提供日志。"}
+                            ]
+                        },
+                        "top_k": 2
+                    })
+                    .to_string(),
+                ),
+                response_preview: Some("source preview".into()),
+                upstream_status: Some(200),
+                fallback_triggered: Some(false),
+                fallback_reason: None,
+                selected_provider: Some("openai".into()),
+                selected_key_id: Some("sk-****".into()),
+                first_token_latency_ms: Some(66),
+            })
+            .await
+            .unwrap();
+
+        (user.id, request_id, token.id)
     }
 
     #[test]
@@ -1831,7 +2605,12 @@ mod tests {
             &ReplayOverrideInput {
                 model: Some("openai/gpt-4.1-mini".into()),
                 temperature: Some(json!(0.9)),
+                top_p: None,
                 max_tokens: Some(json!(256)),
+                presence_penalty: None,
+                frequency_penalty: None,
+                preserve_system_prompt: None,
+                preserve_message_structure: None,
             },
         )
         .unwrap();
@@ -2355,10 +3134,6 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_note_update_rejects_unauthorized_user() {
-        unsafe {
-            std::env::set_var("GW_JWT_SECRET", "request-lab-test-secret");
-        }
-
         let app_state = test_app_state().await;
         RequestLogStore::save_request_lab_snapshot(
             app_state.log_store.as_ref(),
@@ -2391,5 +3166,263 @@ mod tests {
         .await;
 
         assert!(matches!(result, Err(GatewayError::Forbidden(_))));
+    }
+
+    #[tokio::test]
+    async fn request_detail_response_returns_structured_system_and_messages() {
+        let app_state = test_app_state().await;
+        let (user_id, request_id, _) = seed_owned_source_request(&app_state).await;
+
+        let Json(response) = get_my_request_detail(
+            State(app_state),
+            auth_headers(&user_id, "user"),
+            Path(request_id),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            response
+                .system_prompt
+                .as_ref()
+                .and_then(|item| item.text.as_deref()),
+            Some("You are helpful.")
+        );
+        assert_eq!(response.messages.len(), 2);
+        assert_eq!(response.messages[0].role, "user");
+        assert_eq!(
+            response.messages[0].content.text.as_deref(),
+            Some("真实输入正文：请总结这段日志。")
+        );
+        assert_eq!(
+            response.source_request_summary.source_request_id,
+            request_id
+        );
+        assert!(response.locked_fields.iter().any(|item| item == "messages"));
+    }
+
+    #[tokio::test]
+    async fn request_lab_template_crud_roundtrip_works() {
+        let app_state = test_app_state().await;
+        let (user_id, request_id, _) = seed_owned_source_request(&app_state).await;
+
+        let (status, Json(created)) = create_request_lab_template(
+            State(app_state.clone()),
+            auth_headers(&user_id, "user"),
+            Json(CreateRequestLabTemplateRequest {
+                scope: None,
+                name: "产品分析模板".into(),
+                description: Some("保留真实输入，只切换实验方法".into()),
+                tags: vec!["analysis".into(), "review".into()],
+                source_request_id: request_id,
+                compare_models: vec![
+                    "openai/gpt-5.4".into(),
+                    "anthropic/claude-3.7-sonnet".into(),
+                ],
+                experiment_config: RequestLabExperimentConfig {
+                    temperature: Some(json!(0.4)),
+                    top_p: Some(json!(0.8)),
+                    max_tokens: Some(json!(512)),
+                    presence_penalty: Some(json!(0.1)),
+                    frequency_penalty: Some(json!(0.2)),
+                    preserve_system_prompt: true,
+                    preserve_message_structure: true,
+                },
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status, axum::http::StatusCode::CREATED);
+        assert_eq!(created.scope, "personal");
+        assert_eq!(created.compare_models.len(), 2);
+        assert_eq!(created.experiment_config.temperature, Some(json!(0.4)));
+
+        let Json(listed) = list_request_lab_templates(
+            State(app_state.clone()),
+            auth_headers(&user_id, "user"),
+            Query(ListRequestLabTemplatesQuery::default()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, created.id);
+
+        let Json(updated_meta) = update_request_lab_template(
+            State(app_state.clone()),
+            auth_headers(&user_id, "user"),
+            Path(created.id.clone()),
+            Json(UpdateRequestLabTemplateRequest {
+                name: Some("产品分析模板 v2".into()),
+                description: Some("只更新模板说明".into()),
+                tags: Some(vec!["analysis".into(), "v2".into()]),
+                source_request_id: None,
+                compare_models: None,
+                experiment_config: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated_meta.name, "产品分析模板 v2");
+        assert_eq!(updated_meta.compare_models, created.compare_models);
+
+        let Json(updated_method) = update_request_lab_template(
+            State(app_state.clone()),
+            auth_headers(&user_id, "user"),
+            Path(created.id.clone()),
+            Json(UpdateRequestLabTemplateRequest {
+                name: None,
+                description: None,
+                tags: None,
+                source_request_id: Some(request_id),
+                compare_models: Some(vec![
+                    "openai/gpt-5.4".into(),
+                    "google/gemini-2.5-pro".into(),
+                ]),
+                experiment_config: Some(RequestLabExperimentConfig {
+                    temperature: Some(json!(0.2)),
+                    top_p: Some(json!(0.7)),
+                    max_tokens: Some(json!(768)),
+                    presence_penalty: Some(json!(0.0)),
+                    frequency_penalty: Some(json!(0.0)),
+                    preserve_system_prompt: false,
+                    preserve_message_structure: false,
+                }),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated_method.name, "产品分析模板 v2");
+        assert_eq!(
+            updated_method.compare_models,
+            vec!["openai/gpt-5.4", "google/gemini-2.5-pro"]
+        );
+        assert!(!updated_method.experiment_config.preserve_system_prompt);
+        assert!(!updated_method.experiment_config.preserve_message_structure);
+
+        let Json(fetched) = get_request_lab_template(
+            State(app_state.clone()),
+            auth_headers(&user_id, "user"),
+            Path(created.id.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(fetched.id, created.id);
+
+        let Json(deleted) = delete_request_lab_template(
+            State(app_state.clone()),
+            auth_headers(&user_id, "user"),
+            Path(created.id),
+        )
+        .await
+        .unwrap();
+        assert!(deleted.deleted);
+    }
+
+    #[tokio::test]
+    async fn request_lab_template_list_supports_keyword_and_tag_filters() {
+        let app_state = test_app_state().await;
+        let (user_id, request_id, _) = seed_owned_source_request(&app_state).await;
+
+        for (name, tags, models) in [
+            (
+                "产品评审模板",
+                vec!["review".to_string(), "analysis".to_string()],
+                vec![
+                    "openai/gpt-5.4".to_string(),
+                    "anthropic/claude-3.7-sonnet".to_string(),
+                ],
+            ),
+            (
+                "低成本筛选模板",
+                vec!["cheap".to_string()],
+                vec![
+                    "openai/gpt-4.1-mini".to_string(),
+                    "openai/gpt-4o-mini".to_string(),
+                ],
+            ),
+        ] {
+            let _ = create_request_lab_template(
+                State(app_state.clone()),
+                auth_headers(&user_id, "user"),
+                Json(CreateRequestLabTemplateRequest {
+                    scope: None,
+                    name: name.into(),
+                    description: None,
+                    tags,
+                    source_request_id: request_id,
+                    compare_models: models,
+                    experiment_config: RequestLabExperimentConfig::default(),
+                }),
+            )
+            .await
+            .unwrap();
+        }
+
+        let Json(keyword_filtered) = list_request_lab_templates(
+            State(app_state.clone()),
+            auth_headers(&user_id, "user"),
+            Query(ListRequestLabTemplatesQuery {
+                keyword: Some("评审".into()),
+                tag: None,
+                sort: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(keyword_filtered.len(), 1);
+        assert_eq!(keyword_filtered[0].name, "产品评审模板");
+
+        let Json(tag_filtered) = list_request_lab_templates(
+            State(app_state),
+            auth_headers(&user_id, "user"),
+            Query(ListRequestLabTemplatesQuery {
+                keyword: None,
+                tag: Some("cheap".into()),
+                sort: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(tag_filtered.len(), 1);
+        assert_eq!(tag_filtered[0].name, "低成本筛选模板");
+    }
+
+    #[tokio::test]
+    async fn request_lab_template_rejects_cross_user_access_and_never_stores_real_prompt_body() {
+        let app_state = test_app_state().await;
+        let (owner_id, request_id, _) = seed_owned_source_request(&app_state).await;
+        let (status, Json(created)) = create_request_lab_template(
+            State(app_state.clone()),
+            auth_headers(&owner_id, "user"),
+            Json(CreateRequestLabTemplateRequest {
+                scope: None,
+                name: "长文本审阅模板".into(),
+                description: Some("不会保存真实输入正文".into()),
+                tags: vec!["review".into()],
+                source_request_id: request_id,
+                compare_models: vec![
+                    "openai/gpt-5.4".into(),
+                    "anthropic/claude-3.7-sonnet".into(),
+                ],
+                experiment_config: RequestLabExperimentConfig::default(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, axum::http::StatusCode::CREATED);
+
+        let (other_user_id, _, _) = seed_owned_source_request(&app_state).await;
+        let result = get_request_lab_template(
+            State(app_state.clone()),
+            auth_headers(&other_user_id, "user"),
+            Path(created.id.clone()),
+        )
+        .await;
+        assert!(matches!(result, Err(GatewayError::Forbidden(_))));
+
+        let template_json = serde_json::to_string(&created).unwrap();
+        assert!(!template_json.contains("真实输入正文：请总结这段日志。"));
+        assert!(!template_json.contains("You are helpful."));
     }
 }

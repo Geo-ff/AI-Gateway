@@ -404,6 +404,208 @@ components:
         error_message:
           type: string
           nullable: true
+        source_request_summary:
+          $ref: '#/components/schemas/SourceRequestSummary'
+        system_prompt:
+          $ref: '#/components/schemas/StructuredRequestContent'
+          nullable: true
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/StructuredRequestMessage'
+        locked_fields:
+          type: array
+          items:
+            type: string
+        template_applied:
+          type: boolean
+        template_name:
+          type: string
+          nullable: true
+
+    SourceRequestSummary:
+      type: object
+      properties:
+        source_request_id:
+          type: integer
+          format: int64
+        timestamp:
+          type: string
+          format: date-time
+        requested_model:
+          type: string
+          nullable: true
+        effective_model:
+          type: string
+          nullable: true
+        provider:
+          type: string
+          nullable: true
+        username:
+          type: string
+          nullable: true
+        client_token_name:
+          type: string
+          nullable: true
+        input_tokens:
+          type: integer
+          nullable: true
+        output_tokens:
+          type: integer
+          nullable: true
+        total_tokens:
+          type: integer
+          nullable: true
+        status:
+          type: string
+          enum: [success, failed]
+        status_code:
+          type: integer
+        response_time_ms:
+          type: integer
+          format: int64
+
+    StructuredRequestContent:
+      type: object
+      properties:
+        text:
+          type: string
+          nullable: true
+        raw:
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: array
+              items: {}
+            - type: object
+              additionalProperties: true
+          nullable: true
+
+    StructuredRequestMessage:
+      type: object
+      properties:
+        role:
+          type: string
+        content:
+          $ref: '#/components/schemas/StructuredRequestContent'
+
+    RequestLabExperimentConfig:
+      type: object
+      properties:
+        temperature:
+          type: number
+          nullable: true
+        top_p:
+          type: number
+          nullable: true
+        max_tokens:
+          type: integer
+          nullable: true
+        presence_penalty:
+          type: number
+          nullable: true
+        frequency_penalty:
+          type: number
+          nullable: true
+        preserve_system_prompt:
+          type: boolean
+        preserve_message_structure:
+          type: boolean
+
+    RequestLabTemplateResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        scope:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        source_request_id:
+          type: integer
+          format: int64
+        compare_models:
+          type: array
+          minItems: 2
+          maxItems: 3
+          items:
+            type: string
+        experiment_config:
+          $ref: '#/components/schemas/RequestLabExperimentConfig'
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateRequestLabTemplateRequest:
+      type: object
+      required:
+        - name
+        - source_request_id
+        - compare_models
+        - experiment_config
+      properties:
+        scope:
+          type: string
+          nullable: true
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        source_request_id:
+          type: integer
+          format: int64
+        compare_models:
+          type: array
+          minItems: 2
+          maxItems: 3
+          items:
+            type: string
+        experiment_config:
+          $ref: '#/components/schemas/RequestLabExperimentConfig'
+
+    UpdateRequestLabTemplateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        source_request_id:
+          type: integer
+          format: int64
+          nullable: true
+        compare_models:
+          type: array
+          minItems: 2
+          maxItems: 3
+          items:
+            type: string
+        experiment_config:
+          $ref: '#/components/schemas/RequestLabExperimentConfig'
 
     ReplayRequest:
       type: object
@@ -414,8 +616,23 @@ components:
         temperature:
           type: number
           nullable: true
+        top_p:
+          type: number
+          nullable: true
         max_tokens:
           type: integer
+          nullable: true
+        presence_penalty:
+          type: number
+          nullable: true
+        frequency_penalty:
+          type: number
+          nullable: true
+        preserve_system_prompt:
+          type: boolean
+          nullable: true
+        preserve_message_structure:
+          type: boolean
           nullable: true
 
     ReplayResponse:
@@ -488,8 +705,23 @@ components:
         temperature:
           type: number
           nullable: true
+        top_p:
+          type: number
+          nullable: true
         max_tokens:
           type: integer
+          nullable: true
+        presence_penalty:
+          type: number
+          nullable: true
+        frequency_penalty:
+          type: number
+          nullable: true
+        preserve_system_prompt:
+          type: boolean
+          nullable: true
+        preserve_message_structure:
+          type: boolean
           nullable: true
 
     CompareItemResponse:
@@ -772,6 +1004,12 @@ components:
           $ref: '#/components/schemas/RequestLabSnapshotPayload'
 
     DeleteRequestLabSnapshotResponse:
+      type: object
+      properties:
+        deleted:
+          type: boolean
+
+    DeleteRequestLabTemplateResponse:
       type: object
       properties:
         deleted:
@@ -3709,6 +3947,198 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DeleteRequestLabSnapshotResponse'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /me/request-lab/templates:
+    get:
+      summary: 获取请求实验室实验模板列表
+      operationId: listRequestLabTemplates
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: keyword
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 关键字搜索（模板名称 / 说明 / 标签 / 模型组合）
+        - name: tag
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 按标签精确过滤
+        - name: sort
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+          description: 更新时间排序，默认 desc
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RequestLabTemplateResponse'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      summary: 创建请求实验室实验模板
+      operationId: createRequestLabTemplate
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRequestLabTemplateRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestLabTemplateResponse'
+        '400':
+          description: 参数非法或来源请求不可用于实验模板
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /me/request-lab/templates/{id}:
+    get:
+      summary: 获取请求实验室实验模板详情
+      operationId: getRequestLabTemplate
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestLabTemplateResponse'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 无权访问该实验模板
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 实验模板不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      summary: 更新请求实验室实验模板
+      operationId: updateRequestLabTemplate
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRequestLabTemplateRequest'
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestLabTemplateResponse'
+        '400':
+          description: 更新内容非法
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未登录/Token 无效/过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 无权修改该实验模板
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 实验模板不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: 删除请求实验室实验模板
+      operationId: deleteRequestLabTemplate
+      tags:
+        - Me
+      security:
+        - AccessToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteRequestLabTemplateResponse'
         '401':
           description: 未登录/Token 无效/过期
           content:

@@ -29,8 +29,8 @@ use crate::password_reset_tokens::PasswordResetTokenStore;
 use crate::refresh_tokens::RefreshTokenStore;
 use crate::routing::LoadBalancerState;
 use crate::server::storage_traits::{
-    AdminPublicKeyRecord, FavoritesStore, LoginStore, ModelCache, OrganizationStore,
-    ProviderStore, RequestLogStore,
+    AdminPublicKeyRecord, FavoritesStore, LoginStore, ModelCache, OrganizationStore, ProviderStore,
+    RequestLogStore,
 };
 use crate::subscription::SubscriptionStore;
 use crate::users::UserStore;

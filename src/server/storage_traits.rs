@@ -4,7 +4,7 @@ use std::pin::Pin;
 use crate::config::settings::{KeyLogStrategy, Provider};
 use crate::logging::types::{
     ModelPriceRecord, ModelPriceUpsert, ProviderOpLog, RequestLogDetailRecord, StoredCompareRun,
-    StoredRequestLabSnapshot, StoredRequestLabSource,
+    StoredRequestLabSnapshot, StoredRequestLabSource, StoredRequestLabTemplate,
 };
 use crate::logging::{CachedModel, DatabaseLogger, ProviderKeyStatsAgg, RequestLog};
 use crate::providers::openai::Model;
@@ -129,6 +129,23 @@ pub trait RequestLogStore: Send + Sync {
         note: Option<String>,
     ) -> BoxFuture<'a, rusqlite::Result<bool>>;
     fn delete_request_lab_snapshot<'a>(
+        &'a self,
+        user_id: &'a str,
+        id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>>;
+    fn save_request_lab_template<'a>(
+        &'a self,
+        template: StoredRequestLabTemplate,
+    ) -> BoxFuture<'a, rusqlite::Result<()>>;
+    fn list_request_lab_templates<'a>(
+        &'a self,
+        user_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<StoredRequestLabTemplate>>>;
+    fn get_request_lab_template<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<StoredRequestLabTemplate>>>;
+    fn delete_request_lab_template<'a>(
         &'a self,
         user_id: &'a str,
         id: &'a str,
@@ -603,6 +620,35 @@ impl RequestLogStore for DatabaseLogger {
         id: &'a str,
     ) -> BoxFuture<'a, rusqlite::Result<bool>> {
         Box::pin(async move { self.delete_request_lab_snapshot(user_id, id).await })
+    }
+
+    fn save_request_lab_template<'a>(
+        &'a self,
+        template: StoredRequestLabTemplate,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move { self.save_request_lab_template(template).await })
+    }
+
+    fn list_request_lab_templates<'a>(
+        &'a self,
+        user_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<StoredRequestLabTemplate>>> {
+        Box::pin(async move { self.list_request_lab_templates(user_id).await })
+    }
+
+    fn get_request_lab_template<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<StoredRequestLabTemplate>>> {
+        Box::pin(async move { self.get_request_lab_template(id).await })
+    }
+
+    fn delete_request_lab_template<'a>(
+        &'a self,
+        user_id: &'a str,
+        id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move { self.delete_request_lab_template(user_id, id).await })
     }
 
     fn sum_total_tokens_by_client_token<'a>(

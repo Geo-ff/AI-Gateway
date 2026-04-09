@@ -1024,7 +1024,9 @@ mod tests {
     async fn sqlite_create_token_persists_custom_organization_registry() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        let db = DatabaseLogger::new(db_path.to_str().unwrap()).await.unwrap();
+        let db = DatabaseLogger::new(db_path.to_str().unwrap())
+            .await
+            .unwrap();
 
         let created = db
             .create_token(CreateTokenPayload {
@@ -1051,7 +1053,9 @@ mod tests {
         assert!(organizations.iter().any(|id| id == "default"));
         assert!(organizations.iter().any(|id| id == "team-alpha"));
 
-        let reopened = DatabaseLogger::new(db_path.to_str().unwrap()).await.unwrap();
+        let reopened = DatabaseLogger::new(db_path.to_str().unwrap())
+            .await
+            .unwrap();
         let persisted = reopened.list_organizations().await.unwrap();
         assert!(persisted.iter().any(|id| id == "team-alpha"));
     }

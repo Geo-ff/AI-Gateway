@@ -9,7 +9,7 @@ use crate::error::GatewayError;
 use crate::logging::time::{parse_datetime_string, to_beijing_string, to_iso8601_utc_string};
 use crate::logging::types::{
     ProviderOpLog, RequestLogDetailRecord, StoredCompareRun, StoredRequestLabSnapshot,
-    StoredRequestLabSource,
+    StoredRequestLabSource, StoredRequestLabTemplate,
 };
 use crate::logging::{
     CachedModel, ModelPriceRecord, ModelPriceSource, ModelPriceStatus, ModelPriceUpsert,
@@ -462,6 +462,34 @@ impl PgLogStore {
         let _ = client
             .execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS request_lab_snapshots_user_id_compare_run_uidx ON request_lab_snapshots (user_id, compare_run_id)",
+                &[],
+            )
+            .await;
+        client
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS request_lab_templates (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                tags_json TEXT NOT NULL,
+                source_request_id BIGINT NOT NULL,
+                compare_models_json TEXT NOT NULL,
+                experiment_config_json TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"#,
+                &[],
+            )
+            .await
+            .map_err(|e| {
+                GatewayError::Config(format!("Failed to init request_lab_templates: {}", e))
+            })?;
+        let _ = client
+            .execute(
+                "CREATE INDEX IF NOT EXISTS request_lab_templates_user_id_updated_at_idx ON request_lab_templates (user_id, updated_at)",
                 &[],
             )
             .await;
@@ -1540,6 +1568,168 @@ impl RequestLogStore for PgLogStore {
             let affected = client
                 .execute(
                     "DELETE FROM request_lab_snapshots WHERE user_id = $1 AND id = $2",
+                    &[&user_id, &id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(affected > 0)
+        })
+    }
+
+    fn save_request_lab_template<'a>(
+        &'a self,
+        template: StoredRequestLabTemplate,
+    ) -> BoxFuture<'a, rusqlite::Result<()>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let tags_json = serde_json::to_string(&template.tags).unwrap_or_else(|_| "[]".into());
+            let compare_models_json =
+                serde_json::to_string(&template.compare_models).unwrap_or_else(|_| "[]".into());
+            let experiment_config_json =
+                serde_json::to_string(&template.experiment_config).unwrap_or_else(|_| "{}".into());
+            client
+                .execute(
+                    "INSERT INTO request_lab_templates (
+                        id, user_id, scope, name, description, tags_json, source_request_id,
+                        compare_models_json, experiment_config_json, created_by, created_at, updated_at
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                    ON CONFLICT (id) DO UPDATE SET
+                        scope = EXCLUDED.scope,
+                        name = EXCLUDED.name,
+                        description = EXCLUDED.description,
+                        tags_json = EXCLUDED.tags_json,
+                        source_request_id = EXCLUDED.source_request_id,
+                        compare_models_json = EXCLUDED.compare_models_json,
+                        experiment_config_json = EXCLUDED.experiment_config_json,
+                        created_by = EXCLUDED.created_by,
+                        created_at = EXCLUDED.created_at,
+                        updated_at = EXCLUDED.updated_at",
+                    &[
+                        &template.id,
+                        &template.user_id,
+                        &template.scope,
+                        &template.name,
+                        &template.description,
+                        &tags_json,
+                        &template.source_request_id,
+                        &compare_models_json,
+                        &experiment_config_json,
+                        &template.created_by,
+                        &to_beijing_string(&template.created_at),
+                        &to_beijing_string(&template.updated_at),
+                    ],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(())
+        })
+    }
+
+    fn list_request_lab_templates<'a>(
+        &'a self,
+        user_id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Vec<StoredRequestLabTemplate>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let rows = client
+                .query(
+                    "SELECT id, user_id, scope, name, description, tags_json, source_request_id,
+                            compare_models_json, experiment_config_json, created_by, created_at, updated_at
+                     FROM request_lab_templates
+                     WHERE user_id = $1
+                     ORDER BY updated_at DESC, id DESC",
+                    &[&user_id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(rows
+                .into_iter()
+                .map(|row| StoredRequestLabTemplate {
+                    id: pg_row_string(&row, 0),
+                    user_id: pg_row_string(&row, 1),
+                    scope: pg_row_string(&row, 2),
+                    name: pg_row_string(&row, 3),
+                    description: pg_row_opt_string(&row, 4),
+                    tags: serde_json::from_str(
+                        &row.try_get::<usize, String>(5)
+                            .unwrap_or_else(|_| "[]".into()),
+                    )
+                    .unwrap_or_default(),
+                    source_request_id: pg_row_i64_or(&row, 6, 0),
+                    compare_models: serde_json::from_str(
+                        &row.try_get::<usize, String>(7)
+                            .unwrap_or_else(|_| "[]".into()),
+                    )
+                    .unwrap_or_default(),
+                    experiment_config: serde_json::from_str(
+                        &row.try_get::<usize, String>(8)
+                            .unwrap_or_else(|_| "{}".into()),
+                    )
+                    .unwrap_or_default(),
+                    created_by: pg_row_string(&row, 9),
+                    created_at: pg_row_datetime_or_now(&row, 10),
+                    updated_at: pg_row_datetime_or_now(&row, 11),
+                })
+                .collect())
+        })
+    }
+
+    fn get_request_lab_template<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<Option<StoredRequestLabTemplate>>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let row = client
+                .query_opt(
+                    "SELECT id, user_id, scope, name, description, tags_json, source_request_id,
+                            compare_models_json, experiment_config_json, created_by, created_at, updated_at
+                     FROM request_lab_templates
+                     WHERE id = $1
+                     LIMIT 1",
+                    &[&id],
+                )
+                .await
+                .map_err(pg_err)?;
+            Ok(row.map(|row| StoredRequestLabTemplate {
+                id: pg_row_string(&row, 0),
+                user_id: pg_row_string(&row, 1),
+                scope: pg_row_string(&row, 2),
+                name: pg_row_string(&row, 3),
+                description: pg_row_opt_string(&row, 4),
+                tags: serde_json::from_str(
+                    &row.try_get::<usize, String>(5)
+                        .unwrap_or_else(|_| "[]".into()),
+                )
+                .unwrap_or_default(),
+                source_request_id: pg_row_i64_or(&row, 6, 0),
+                compare_models: serde_json::from_str(
+                    &row.try_get::<usize, String>(7)
+                        .unwrap_or_else(|_| "[]".into()),
+                )
+                .unwrap_or_default(),
+                experiment_config: serde_json::from_str(
+                    &row.try_get::<usize, String>(8)
+                        .unwrap_or_else(|_| "{}".into()),
+                )
+                .unwrap_or_default(),
+                created_by: pg_row_string(&row, 9),
+                created_at: pg_row_datetime_or_now(&row, 10),
+                updated_at: pg_row_datetime_or_now(&row, 11),
+            }))
+        })
+    }
+
+    fn delete_request_lab_template<'a>(
+        &'a self,
+        user_id: &'a str,
+        id: &'a str,
+    ) -> BoxFuture<'a, rusqlite::Result<bool>> {
+        Box::pin(async move {
+            let client = self.pool.pick();
+            let affected = client
+                .execute(
+                    "DELETE FROM request_lab_templates WHERE user_id = $1 AND id = $2",
                     &[&user_id, &id],
                 )
                 .await

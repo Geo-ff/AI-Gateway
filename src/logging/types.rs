@@ -112,6 +112,58 @@ pub struct StoredRequestLabSnapshot {
     pub failure_count: u32,
 }
 
+fn default_preserve_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RequestLabExperimentConfig {
+    #[serde(default)]
+    pub temperature: Option<serde_json::Value>,
+    #[serde(default)]
+    pub top_p: Option<serde_json::Value>,
+    #[serde(default)]
+    pub max_tokens: Option<serde_json::Value>,
+    #[serde(default)]
+    pub presence_penalty: Option<serde_json::Value>,
+    #[serde(default)]
+    pub frequency_penalty: Option<serde_json::Value>,
+    #[serde(default = "default_preserve_true")]
+    pub preserve_system_prompt: bool,
+    #[serde(default = "default_preserve_true")]
+    pub preserve_message_structure: bool,
+}
+
+impl Default for RequestLabExperimentConfig {
+    fn default() -> Self {
+        Self {
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            preserve_system_prompt: true,
+            preserve_message_structure: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredRequestLabTemplate {
+    pub id: String,
+    pub user_id: String,
+    pub scope: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+    pub source_request_id: i64,
+    pub compare_models: Vec<String>,
+    pub experiment_config: RequestLabExperimentConfig,
+    pub created_by: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderKeyStatsAgg {
     pub api_key: String,

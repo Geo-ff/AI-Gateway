@@ -25,7 +25,9 @@ fn normalize_organization_id(raw: &str) -> Result<String, GatewayError> {
         return Err(GatewayError::Config("organization_id 不能为空".into()));
     }
     if trimmed.chars().any(|c| c.is_control()) {
-        return Err(GatewayError::Config("organization_id 不能包含控制字符".into()));
+        return Err(GatewayError::Config(
+            "organization_id 不能包含控制字符".into(),
+        ));
     }
     if trimmed.chars().count() > 128 {
         return Err(GatewayError::Config(

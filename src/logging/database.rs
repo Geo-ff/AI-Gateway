@@ -3,7 +3,7 @@ use crate::logging::time::{
 };
 use crate::logging::types::{
     ProviderKeyStatsAgg, RequestLog, RequestLogDetailRecord, StoredCompareRun,
-    StoredRequestLabSnapshot, StoredRequestLabSource,
+    StoredRequestLabSnapshot, StoredRequestLabSource, StoredRequestLabTemplate,
 };
 use crate::server::storage_traits::{
     AdminPublicKeyRecord, LoginCodeRecord, TuiSessionRecord, WebSessionRecord,
@@ -1044,6 +1044,27 @@ impl DatabaseLogger {
             "CREATE UNIQUE INDEX IF NOT EXISTS request_lab_snapshots_user_id_compare_run_uidx ON request_lab_snapshots(user_id, compare_run_id)",
             [],
         );
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS request_lab_templates (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                tags_json TEXT NOT NULL,
+                source_request_id INTEGER NOT NULL,
+                compare_models_json TEXT NOT NULL,
+                experiment_config_json TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS request_lab_templates_user_id_updated_at_idx ON request_lab_templates(user_id, updated_at)",
+            [],
+        );
         // Pricing table for models
         conn.execute(
             "CREATE TABLE IF NOT EXISTS model_prices (
@@ -1756,6 +1777,134 @@ impl DatabaseLogger {
         let conn = self.connection.lock().await;
         let affected = conn.execute(
             "DELETE FROM request_lab_snapshots WHERE user_id = ?1 AND id = ?2",
+            rusqlite::params![user_id, id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    pub async fn save_request_lab_template(
+        &self,
+        template: StoredRequestLabTemplate,
+    ) -> Result<()> {
+        let conn = self.connection.lock().await;
+        conn.execute(
+            "INSERT INTO request_lab_templates (
+                id, user_id, scope, name, description, tags_json, source_request_id,
+                compare_models_json, experiment_config_json, created_by, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            ON CONFLICT(id) DO UPDATE SET
+                scope = excluded.scope,
+                name = excluded.name,
+                description = excluded.description,
+                tags_json = excluded.tags_json,
+                source_request_id = excluded.source_request_id,
+                compare_models_json = excluded.compare_models_json,
+                experiment_config_json = excluded.experiment_config_json,
+                created_by = excluded.created_by,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at",
+            rusqlite::params![
+                template.id,
+                template.user_id,
+                template.scope,
+                template.name,
+                template.description,
+                serde_json::to_string(&template.tags).unwrap_or_else(|_| "[]".to_string()),
+                template.source_request_id,
+                serde_json::to_string(&template.compare_models)
+                    .unwrap_or_else(|_| "[]".to_string()),
+                serde_json::to_string(&template.experiment_config)
+                    .unwrap_or_else(|_| "{}".to_string()),
+                template.created_by,
+                to_beijing_string(&template.created_at),
+                to_beijing_string(&template.updated_at),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub async fn list_request_lab_templates(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<StoredRequestLabTemplate>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, scope, name, description, tags_json, source_request_id,
+                    compare_models_json, experiment_config_json, created_by, created_at, updated_at
+             FROM request_lab_templates
+             WHERE user_id = ?1
+             ORDER BY updated_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([user_id], |row| {
+            let created_at: String = row.get(10)?;
+            let updated_at: String = row.get(11)?;
+            let tags_json: String = row.get(5)?;
+            let compare_models_json: String = row.get(7)?;
+            let experiment_config_json: String = row.get(8)?;
+            Ok(StoredRequestLabTemplate {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                scope: row.get(2)?,
+                name: row.get(3)?,
+                description: row.get(4)?,
+                tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+                source_request_id: row.get(6)?,
+                compare_models: serde_json::from_str(&compare_models_json).unwrap_or_default(),
+                experiment_config: serde_json::from_str(&experiment_config_json)
+                    .unwrap_or_default(),
+                created_by: row.get(9)?,
+                created_at: parse_beijing_string(&created_at)
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+                updated_at: parse_beijing_string(&updated_at)
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub async fn get_request_lab_template(
+        &self,
+        id: &str,
+    ) -> Result<Option<StoredRequestLabTemplate>> {
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, scope, name, description, tags_json, source_request_id,
+                    compare_models_json, experiment_config_json, created_by, created_at, updated_at
+             FROM request_lab_templates
+             WHERE id = ?1
+             LIMIT 1",
+        )?;
+        stmt.query_row([id], |row| {
+            let created_at: String = row.get(10)?;
+            let updated_at: String = row.get(11)?;
+            let tags_json: String = row.get(5)?;
+            let compare_models_json: String = row.get(7)?;
+            let experiment_config_json: String = row.get(8)?;
+            Ok(StoredRequestLabTemplate {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                scope: row.get(2)?,
+                name: row.get(3)?,
+                description: row.get(4)?,
+                tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+                source_request_id: row.get(6)?,
+                compare_models: serde_json::from_str(&compare_models_json).unwrap_or_default(),
+                experiment_config: serde_json::from_str(&experiment_config_json)
+                    .unwrap_or_default(),
+                created_by: row.get(9)?,
+                created_at: parse_beijing_string(&created_at)
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+                updated_at: parse_beijing_string(&updated_at)
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+            })
+        })
+        .optional()
+    }
+
+    pub async fn delete_request_lab_template(&self, user_id: &str, id: &str) -> Result<bool> {
+        let conn = self.connection.lock().await;
+        let affected = conn.execute(
+            "DELETE FROM request_lab_templates WHERE user_id = ?1 AND id = ?2",
             rusqlite::params![user_id, id],
         )?;
         Ok(affected > 0)
