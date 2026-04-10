@@ -487,18 +487,72 @@ pub struct ModelsDistributionQuery {
     pub end_date: Option<String>,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub sort_by: Option<ModelsDistributionSortBy>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelsDistributionSortBy {
+    Calls,
+    AmountSpent,
+}
+
+#[derive(Debug, Default)]
+struct ModelDistributionAggregate {
+    count: usize,
+    amount_spent: f64,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
 pub struct ModelCountItem {
     pub name: String,
     pub count: usize,
+    pub amount_spent: f64,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ModelsDistributionResponse {
     pub items: Vec<ModelCountItem>,
     pub generated_at: String,
+}
+
+fn build_models_distribution_items(
+    logs: &[&RequestLog],
+    limit: usize,
+    sort_by: ModelsDistributionSortBy,
+    providers_by_id: &HashMap<String, Provider>,
+) -> Vec<ModelCountItem> {
+    let mut aggregates: HashMap<String, ModelDistributionAggregate> = HashMap::new();
+    for log in logs {
+        let label = log_model_label(log, providers_by_id);
+        let entry = aggregates.entry(label).or_default();
+        entry.count += 1;
+        entry.amount_spent += log.amount_spent.unwrap_or(0.0);
+    }
+
+    let mut items: Vec<_> = aggregates
+        .into_iter()
+        .map(|(name, aggregate)| ModelCountItem {
+            name,
+            count: aggregate.count,
+            amount_spent: aggregate.amount_spent,
+        })
+        .collect();
+
+    items.sort_by(|a, b| {
+        let primary = match sort_by {
+            ModelsDistributionSortBy::Calls => b.count.cmp(&a.count),
+            ModelsDistributionSortBy::AmountSpent => b.amount_spent.total_cmp(&a.amount_spent),
+        };
+
+        primary
+            .then_with(|| b.count.cmp(&a.count))
+            .then_with(|| b.amount_spent.total_cmp(&a.amount_spent))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    items.into_iter().take(limit.max(1)).collect()
 }
 
 pub async fn models_distribution(
@@ -538,19 +592,9 @@ pub async fn models_distribution(
         .map(|provider| (provider.name.clone(), provider))
         .collect();
 
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for log in filtered {
-        let label = log_model_label(log, &providers_by_id);
-        *counts.entry(label).or_insert(0) += 1;
-    }
     let limit = q.limit.unwrap_or(8).max(1);
-    let mut items: Vec<_> = counts.into_iter().collect();
-    items.sort_by(|a, b| b.1.cmp(&a.1));
-    let items = items
-        .into_iter()
-        .take(limit)
-        .map(|(name, count)| ModelCountItem { name, count })
-        .collect();
+    let sort_by = q.sort_by.unwrap_or(ModelsDistributionSortBy::Calls);
+    let items = build_models_distribution_items(&filtered, limit, sort_by, &providers_by_id);
 
     log_simple_request(
         &app_state,
@@ -1036,6 +1080,7 @@ mod tests {
         total: Option<u32>,
         prompt: Option<u32>,
         completion: Option<u32>,
+        amount_spent: Option<f64>,
     ) -> RequestLog {
         RequestLog {
             id: None,
@@ -1050,7 +1095,7 @@ mod tests {
             api_key: None,
             client_token: None,
             user_id: None,
-            amount_spent: None,
+            amount_spent,
             status_code: 200,
             response_time_ms: 10,
             prompt_tokens: prompt,
@@ -1065,8 +1110,8 @@ mod tests {
     #[test]
     fn spent_tokens_falls_back_to_prompt_plus_completion() {
         let ts = Utc::now();
-        let a = mk_log(ts, "p", "m", None, Some(3), Some(4));
-        let b = mk_log(ts, "p", "m", Some(10), Some(3), Some(4));
+        let a = mk_log(ts, "p", "m", None, Some(3), Some(4), None);
+        let b = mk_log(ts, "p", "m", Some(10), Some(3), Some(4), None);
         assert_eq!(spent_tokens(&a), 7);
         assert_eq!(spent_tokens(&b), 10);
     }
@@ -1085,12 +1130,14 @@ mod tests {
                 Some(100),
                 None,
                 None,
+                None,
             ),
             mk_log(
                 base + Duration::minutes(20),
                 "openai",
                 "gpt-4o",
                 Some(50),
+                None,
                 None,
                 None,
             ),
@@ -1101,6 +1148,7 @@ mod tests {
                 None,
                 Some(20),
                 Some(10),
+                None,
             ),
             mk_log(
                 base + Duration::minutes(75),
@@ -1109,12 +1157,14 @@ mod tests {
                 None,
                 Some(5),
                 Some(5),
+                None,
             ),
             mk_log(
                 base + Duration::minutes(80),
                 "other",
                 "tiny",
                 Some(1),
+                None,
                 None,
                 None,
             ),
@@ -1128,5 +1178,109 @@ mod tests {
         assert_eq!(out.points[0].items[0].name, "openai/gpt-4o");
         assert_eq!(out.points[0].items[0].tokens, 150);
         assert_eq!(out.points[0].items[0].requests, 2);
+    }
+
+    #[test]
+    fn build_models_distribution_defaults_to_call_count_sort() {
+        let providers_by_id = HashMap::new();
+        let base = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let logs = vec![
+            mk_log(base, "openai", "gpt-4o", None, None, None, Some(0.3)),
+            mk_log(
+                base + Duration::minutes(1),
+                "openai",
+                "gpt-4o",
+                None,
+                None,
+                None,
+                None,
+            ),
+            mk_log(
+                base + Duration::minutes(2),
+                "anthropic",
+                "claude",
+                None,
+                None,
+                None,
+                Some(1.5),
+            ),
+        ];
+        let refs: Vec<&RequestLog> = logs.iter().collect();
+
+        let out = build_models_distribution_items(
+            &refs,
+            5,
+            ModelsDistributionSortBy::Calls,
+            &providers_by_id,
+        );
+
+        assert_eq!(
+            out,
+            vec![
+                ModelCountItem {
+                    name: "openai/gpt-4o".into(),
+                    count: 2,
+                    amount_spent: 0.3,
+                },
+                ModelCountItem {
+                    name: "anthropic/claude".into(),
+                    count: 1,
+                    amount_spent: 1.5,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn build_models_distribution_supports_amount_spent_sort() {
+        let providers_by_id = HashMap::new();
+        let base = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let logs = vec![
+            mk_log(base, "openai", "gpt-4o", None, None, None, Some(0.3)),
+            mk_log(
+                base + Duration::minutes(1),
+                "openai",
+                "gpt-4o",
+                None,
+                None,
+                None,
+                None,
+            ),
+            mk_log(
+                base + Duration::minutes(2),
+                "anthropic",
+                "claude",
+                None,
+                None,
+                None,
+                Some(1.5),
+            ),
+            mk_log(
+                base + Duration::minutes(3),
+                "anthropic",
+                "claude",
+                None,
+                None,
+                None,
+                Some(0.2),
+            ),
+        ];
+        let refs: Vec<&RequestLog> = logs.iter().collect();
+
+        let out = build_models_distribution_items(
+            &refs,
+            1,
+            ModelsDistributionSortBy::AmountSpent,
+            &providers_by_id,
+        );
+
+        assert_eq!(
+            out,
+            vec![ModelCountItem {
+                name: "anthropic/claude".into(),
+                count: 2,
+                amount_spent: 1.7,
+            }]
+        );
     }
 }
