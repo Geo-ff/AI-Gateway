@@ -212,9 +212,7 @@ pub struct RequestLabSnapshotSourcePayload {
     #[serde(default)]
     pub response_preview: Option<String>,
     #[serde(default)]
-    pub fallback_triggered: Option<bool>,
-    #[serde(default)]
-    pub fallback_reason: Option<String>,
+    pub first_token_latency_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -338,9 +336,6 @@ pub struct CompareItemResponse {
     pub cost: Option<f64>,
     pub status: String,
     pub status_code: u16,
-    pub fallback_triggered: bool,
-    #[serde(default)]
-    pub fallback_reason: Option<String>,
     pub error_message: Option<String>,
     #[serde(default)]
     pub error: Option<CompareItemErrorInfo>,
@@ -386,8 +381,6 @@ pub struct RequestDetailResponse {
     pub request_payload_snapshot: Option<serde_json::Value>,
     pub response_preview: Option<String>,
     pub upstream_status: Option<i64>,
-    pub fallback_triggered: Option<bool>,
-    pub fallback_reason: Option<String>,
     pub selected_provider: Option<String>,
     pub selected_key_id: Option<String>,
     pub first_token_latency_ms: Option<i64>,
@@ -419,7 +412,6 @@ pub struct ReplayResponse {
     pub cost: Option<f64>,
     pub status: String,
     pub status_code: u16,
-    pub fallback_triggered: bool,
     pub error_message: Option<String>,
 }
 
@@ -959,10 +951,6 @@ fn detail_response(
             .as_ref()
             .and_then(|item| item.response_preview.clone()),
         upstream_status: detail.as_ref().and_then(|item| item.upstream_status),
-        fallback_triggered: detail.as_ref().and_then(|item| item.fallback_triggered),
-        fallback_reason: detail
-            .as_ref()
-            .and_then(|item| item.fallback_reason.clone()),
         selected_provider: detail
             .as_ref()
             .and_then(|item| item.selected_provider.clone()),
@@ -1191,8 +1179,6 @@ fn failed_compare_item(
     provider: Option<String>,
     response_time_ms: i64,
     cost: Option<f64>,
-    fallback_triggered: bool,
-    fallback_reason: Option<String>,
     upstream_status: Option<i64>,
     selected_provider: Option<String>,
     selected_key_id: Option<String>,
@@ -1215,8 +1201,6 @@ fn failed_compare_item(
         cost,
         status: "failed".to_string(),
         status_code: err.status_code().as_u16(),
-        fallback_triggered,
-        fallback_reason,
         error_message: Some(error.message.clone()),
         error: Some(error),
         upstream_status,
@@ -1260,8 +1244,7 @@ fn request_lab_snapshot_source_payload(log: &RequestLog) -> RequestLabSnapshotSo
         source_timestamp: log.timestamp.to_rfc3339(),
         request_payload_snapshot: None,
         response_preview: None,
-        fallback_triggered: None,
-        fallback_reason: None,
+        first_token_latency_ms: None,
     }
 }
 
@@ -1283,8 +1266,7 @@ fn request_lab_snapshot_source_payload_with_detail(
             }
         });
     payload.response_preview = detail.and_then(|item| item.response_preview.clone());
-    payload.fallback_triggered = detail.and_then(|item| item.fallback_triggered);
-    payload.fallback_reason = detail.and_then(|item| item.fallback_reason.clone());
+    payload.first_token_latency_ms = detail.and_then(|item| item.first_token_latency_ms);
     Ok(payload)
 }
 
@@ -1386,13 +1368,6 @@ async fn compare_item_response_from_execution(
     executed: ExecutedChatRequest,
 ) -> Result<CompareItemResponse, GatewayError> {
     let detail = load_compare_item_detail(app_state, executed.logged.log_id).await?;
-    let fallback_triggered = detail
-        .as_ref()
-        .and_then(|item| item.fallback_triggered)
-        .unwrap_or(false);
-    let fallback_reason = detail
-        .as_ref()
-        .and_then(|item| item.fallback_reason.clone());
     let upstream_status = detail.as_ref().and_then(|item| item.upstream_status);
     let selected_provider = detail
         .as_ref()
@@ -1421,8 +1396,6 @@ async fn compare_item_response_from_execution(
                 cost: executed.logged.amount_spent,
                 status: "success".to_string(),
                 status_code: 200,
-                fallback_triggered,
-                fallback_reason,
                 error_message: None,
                 error: None,
                 upstream_status,
@@ -1439,8 +1412,6 @@ async fn compare_item_response_from_execution(
             Some(executed.provider_name.clone()),
             executed.logged.response_time_ms,
             executed.logged.amount_spent,
-            fallback_triggered,
-            fallback_reason,
             upstream_status,
             selected_provider,
             selected_key_id,
@@ -1599,8 +1570,6 @@ pub async fn execute_logged_chat_request(
             request_type: request_type.to_string(),
             request_payload_snapshot,
             upstream_status: Some(if response.is_ok() { 200 } else { 500 }),
-            fallback_triggered: Some(false),
-            fallback_reason: None,
             selected_provider: Some(selected.provider.name.clone()),
             selected_key_id: Some(crate::server::util::mask_key(&selected.api_key)),
             first_token_latency_ms: None,
@@ -1659,7 +1628,6 @@ fn replay_response(
                 cost: result.logged.amount_spent,
                 status: "success".to_string(),
                 status_code: 200,
-                fallback_triggered: false,
                 error_message: None,
             }
         }
@@ -1678,7 +1646,6 @@ fn replay_response(
             cost: result.logged.amount_spent,
             status: "failed".to_string(),
             status_code: err.status_code().as_u16(),
-            fallback_triggered: false,
             error_message: Some(err.to_string()),
         },
     }
@@ -2240,8 +2207,6 @@ pub async fn create_compare(
                                 None,
                                 0,
                                 None,
-                                false,
-                                None,
                                 None,
                                 None,
                                 None,
@@ -2278,8 +2243,6 @@ pub async fn create_compare(
                             None,
                             0,
                             None,
-                            false,
-                            None,
                             None,
                             None,
                             None,
@@ -2296,8 +2259,6 @@ pub async fn create_compare(
                     None,
                     None,
                     0,
-                    None,
-                    false,
                     None,
                     None,
                     None,
@@ -2689,8 +2650,7 @@ mod tests {
                             "total_tokens": 46,
                             "cost": 0.00123,
                             "status": "success",
-                            "status_code": 200,
-                            "fallback_triggered": false
+                            "status_code": 200
                         }
                     ]
                 },
@@ -2859,8 +2819,6 @@ mod tests {
                 cost: Some(0.1),
                 status: "success".into(),
                 status_code: 200,
-                fallback_triggered: false,
-                fallback_reason: None,
                 error_message: None,
                 error: None,
                 upstream_status: Some(200),

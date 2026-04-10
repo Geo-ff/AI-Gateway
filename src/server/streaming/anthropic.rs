@@ -40,6 +40,7 @@ pub async fn stream_anthropic_chat(
     let client_token_for_task = client_token.clone();
 
     tokio::spawn(async move {
+        let mut log_context = log_context;
         let params =
             AnthropicProvider::convert_openai_to_anthropic_with_top_k(&upstream_req, top_k);
 
@@ -103,6 +104,7 @@ pub async fn stream_anthropic_chat(
                     chunk2["usage"] = v;
                 }
 
+                super::common::record_first_token_latency(&mut log_context, start_time);
                 let _ = tx.send(axum::response::sse::Event::default().data(chunk1.to_string()));
                 let _ = tx.send(axum::response::sse::Event::default().data(chunk2.to_string()));
                 let _ = tx.send(axum::response::sse::Event::default().data("[DONE]"));

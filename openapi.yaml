@@ -385,12 +385,6 @@ components:
           type: integer
           format: int64
           nullable: true
-        fallback_triggered:
-          type: boolean
-          nullable: true
-        fallback_reason:
-          type: string
-          nullable: true
         selected_provider:
           type: string
           nullable: true
@@ -681,8 +675,6 @@ components:
           enum: [success, failed]
         status_code:
           type: integer
-        fallback_triggered:
-          type: boolean
         error_message:
           type: string
           nullable: true
@@ -769,11 +761,6 @@ components:
           enum: [success, failed]
         status_code:
           type: integer
-        fallback_triggered:
-          type: boolean
-        fallback_reason:
-          type: string
-          nullable: true
         error_message:
           type: string
           nullable: true
@@ -926,11 +913,9 @@ components:
         response_preview:
           type: string
           nullable: true
-        fallback_triggered:
-          type: boolean
-          nullable: true
-        fallback_reason:
-          type: string
+        first_token_latency_ms:
+          type: integer
+          format: int64
           nullable: true
 
     RequestLabSnapshotPayload:

@@ -345,8 +345,13 @@ fn handle_normalized_events(
     emitter: &mut OpenAiSseEmitter,
     usage_cell: &Arc<Mutex<Option<Usage>>>,
     preview_cell: &Arc<Mutex<String>>,
+    log_context: &mut super::common::StreamLogContext,
+    start_time: DateTime<Utc>,
     events: Vec<NormalizedStreamEvent>,
 ) -> Result<bool, String> {
+    if !events.is_empty() {
+        super::common::record_first_token_latency(log_context, start_time);
+    }
     for event in events {
         match &event {
             NormalizedStreamEvent::Usage(usage) => {
@@ -1061,6 +1066,7 @@ pub async fn stream_native_chat(
     let response_model = effective_model.clone();
 
     tokio::spawn(async move {
+        let mut log_context = log_context;
         let outcome: Result<(), String> = match provider_type {
             ProviderType::AzureOpenAI => {
                 let mut decoder = SseMessageDecoder::default();
@@ -1081,6 +1087,8 @@ pub async fn stream_native_chat(
                             &mut emitter,
                             &usage_cell_for_task,
                             &preview_cell_for_task,
+                            &mut log_context,
+                            start_time,
                             events,
                         )? {
                             return Ok(());
@@ -1119,6 +1127,8 @@ pub async fn stream_native_chat(
                                 &mut emitter,
                                 &usage_cell_for_task,
                                 &preview_cell_for_task,
+                                &mut log_context,
+                                start_time,
                                 events,
                             )? {
                                 return Ok(());
@@ -1132,6 +1142,8 @@ pub async fn stream_native_chat(
                                 &mut emitter,
                                 &usage_cell_for_task,
                                 &preview_cell_for_task,
+                                &mut log_context,
+                                start_time,
                                 events,
                             )? {
                                 return Ok(());
@@ -1154,6 +1166,8 @@ pub async fn stream_native_chat(
                             &mut emitter,
                             &usage_cell_for_task,
                             &preview_cell_for_task,
+                            &mut log_context,
+                            start_time,
                             events,
                         )? {
                             return Ok(());
@@ -1189,6 +1203,8 @@ pub async fn stream_native_chat(
                                 &mut emitter,
                                 &usage_cell_for_task,
                                 &preview_cell_for_task,
+                                &mut log_context,
+                                start_time,
                                 events,
                             )? {
                                 return Ok(());
@@ -1201,6 +1217,8 @@ pub async fn stream_native_chat(
                                 &mut emitter,
                                 &usage_cell_for_task,
                                 &preview_cell_for_task,
+                                &mut log_context,
+                                start_time,
                                 events,
                             )? {
                                 return Ok(());
@@ -1230,6 +1248,8 @@ pub async fn stream_native_chat(
                             &mut emitter,
                             &usage_cell_for_task,
                             &preview_cell_for_task,
+                            &mut log_context,
+                            start_time,
                             events,
                         )? {
                             return Ok(());
@@ -1256,6 +1276,8 @@ pub async fn stream_native_chat(
                             &mut emitter,
                             &usage_cell_for_task,
                             &preview_cell_for_task,
+                            &mut log_context,
+                            start_time,
                             events,
                         )? {
                             return Ok(());

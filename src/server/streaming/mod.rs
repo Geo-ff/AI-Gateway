@@ -357,6 +357,7 @@ pub async fn stream_chat_completions(
             common::StreamLogContext {
                 request_payload_snapshot: Some(snapshot.clone()),
                 response_preview: None,
+                first_token_latency_ms: None,
             },
         )
         .await
@@ -375,6 +376,7 @@ pub async fn stream_chat_completions(
             common::StreamLogContext {
                 request_payload_snapshot: Some(snapshot.clone()),
                 response_preview: None,
+                first_token_latency_ms: None,
             },
         )
         .await
@@ -396,6 +398,7 @@ pub async fn stream_chat_completions(
                 common::StreamLogContext {
                     request_payload_snapshot: Some(snapshot.clone()),
                     response_preview: None,
+                    first_token_latency_ms: None,
                 },
             )
             .await
@@ -416,6 +419,7 @@ pub async fn stream_chat_completions(
                 common::StreamLogContext {
                     request_payload_snapshot: Some(snapshot.clone()),
                     response_preview: None,
+                    first_token_latency_ms: None,
                 },
             )
             .await
@@ -441,6 +445,7 @@ pub async fn stream_chat_completions(
             common::StreamLogContext {
                 request_payload_snapshot: Some(snapshot),
                 response_preview: None,
+                first_token_latency_ms: None,
             },
         )
         .await

@@ -15,6 +15,7 @@ const STREAM_RESPONSE_PREVIEW_MAX_LEN: usize = 1200;
 pub(super) struct StreamLogContext {
     pub request_payload_snapshot: Option<String>,
     pub response_preview: Option<String>,
+    pub first_token_latency_ms: Option<i64>,
 }
 
 async fn upsert_stream_log_detail(
@@ -34,7 +35,7 @@ async fn upsert_stream_log_detail(
         fallback_reason: None,
         selected_provider: Some(provider.to_string()),
         selected_key_id: api_key.map(str::to_string),
-        first_token_latency_ms: None,
+        first_token_latency_ms: context.first_token_latency_ms,
     };
     if let Err(error) = app_state.log_store.upsert_request_log_detail(detail).await {
         tracing::warn!("Failed to upsert streaming request log detail: {}", error);
@@ -70,6 +71,15 @@ pub(super) fn context_with_response_preview(
     let mut next_context = context.clone();
     next_context.response_preview = response_preview;
     next_context
+}
+
+pub(super) fn record_first_token_latency(
+    context: &mut StreamLogContext,
+    start_time: DateTime<Utc>,
+) {
+    if context.first_token_latency_ms.is_none() {
+        context.first_token_latency_ms = Some((Utc::now() - start_time).num_milliseconds());
+    }
 }
 
 // 统一的流式错误日志记录函数（KISS/DRY）
@@ -565,6 +575,7 @@ mod tests {
             StreamLogContext {
                 request_payload_snapshot: Some(snapshot.clone()),
                 response_preview: Some("hello world".into()),
+                first_token_latency_ms: Some(123),
             },
         )
         .await;

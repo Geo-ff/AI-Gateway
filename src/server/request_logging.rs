@@ -16,8 +16,6 @@ pub struct ChatLogContext {
     pub request_type: String,
     pub request_payload_snapshot: Option<String>,
     pub upstream_status: Option<i64>,
-    pub fallback_triggered: Option<bool>,
-    pub fallback_reason: Option<String>,
     pub selected_provider: Option<String>,
     pub selected_key_id: Option<String>,
     pub first_token_latency_ms: Option<i64>,
@@ -143,8 +141,8 @@ pub async fn log_chat_request(
             } else {
                 500
             })),
-            fallback_triggered: context.fallback_triggered,
-            fallback_reason: context.fallback_reason,
+            fallback_triggered: None,
+            fallback_reason: None,
             selected_provider: context
                 .selected_provider
                 .or_else(|| Some(provider_name.to_string())),

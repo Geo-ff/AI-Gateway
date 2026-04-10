@@ -77,6 +77,7 @@ pub async fn stream_openai_chat(
     let client_token_for_outer = client_token.clone();
     let _client_token_outer = client_token.clone();
     tokio::spawn(async move {
+        let mut log_context = log_context;
         let mut es = match request_builder.eventsource() {
             Ok(es) => es,
             Err(e) => {
@@ -151,6 +152,11 @@ pub async fn stream_openai_chat(
                         let _ = tx.send(axum::response::sse::Event::default().data("[DONE]"));
                         break;
                     }
+
+                    super::common::record_first_token_latency(
+                        &mut log_context,
+                        start_time,
+                    );
 
                     // Primary: try typed parse
                     let mut captured = false;

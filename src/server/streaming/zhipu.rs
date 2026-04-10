@@ -60,6 +60,7 @@ pub async fn stream_zhipu_chat(
     let app_state_clone = app_state.clone();
     let client_token_for_outer = client_token.clone();
     tokio::spawn(async move {
+        let mut log_context = log_context;
         let mut es = match request_builder.eventsource() {
             Ok(es) => es,
             Err(e) => {
@@ -134,6 +135,11 @@ pub async fn stream_zhipu_chat(
                         let _ = tx.send(axum::response::sse::Event::default().data("[DONE]"));
                         break;
                     }
+
+                    super::common::record_first_token_latency(
+                        &mut log_context,
+                        start_time,
+                    );
 
                     // 捕获 usage（Zhipu：宽松提取）
                     if let Ok(v) = serde_json::from_str::<Value>(&m.data) {
